@@ -717,7 +717,7 @@ async function main() {
   assert.equal(updatedChallenge.maxLossPct, 8);
   await expectToolError(at, 'update_prop_challenge_proposal', {
     challengeId: createdChallenge.id, changes: { nieznane: 1 }, idempotencyKey: idem('prop-update-bad'),
-  }, /Nieznane pole/);
+  }, /unexpected additional properties|Nieznane pole/i);
 
   const rejectedProposal = await call(at, 'create_day_plan_proposal', {
     date: YESTERDAY, markets: ['ETH'], bias: 'short', reason: 'Plan do odrzucenia',
