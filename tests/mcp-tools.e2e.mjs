@@ -738,14 +738,14 @@ async function main() {
 
   const sameKey = idem('idem-repeat');
   const first = await call(at, 'create_setup_proposal', {
-    name: 'E2E Repeat', entryRules: ['A1', 'B1'], idempotencyKey: sameKey,
+    name: 'E2E Repeat', entryRules: ['Zasada A1', 'Zasada B1'], idempotencyKey: sameKey,
   });
   const second = await call(at, 'create_setup_proposal', {
-    name: 'E2E Repeat', entryRules: ['A1', 'B1'], idempotencyKey: sameKey,
+    name: 'E2E Repeat', entryRules: ['Zasada A1', 'Zasada B1'], idempotencyKey: sameKey,
   });
   assert.equal(second.proposalId, first.proposalId, 'idempotencja nie zwróciła tej samej propozycji');
   await expectToolError(at, 'create_setup_proposal', {
-    name: 'E2E Repeat', entryRules: ['A1', 'B2'], idempotencyKey: sameKey,
+    name: 'E2E Repeat', entryRules: ['Zasada A1', 'Zasada B2'], idempotencyKey: sameKey,
   }, /idempotencyKey|inną treścią/i);
 
   // =================================================================
