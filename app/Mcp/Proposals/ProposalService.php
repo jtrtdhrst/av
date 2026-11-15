@@ -39,7 +39,8 @@ final class ProposalService
     {
         $key = trim($idempotencyKey);
         if (mb_strlen($key) < 8 || mb_strlen($key) > 120) {
-            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8–120 znaków.', 400);
+            error_log('[mcp] proposal_create_key_invalid len=' . mb_strlen($key) . ' kind=' . $kind . ' target=' . $targetRef . ' head=' . substr($key, 0, 4));
+            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8-120 znaków.', 400);
         }
         if (!in_array($kind, self::KINDS, true)) {
             throw new ProposalException('bad_request', 'Nieznany typ propozycji.', 400);
