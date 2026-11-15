@@ -246,8 +246,8 @@ final class ProposalBuilder
     {
         $key = $this->idempotencyKey($args);
         $this->rejectFields($args, [
-            'date', 'market', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt',
-            'riskPercent', 'maxTrades', 'until', 'notDo', 'idempotencyKey',
+            'date', 'market', 'markets', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt',
+            'scenarioA', 'scenarioB', 'riskPercent', 'maxTrades', 'until', 'notDo', 'rulesNotToDo', 'idempotencyKey',
         ]);
         $date = trim((string) ($args['date'] ?? Dates::todayKey()));
         if (!Dates::isValidKey($date)) {
@@ -267,9 +267,41 @@ final class ProposalBuilder
         if (array_key_exists('market', $args)) {
             $market = trim((string) $args['market']);
             if ($market === '' || mb_strlen($market) > 20) {
-                throw new ProposalException('bad_request', 'market musi mieć 1–20 znaków.', 400);
+                throw new ProposalException('bad_request', 'market musi mieć 1-20 znaków.', 400);
             }
             $after['market'] = $market;
+        }
+        if (array_key_exists('markets', $args)) {
+            $markets = $this->stringList($args['markets'], 'markets', 3, 20, 1);
+            $markets = array_values(array_unique(array_map(static fn (string $market): string => strtoupper($market), $markets)));
+            $after['markets'] = $markets;
+            $after['market'] = $markets[0];
+        }
+        foreach (['scenarioA' => ['ifMain', 'thenMain'], 'scenarioB' => ['ifAlt', 'thenAlt']] as $field => $target) {
+            if (!array_key_exists($field, $args)) {
+                continue;
+            }
+            $scenario = $args[$field];
+            if (!is_array($scenario)) {
+                throw new ProposalException('bad_request', $field . ' musi być obiektem z condition i action.', 400);
+            }
+            foreach ($scenario as $scenarioKey => $_) {
+                if (!in_array($scenarioKey, ['condition', 'action'], true)) {
+                    throw new ProposalException('bad_request', 'Pole ' . $field . ' może mieć tylko condition i action.', 400);
+                }
+            }
+            $condition = mb_substr(trim((string) ($scenario['condition'] ?? '')), 0, 2000);
+            $action = mb_substr(trim((string) ($scenario['action'] ?? '')), 0, 2000);
+            if ($condition !== '') {
+                $after[$target[0]] = $condition;
+            }
+            if ($action !== '') {
+                $after[$target[1]] = $action;
+            }
+        }
+        if (array_key_exists('rulesNotToDo', $args)) {
+            $rules = $this->stringList($args['rulesNotToDo'], 'rulesNotToDo', 10, 300);
+            $after['notDo'] = implode("\n", $rules);
         }
         if (array_key_exists('bias', $args)) {
             $bias = (string) $args['bias'];
@@ -316,16 +348,24 @@ final class ProposalBuilder
     public function saveCheckin(int $userId, array $args, string $clientName): array
     {
         $key = $this->idempotencyKey($args);
-        $this->rejectFields($args, ['mood', 'energy', 'note', 'idempotencyKey']);
+        $this->rejectFields($args, ['mood', 'energy', 'note', 'date', 'idempotencyKey']);
         $mood = trim((string) ($args['mood'] ?? ''));
         if (!in_array($mood, self::MOODS, true)) {
             throw new ProposalException('bad_request', 'Nieprawidłowy nastrój.', 400);
         }
         $energy = (int) ($args['energy'] ?? 0);
         if ($energy < 1 || $energy > 5) {
-            throw new ProposalException('bad_request', 'Energia musi być w zakresie 1–5.', 400);
+            throw new ProposalException('bad_request', 'Energia musi być w zakresie 1-5.', 400);
         }
-        $date = Dates::todayKey();
+        $date = trim((string) ($args['date'] ?? Dates::todayKey()));
+        if (!Dates::isValidKey($date)) {
+            throw new ProposalException('bad_request', 'Data check-inu musi być w formacie YYYY-MM-DD.', 400);
+        }
+        $today = Dates::todayKey();
+        $yesterday = (new \DateTimeImmutable('yesterday', Dates::tz()))->format('Y-m-d');
+        if (!in_array($date, [$today, $yesterday], true)) {
+            throw new ProposalException('bad_request', 'Check-in można zaproponować tylko na dziś lub wczoraj.', 400);
+        }
         $state = $this->state($userId);
         $before = null;
         foreach ((array) ($state['checkins'] ?? []) as $checkin) {
@@ -348,7 +388,11 @@ final class ProposalBuilder
     public function saveSetup(int $userId, array $args, string $clientName): array
     {
         $key = $this->idempotencyKey($args);
-        $this->rejectFields($args, ['id', 'name', 'tf', 'grade', 'rules', 'bad', 'seed', 'idempotencyKey']);
+        $this->rejectFields($args, [
+            'id', 'name', 'tf', 'grade', 'rules', 'bad', 'seed',
+            'description', 'confirmation', 'invalidation', 'stopLoss', 'minRR', 'exitRules', 'examples',
+            'idempotencyKey',
+        ]);
         $name = trim((string) ($args['name'] ?? ''));
         if (mb_strlen($name) < 2 || mb_strlen($name) > 80) {
             throw new ProposalException('bad_request', 'Nazwa setupu musi mieć 2–80 znaków.', 400);
@@ -393,7 +437,27 @@ final class ProposalBuilder
             'rules' => $rules,
             'bad' => (bool) ($args['bad'] ?? false),
             'seed' => $seed,
+            'createdAt' => (string) ($before['createdAt'] ?? gmdate('c')),
+            'updatedAt' => gmdate('c'),
         ];
+        foreach (['description' => 1000, 'confirmation' => 500, 'invalidation' => 500, 'stopLoss' => 200] as $field => $maxLength) {
+            if (array_key_exists($field, $args)) {
+                $after[$field] = mb_substr(trim((string) $args[$field]), 0, $maxLength);
+            }
+        }
+        if (array_key_exists('minRR', $args) && $args['minRR'] !== null) {
+            $minRr = (float) $args['minRR'];
+            if ($minRr <= 0 || $minRr > 20) {
+                throw new ProposalException('bad_request', 'minRR musi być w zakresie 0.1-20.', 400);
+            }
+            $after['minRR'] = Numbers::round($minRr, 2);
+        }
+        if (array_key_exists('exitRules', $args)) {
+            $after['exitRules'] = $this->stringList($args['exitRules'], 'exitRules', 10, 200);
+        }
+        if (array_key_exists('examples', $args)) {
+            $after['examples'] = $this->stringList($args['examples'], 'examples', 10, 300);
+        }
 
         return $this->proposals->create($userId, $clientName, 'setup', $before === null ? 'setup:new' : 'setup:' . $id, $before, $after, $key, $this->fingerprint($args));
     }
@@ -421,7 +485,7 @@ final class ProposalBuilder
             }
         }
 
-        $templateId = trim((string) ($args['templateId'] ?? 'custom'));
+        $templateId = trim((string) ($args['templateId'] ?? ($before['templateId'] ?? 'custom')));
         if (PropChallengeService::templateById($templateId) === null) {
             throw new ProposalException('bad_request', 'Nieznany templateId.', 400);
         }
@@ -672,6 +736,517 @@ final class ProposalBuilder
         );
     }
 
+    /**
+     * Rozszerzona propozycja transakcji ręcznej: pełny dziennik jednego wpisu,
+     * łącznie z ceną wyjścia, opłatą i czasem. Wynik i R liczy serwer.
+     */
+    public function createTradeProposal(int $userId, array $args, string $clientName): array
+    {
+        $key = $this->idempotencyKey($args);
+        $this->rejectFields($args, [
+            'pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size', 'fee', 'setup', 'emotion', 'grade',
+            'checklist', 'checkTotal', 'errors', 'note', 'date', 'time', 'account', 'session', 'idempotencyKey',
+        ]);
+        $state = $this->state($userId);
+
+        $pair = strtoupper(trim((string) ($args['pair'] ?? '')));
+        if (preg_match('/^[A-Z0-9._\/-]{2,20}$/', $pair) !== 1) {
+            throw new ProposalException('bad_request', 'Para musi mieć 2-20 znaków: A-Z, 0-9, . _ / -.', 400);
+        }
+        $dirRaw = (string) ($args['dir'] ?? '');
+        if (!in_array($dirRaw, ['long', 'short', 'l', 's'], true)) {
+            throw new ProposalException('bad_request', 'Kierunek musi być long albo short.', 400);
+        }
+        $direction = in_array($dirRaw, ['short', 's'], true) ? 's' : 'l';
+        $entry = $this->positiveNumber($args['entry'] ?? null, 'entry');
+        $size = $this->positiveNumber($args['size'] ?? null, 'size');
+        $sl = null;
+        if (array_key_exists('sl', $args) && $args['sl'] !== null && $args['sl'] !== '') {
+            $sl = $this->positiveNumber($args['sl'], 'sl');
+            if (($direction === 'l' && $sl >= $entry) || ($direction === 's' && $sl <= $entry)) {
+                throw new ProposalException('bad_request', 'Stop loss jest po złej stronie ceny wejścia.', 400);
+            }
+        }
+        $tp = null;
+        if (array_key_exists('tp', $args) && $args['tp'] !== null && $args['tp'] !== '') {
+            $tp = $this->positiveNumber($args['tp'], 'tp');
+            if (($direction === 'l' && $tp <= $entry) || ($direction === 's' && $tp >= $entry)) {
+                throw new ProposalException('bad_request', 'Take profit jest po złej stronie ceny wejścia.', 400);
+            }
+        }
+        $exit = null;
+        if (array_key_exists('exit', $args) && $args['exit'] !== null && $args['exit'] !== '') {
+            $exit = $this->positiveNumber($args['exit'], 'exit');
+        }
+        $date = $this->tradeDateTime($args['date'] ?? null, $args['time'] ?? null);
+        $account = $this->account($state, $args['account'] ?? null);
+        $setupNames = $this->setupNames($state);
+        $setup = trim((string) ($args['setup'] ?? 'Bez setupu'));
+        if ($setup === '') {
+            $setup = 'Bez setupu';
+        }
+        if ($setup !== 'Bez setupu' && !in_array($setup, $setupNames, true)) {
+            throw new ProposalException('bad_request', 'Setup nie istnieje w Playbooku. Użyj list_setups.', 400);
+        }
+        if (mb_strlen($setup) > 100) {
+            throw new ProposalException('bad_request', 'Setup może mieć maks. 100 znaków.', 400);
+        }
+        $emotion = $this->emotion($args['emotion'] ?? null) ?? 'Spokój';
+        $checkTotal = array_key_exists('checkTotal', $args) ? (int) $args['checkTotal'] : $this->defaultCheckTotal($state);
+        $checklist = array_key_exists('checklist', $args) ? (int) $args['checklist'] : 0;
+        if ($checkTotal < 1 || $checkTotal > 20 || $checklist < 0 || $checklist > $checkTotal) {
+            throw new ProposalException('bad_request', 'checklist musi być w zakresie 0-checkTotal, a checkTotal 1-20.', 400);
+        }
+        $grade = $this->grade($args['grade'] ?? null);
+        if ($grade === null) {
+            $grade = $checklist >= $checkTotal ? 'A' : ($checklist >= (int) ceil($checkTotal * 0.7) ? 'B' : 'C');
+        }
+        $errors = array_key_exists('errors', $args) ? $this->errors($args['errors']) : [];
+        $fee = 0.0;
+        if (array_key_exists('fee', $args) && $args['fee'] !== null && $args['fee'] !== '') {
+            if (!is_numeric($args['fee']) || (float) $args['fee'] < 0 || (float) $args['fee'] > 100000) {
+                throw new ProposalException('bad_request', 'fee musi być liczbą 0-100000.', 400);
+            }
+            $fee = Numbers::round((float) $args['fee']);
+        }
+        $session = trim((string) ($args['session'] ?? ''));
+        if ($session === '') {
+            $session = $this->session();
+        }
+        $risk = $sl !== null ? abs($entry - $sl) * $size : 0.0;
+        $result = $exit !== null ? Numbers::round((($exit - $entry) * $size * ($direction === 's' ? -1 : 1)) + PHP_FLOAT_EPSILON) : null;
+        $r = $result !== null && $risk > 0 ? Numbers::round($result / $risk) : null;
+        $after = [
+            'id' => 'manual_' . $this->shortId(),
+            'date' => $date,
+            'pair' => $pair,
+            'dir' => $direction,
+            'entry' => $this->formatNumber($entry, $this->decimals($entry)),
+            'exit' => $exit !== null ? $this->formatNumber($exit, $this->decimals($exit)) : 'otwarta',
+            'sl' => $sl !== null ? $this->formatNumber($sl, $this->decimals($sl)) : 'brak',
+            'tp' => $tp !== null ? $this->formatNumber($tp, $this->decimals($tp)) : '-',
+            'size' => $this->formatNumber($size, $this->decimals($size)),
+            'result' => $result,
+            'r' => $r,
+            'grade' => $grade,
+            'checklist' => $checklist,
+            'checkTotal' => $checkTotal,
+            'errors' => $errors,
+            'emotion' => $emotion,
+            'note' => mb_substr(trim((string) ($args['note'] ?? '')), 0, 2000),
+            'mentor' => $this->mentorForGrade($grade, count($errors)),
+            'setup' => $setup,
+            'session' => $session,
+            'mae' => 0,
+            'mfe' => 0,
+            'durationMin' => 0,
+            'fee' => $fee,
+            'plan' => $this->planForToday($state, $setup),
+            'source' => 'Ręcznie',
+            'account' => $account,
+            'screens' => [],
+        ];
+
+        return $this->proposals->create($userId, $clientName, 'manual_trade', 'trade:new', null, $after, $key, $this->fingerprint($args));
+    }
+
+    /**
+     * Zmiana istniejącej transakcji. Pola finansowe transakcji importowanej
+     * z giełdy są zablokowane; dla transakcji ręcznej wynik i R przelicza serwer.
+     */
+    public function updateTrade(int $userId, array $args, string $clientName): array
+    {
+        $key = $this->idempotencyKey($args);
+        $this->rejectFields($args, ['tradeId', 'changes', 'idempotencyKey']);
+        $tradeId = trim((string) ($args['tradeId'] ?? ''));
+        if ($tradeId === '' || mb_strlen($tradeId) > 128) {
+            throw new ProposalException('bad_request', 'tradeId musi mieć 1-128 znaków.', 400);
+        }
+        $changes = $args['changes'] ?? null;
+        if (!is_array($changes) || $changes === []) {
+            throw new ProposalException('bad_request', 'changes musi być niepustym obiektem zmian.', 400);
+        }
+        $state = $this->state($userId);
+        $before = $this->findTrade($state, $tradeId);
+        if ($before === null) {
+            throw new ProposalException('not_found', 'Transakcja nie istnieje.', 404);
+        }
+        $exchange = $this->proposals->isExchangeTrade($userId, $before);
+        $journal = ['setup', 'grade', 'emotion', 'errors', 'note', 'checklist', 'checkTotal', 'session'];
+        $financial = ['pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size', 'fee', 'date'];
+        foreach ($changes as $field => $_) {
+            if (!in_array($field, array_merge($journal, $financial), true)) {
+                throw new ProposalException('bad_request', 'Nieznane pole zmiany: ' . $field . '.', 400);
+            }
+            if ($exchange && in_array($field, $financial, true)) {
+                throw new ProposalException('exchange_data_readonly', 'Transakcja importowana z giełdy ma niezmienne dane finansowe.', 403);
+            }
+        }
+        $after = $before;
+        if (array_key_exists('setup', $changes)) {
+            $after['setup'] = mb_substr(trim((string) $changes['setup']), 0, 100);
+        }
+        if (array_key_exists('grade', $changes)) {
+            $grade = $this->grade($changes['grade']);
+            if ($grade === null) {
+                throw new ProposalException('bad_request', 'grade musi być A, B albo C.', 400);
+            }
+            $after['grade'] = $grade;
+        }
+        if (array_key_exists('emotion', $changes)) {
+            $after['emotion'] = $this->emotion($changes['emotion']);
+        }
+        if (array_key_exists('errors', $changes)) {
+            $after['errors'] = $this->errors($changes['errors']);
+        }
+        if (array_key_exists('note', $changes)) {
+            $after['note'] = mb_substr(trim((string) $changes['note']), 0, 2000);
+        }
+        if (array_key_exists('session', $changes)) {
+            $after['session'] = mb_substr(trim((string) $changes['session']), 0, 40);
+        }
+        $checkTotal = array_key_exists('checkTotal', $changes) ? (int) $changes['checkTotal'] : (int) ($after['checkTotal'] ?? $this->defaultCheckTotal($state));
+        $checklist = array_key_exists('checklist', $changes) ? (int) $changes['checklist'] : (int) ($after['checklist'] ?? 0);
+        if ($checkTotal < 1 || $checkTotal > 20 || $checklist < 0 || $checklist > $checkTotal) {
+            throw new ProposalException('bad_request', 'checklist musi być w zakresie 0-checkTotal, a checkTotal 1-20.', 400);
+        }
+        $after['checkTotal'] = $checkTotal;
+        $after['checklist'] = $checklist;
+        if (array_key_exists('pair', $changes)) {
+            $pair = strtoupper(trim((string) $changes['pair']));
+            if (preg_match('/^[A-Z0-9._\/-]{2,20}$/', $pair) !== 1) {
+                throw new ProposalException('bad_request', 'Para musi mieć 2-20 znaków: A-Z, 0-9, . _ / -.', 400);
+            }
+            $after['pair'] = $pair;
+        }
+        if (array_key_exists('dir', $changes)) {
+            $dirRaw = (string) $changes['dir'];
+            if (!in_array($dirRaw, ['long', 'short', 'l', 's'], true)) {
+                throw new ProposalException('bad_request', 'Kierunek musi być long albo short.', 400);
+            }
+            $after['dir'] = in_array($dirRaw, ['short', 's'], true) ? 's' : 'l';
+        }
+        foreach (['entry', 'sl', 'tp', 'size', 'fee', 'exit'] as $field) {
+            if (!array_key_exists($field, $changes)) {
+                continue;
+            }
+            $value = $changes[$field];
+            if ($field === 'sl' && ($value === null || $value === '' || $value === 'brak')) {
+                $after['sl'] = 'brak';
+                continue;
+            }
+            if ($field === 'tp' && ($value === null || $value === '' || $value === '—')) {
+                $after['tp'] = '—';
+                continue;
+            }
+            if ($field === 'fee') {
+                if (!is_numeric($value) || (float) $value < 0) {
+                    throw new ProposalException('bad_request', 'fee musi być liczbą nieujemną.', 400);
+                }
+                $after['fee'] = Numbers::round((float) $value);
+                continue;
+            }
+            $number = $this->positiveNumber($value, $field);
+            $after[$field] = $this->formatNumber($number, $this->decimals($number));
+        }
+        if (array_key_exists('date', $changes)) {
+            $after['date'] = $this->tradeDateTime($changes['date'], null);
+        }
+        $direction = (string) ($after['dir'] ?? 'l') === 's' ? -1 : 1;
+        $entry = Numbers::pnum($after['entry'] ?? 0);
+        $sizeValue = Numbers::pnum($after['size'] ?? 0);
+        $slRaw = (string) ($after['sl'] ?? 'brak');
+        $risk = ($slRaw !== '' && $slRaw !== 'brak' && $slRaw !== '—') ? abs($entry - Numbers::pnum($slRaw)) * $sizeValue : 0.0;
+        $exitRaw = $after['exit'] ?? null;
+        if ($exitRaw !== null && $exitRaw !== '' && $entry > 0 && $sizeValue > 0) {
+            $exitValue = Numbers::pnum($exitRaw);
+            $result = Numbers::round((($exitValue - $entry) * $sizeValue * $direction) + PHP_FLOAT_EPSILON);
+            $after['result'] = $result;
+            $after['r'] = $risk > 0 ? Numbers::round($result / $risk) : null;
+        } elseif (($after['result'] ?? null) !== null && $risk > 0) {
+            $after['r'] = Numbers::round((float) $after['result'] / $risk);
+        }
+        $after['mentor'] = $this->mentorForGrade((string) ($after['grade'] ?? 'B'), count((array) ($after['errors'] ?? [])));
+
+        return $this->proposals->create($userId, $clientName, 'trade_update', 'trade:' . $tradeId, $before, $after, $key, $this->fingerprint($args));
+    }
+
+    /**
+     * Zmiana setupu: najpierw stan bieżący, potem jawne zmiany. Diff pokazuje
+     * każdą zmienioną regułę, więc wiadomo dokładnie co się zmienia.
+     */
+    public function updateSetup(int $userId, array $args, string $clientName): array
+    {
+        $key = $this->idempotencyKey($args);
+        $this->rejectFields($args, ['setupId', 'changes', 'idempotencyKey']);
+        $setupId = trim((string) ($args['setupId'] ?? ''));
+        if ($setupId === '') {
+            throw new ProposalException('bad_request', 'setupId nie może być pusty.', 400);
+        }
+        $changes = $args['changes'] ?? null;
+        if (!is_array($changes) || $changes === []) {
+            throw new ProposalException('bad_request', 'changes musi być niepustym obiektem zmian.', 400);
+        }
+        $state = $this->state($userId);
+        $before = null;
+        foreach ((array) ($state['setups'] ?? []) as $setup) {
+            if (is_array($setup) && (string) ($setup['id'] ?? '') === $setupId) {
+                $before = $setup;
+                break;
+            }
+        }
+        if ($before === null) {
+            throw new ProposalException('not_found', 'Setup nie istnieje w Playbooku.', 404);
+        }
+        $allowed = ['name', 'tf', 'grade', 'rules', 'bad', 'description', 'confirmation', 'invalidation', 'stopLoss', 'minRR', 'exitRules', 'examples'];
+        foreach ($changes as $field => $_) {
+            if (!in_array($field, $allowed, true)) {
+                throw new ProposalException('bad_request', 'Nieznane pole zmiany setupu: ' . $field . '.', 400);
+            }
+        }
+        $after = $before;
+        if (array_key_exists('name', $changes)) {
+            $name = trim((string) $changes['name']);
+            if (mb_strlen($name) < 2 || mb_strlen($name) > 80) {
+                throw new ProposalException('bad_request', 'Nazwa setupu musi mieć 2-80 znaków.', 400);
+            }
+            $after['name'] = $name;
+        }
+        if (array_key_exists('tf', $changes)) {
+            $tf = trim((string) $changes['tf']);
+            $after['tf'] = $tf === '' ? '-' : mb_substr($tf, 0, 40);
+        }
+        if (array_key_exists('grade', $changes)) {
+            $grade = strtoupper(trim((string) $changes['grade']));
+            if (!in_array($grade, ['A', 'B', 'C'], true)) {
+                throw new ProposalException('bad_request', 'grade musi być A, B albo C.', 400);
+            }
+            $after['grade'] = $grade;
+        }
+        if (array_key_exists('rules', $changes)) {
+            $after['rules'] = $this->rules($changes['rules']);
+        }
+        if (array_key_exists('bad', $changes)) {
+            $after['bad'] = (bool) $changes['bad'];
+        }
+        if (array_key_exists('description', $changes)) {
+            $after['description'] = mb_substr(trim((string) $changes['description']), 0, 1000);
+        }
+        if (array_key_exists('confirmation', $changes)) {
+            $after['confirmation'] = mb_substr(trim((string) $changes['confirmation']), 0, 500);
+        }
+        if (array_key_exists('invalidation', $changes)) {
+            $after['invalidation'] = mb_substr(trim((string) $changes['invalidation']), 0, 500);
+        }
+        if (array_key_exists('stopLoss', $changes)) {
+            $after['stopLoss'] = mb_substr(trim((string) $changes['stopLoss']), 0, 200);
+        }
+        if (array_key_exists('minRR', $changes)) {
+            if ($changes['minRR'] === null) {
+                unset($after['minRR']);
+            } else {
+                $minRr = (float) $changes['minRR'];
+                if ($minRr <= 0 || $minRr > 20) {
+                    throw new ProposalException('bad_request', 'minRR musi być w zakresie 0.1-20.', 400);
+                }
+                $after['minRR'] = Numbers::round($minRr, 2);
+            }
+        }
+        if (array_key_exists('exitRules', $changes)) {
+            $after['exitRules'] = $this->stringList($changes['exitRules'], 'exitRules', 10, 200);
+        }
+        if (array_key_exists('examples', $changes)) {
+            $after['examples'] = $this->stringList($changes['examples'], 'examples', 10, 300);
+        }
+        $after['updatedAt'] = gmdate('c');
+
+        return $this->proposals->create($userId, $clientName, 'setup', 'setup:' . $setupId, $before, $after, $key, $this->fingerprint($args));
+    }
+
+    /**
+     * Zmiana zasad ryzyka. Dozwolone jest wyłącznie utrzymanie albo zaostrzenie
+     * zabezpieczeń: MCP nie wyłącza wyłącznika, nie podnosi limitów strat i nie
+     * skraca blokady.
+     */
+    public function saveRiskRules(int $userId, array $args, string $clientName): array
+    {
+        $key = $this->idempotencyKey($args);
+        $this->rejectFields($args, ['changes', 'reason', 'idempotencyKey']);
+        $changes = $args['changes'] ?? null;
+        if (!is_array($changes) || $changes === []) {
+            throw new ProposalException('bad_request', 'changes musi być niepustym obiektem zmian.', 400);
+        }
+        $reason = trim((string) ($args['reason'] ?? ''));
+        if (mb_strlen($reason) < 10 || mb_strlen($reason) > 500) {
+            throw new ProposalException('bad_request', 'reason musi mieć 10-500 znaków.', 400);
+        }
+        $allowed = ['maxRisk', 'maxLosses', 'maxDailyLoss', 'block', 'requireReason', 'safetyEnabled', 'pushLimit', 'rules', 'checklist'];
+        foreach ($changes as $field => $_) {
+            if (!in_array($field, $allowed, true)) {
+                throw new ProposalException('bad_request', 'Nieznane pole zmiany zasad: ' . $field . '.', 400);
+            }
+        }
+        $state = $this->state($userId);
+        $settings = is_array($state['settings'] ?? null) ? $state['settings'] : [];
+        $current = [
+            'maxRisk' => (float) ($settings['maxRisk'] ?? 1),
+            'maxLosses' => (int) ($settings['maxLosses'] ?? 2),
+            'maxDailyLoss' => (float) ($settings['maxDailyLoss'] ?? 3),
+            'block' => (string) ($settings['block'] ?? 'midnight'),
+            'requireReason' => ($settings['requireReason'] ?? true) !== false,
+            'safetyEnabled' => ($settings['safetyEnabled'] ?? true) !== false,
+            'pushLimit' => ($settings['pushLimit'] ?? true) !== false,
+            'rules' => array_values(array_map('strval', is_array($settings['rules'] ?? null) ? $settings['rules'] : [])),
+            'checklist' => array_values(array_map('strval', is_array($settings['checklist'] ?? null) ? $settings['checklist'] : [])),
+        ];
+        $before = $current;
+        $after = $current;
+        if (array_key_exists('safetyEnabled', $changes) && !((bool) $changes['safetyEnabled'])) {
+            throw new ProposalException('forbidden', 'MCP nie może wyłączać wyłącznika bezpieczeństwa.', 403);
+        }
+        if (array_key_exists('requireReason', $changes) && !((bool) $changes['requireReason'])) {
+            throw new ProposalException('forbidden', 'MCP nie może wyłączyć wymogu powodu obejścia.', 403);
+        }
+        if (array_key_exists('pushLimit', $changes) && !((bool) $changes['pushLimit'])) {
+            throw new ProposalException('forbidden', 'MCP nie może wyłączać powiadomienia o limicie.', 403);
+        }
+        if (array_key_exists('maxRisk', $changes)) {
+            $maxRisk = (float) $changes['maxRisk'];
+            if ($maxRisk < 0.1 || $maxRisk > 100) {
+                throw new ProposalException('bad_request', 'maxRisk musi być w zakresie 0.1-100.', 400);
+            }
+            if ($maxRisk > $current['maxRisk'] + 0.0001) {
+                throw new ProposalException('forbidden', 'MCP może tylko zmniejszać maksymalne ryzyko na transakcję. Podniesienie limitu wymaga decyzji w panelu.', 403);
+            }
+            $after['maxRisk'] = Numbers::round($maxRisk, 2);
+        }
+        if (array_key_exists('maxLosses', $changes)) {
+            $maxLosses = (int) $changes['maxLosses'];
+            if ($maxLosses < 1 || $maxLosses > 50) {
+                throw new ProposalException('bad_request', 'maxLosses musi być w zakresie 1-50.', 400);
+            }
+            if ($maxLosses > $current['maxLosses']) {
+                throw new ProposalException('forbidden', 'MCP może tylko zmniejszać liczbę strat uruchamiających blokadę.', 403);
+            }
+            $after['maxLosses'] = $maxLosses;
+        }
+        if (array_key_exists('maxDailyLoss', $changes)) {
+            $daily = (float) $changes['maxDailyLoss'];
+            if ($daily < 0.1 || $daily > 100) {
+                throw new ProposalException('bad_request', 'maxDailyLoss musi być w zakresie 0.1-100.', 400);
+            }
+            if ($daily > $current['maxDailyLoss'] + 0.0001) {
+                throw new ProposalException('forbidden', 'MCP może tylko zmniejszać dzienny limit straty.', 403);
+            }
+            $after['maxDailyLoss'] = Numbers::round($daily, 2);
+        }
+        if (array_key_exists('block', $changes)) {
+            $block = (string) $changes['block'];
+            if (!in_array($block, ['1h', '4h', 'midnight'], true)) {
+                throw new ProposalException('bad_request', 'block musi być 1h, 4h albo midnight.', 400);
+            }
+            $rank = ['1h' => 1, '4h' => 2, 'midnight' => 3];
+            if (($rank[$block] ?? 0) < ($rank[$current['block']] ?? 3)) {
+                throw new ProposalException('forbidden', 'MCP nie może skracać blokady ochronnej.', 403);
+            }
+            $after['block'] = $block;
+        }
+        if (array_key_exists('rules', $changes)) {
+            $after['rules'] = $this->stringList($changes['rules'], 'rules', 10, 200, 1);
+        }
+        if (array_key_exists('checklist', $changes)) {
+            $after['checklist'] = $this->stringList($changes['checklist'], 'checklist', 20, 100, 1);
+        }
+        $after['reason'] = $reason;
+
+        return $this->proposals->create($userId, $clientName, 'risk_rules', 'settings:risk', $before, $after, $key, $this->fingerprint($args));
+    }
+
+    private function stringList(mixed $value, string $field, int $maxItems, int $maxLength, int $minItems = 0): array
+    {
+        if (!is_array($value)) {
+            throw new ProposalException('bad_request', $field . ' musi być tablicą tekstów.', 400);
+        }
+        if (count($value) < $minItems || count($value) > $maxItems) {
+            throw new ProposalException('bad_request', $field . ' musi mieć ' . $minItems . '-' . $maxItems . ' pozycji.', 400);
+        }
+        $out = [];
+        foreach ($value as $item) {
+            $text = trim((string) $item);
+            if ($text === '' || mb_strlen($text) > $maxLength) {
+                throw new ProposalException('bad_request', 'Pozycja ' . $field . ' musi mieć 1-' . $maxLength . ' znaków.', 400);
+            }
+            $out[] = $text;
+        }
+
+        return $out;
+    }
+
+    private function emotion(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        $emotion = trim((string) $value);
+        if ($emotion === '') {
+            return null;
+        }
+        if (!in_array($emotion, self::EMOTIONS, true)) {
+            throw new ProposalException('bad_request', 'Nieznana emocja. Dozwolone: ' . implode(', ', self::EMOTIONS) . '.', 400);
+        }
+
+        return $emotion;
+    }
+
+    private function grade(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        $grade = strtoupper(trim((string) $value));
+        if (!in_array($grade, ['A', 'B', 'C'], true)) {
+            throw new ProposalException('bad_request', 'grade musi być A, B albo C.', 400);
+        }
+
+        return $grade;
+    }
+
+    /**
+     * Data i czas transakcji: ISO 8601 albo YYYY-MM-DD + HH:MM w Europe/Warsaw.
+     * Data z przyszłości jest odrzucana.
+     */
+    private function tradeDateTime(mixed $date, mixed $time): string
+    {
+        $dateRaw = trim((string) ($date ?? ''));
+        if ($dateRaw === '') {
+            return gmdate('c');
+        }
+        $timeRaw = trim((string) ($time ?? ''));
+        if ($timeRaw !== '' && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $timeRaw) !== 1) {
+            throw new ProposalException('bad_request', 'time musi mieć format HH:MM.', 400);
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateRaw) === 1) {
+            if (!Dates::isValidKey($dateRaw)) {
+                throw new ProposalException('bad_request', 'Nieprawidłowa data transakcji.', 400);
+            }
+            $dateRaw .= 'T' . ($timeRaw !== '' ? $timeRaw : '00:00') . ':00';
+        }
+        try {
+            $local = (new \DateTimeImmutable($dateRaw, Dates::tz()));
+        } catch (\Throwable) {
+            throw new ProposalException('bad_request', 'Nieprawidłowa data transakcji.', 400);
+        }
+        $utc = $local->setTimezone(new \DateTimeZone('UTC'));
+        if ($utc->getTimestamp() > time() + 300) {
+            throw new ProposalException('bad_request', 'Transakcja nie może być z przyszłości.', 400);
+        }
+        if ($utc->format('Y') < '2000') {
+            throw new ProposalException('bad_request', 'Data transakcji jest zbyt odległa.', 400);
+        }
+
+        return $utc->format('Y-m-d\TH:i:s.000\Z');
+    }
+
     private function state(int $userId): array
     {
         $row = $this->db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userId]);
@@ -687,7 +1262,7 @@ final class ProposalBuilder
     {
         $key = trim((string) ($args['idempotencyKey'] ?? ''));
         if (mb_strlen($key) < 8 || mb_strlen($key) > 120) {
-            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8–120 znaków.', 400);
+            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8-120 znaków.', 400);
         }
 
         return $key;

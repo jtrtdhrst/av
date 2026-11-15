@@ -18,7 +18,7 @@ final class ProposalService
 {
     public const TTL_MINUTES = 30;
     public const STATUSES = ['pending', 'approved', 'rejected', 'expired'];
-    public const KINDS = ['manual_trade', 'close_trade', 'trade_review', 'day_plan', 'checkin', 'setup', 'prop_challenge', 'account', 'capital_flow'];
+    public const KINDS = ['manual_trade', 'close_trade', 'trade_review', 'trade_update', 'day_plan', 'checkin', 'setup', 'prop_challenge', 'account', 'capital_flow', 'risk_rules'];
     public const APPROVAL_CODE_TTL_MINUTES = 10;
     public const APPROVAL_CODE_ATTEMPTS = 5;
     private const APPROVAL_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -39,7 +39,7 @@ final class ProposalService
     {
         $key = trim($idempotencyKey);
         if (mb_strlen($key) < 8 || mb_strlen($key) > 120) {
-            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8–120 znaków.', 400);
+            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8-120 znaków.', 400);
         }
         if (!in_array($kind, self::KINDS, true)) {
             throw new ProposalException('bad_request', 'Nieznany typ propozycji.', 400);
@@ -742,6 +742,30 @@ final class ProposalService
                 $state['tradeReviews'] = $reviews;
                 break;
 
+            case 'trade_update':
+                $tradeId = str_starts_with($targetRef, 'trade:') ? substr($targetRef, 6) : '';
+                $index = null;
+                foreach ((array) ($state['trades'] ?? []) as $i => $trade) {
+                    if ((string) ($trade['id'] ?? '') === $tradeId) {
+                        $index = $i;
+                        break;
+                    }
+                }
+                if ($index === null) {
+                    throw new ProposalException('trade_missing', 'Transakcja nie istnieje już w stanie konta.', 409);
+                }
+                $this->assertTradeUpdate($userId, $state['trades'][$index], $after);
+                $state['trades'][$index] = $after;
+                break;
+
+            case 'risk_rules':
+                $this->assertRiskRules($after);
+                $settings = is_array($state['settings'] ?? null) ? $state['settings'] : [];
+                $patch = $after;
+                unset($patch['reason']);
+                $state['settings'] = array_merge($settings, $patch);
+                break;
+
             case 'day_plan':
                 $date = str_starts_with($targetRef, 'plan:') ? substr($targetRef, 5) : '';
                 if (!Dates::isValidKey($date)) {
@@ -923,10 +947,92 @@ final class ProposalService
     private function assertDayPlan(array $after): void
     {
         foreach ($after as $field => $_) {
-            if (!in_array($field, ['date', 'market', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt', 'risk', 'maxTrades', 'until', 'notDo', 'approvedAt'], true)) {
+            if (!in_array($field, ['date', 'market', 'markets', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt', 'risk', 'maxTrades', 'until', 'notDo', 'approvedAt'], true)) {
                 throw new ProposalException('bad_proposal', 'Pole ' . $field . ' nie należy do planu dnia.', 400);
             }
         }
+    }
+
+    /**
+     * Zmiana transakcji: dane finansowe transakcji importowanej są nietykalne,
+     * a wynik musi zgadzać się z ceną wyjścia i wielkością pozycji.
+     */
+    private function assertTradeUpdate(int $userId, array $before, array $after): void
+    {
+        $allowed = ['id', 'date', 'pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size', 'result', 'r', 'grade', 'checklist', 'checkTotal', 'errors', 'emotion', 'note', 'mentor', 'setup', 'session', 'mae', 'mfe', 'durationMin', 'fee', 'plan', 'source', 'account', 'screens'];
+        foreach ($after as $field => $_) {
+            if (!in_array($field, $allowed, true)) {
+                throw new ProposalException('bad_proposal', 'Pole ' . $field . ' nie należy do transakcji.', 400);
+            }
+        }
+        if ((string) ($before['id'] ?? '') !== (string) ($after['id'] ?? '') || (string) ($before['id'] ?? '') === '') {
+            throw new ProposalException('bad_proposal', 'Identyfikator transakcji nie może się zmienić.', 400);
+        }
+        $exchange = $this->isExchangeTrade($userId, $before);
+        if ($exchange) {
+            foreach (['entry', 'exit', 'size', 'sl', 'tp', 'result', 'r', 'fee', 'source', 'date'] as $field) {
+                if ($this->canonicalField($before[$field] ?? null) !== $this->canonicalField($after[$field] ?? null)) {
+                    throw new ProposalException('exchange_data_readonly', 'Pole ' . $field . ' należy do danych giełdowych.', 403);
+                }
+            }
+        }
+        $entry = (float) ($after['entry'] ?? 0);
+        $size = (float) ($after['size'] ?? 0);
+        $direction = (string) ($after['dir'] ?? 'l') === 's' ? -1 : 1;
+        $exitRaw = $after['exit'] ?? null;
+        if ($exitRaw !== null && $exitRaw !== '') {
+            $exit = (float) $exitRaw;
+            $expected = (int) round(((($exit - $entry) * $size * $direction) + PHP_FLOAT_EPSILON) * 100) / 100;
+            if (abs($expected - (float) ($after['result'] ?? 0)) > 0.02) {
+                throw new ProposalException('bad_proposal', 'Wynik transakcji nie zgadza się z ceną wyjścia.', 400);
+            }
+        }
+        $slRaw = (string) ($after['sl'] ?? 'brak');
+        if ($slRaw !== '' && $slRaw !== 'brak' && $slRaw !== '—') {
+            $sl = (float) $slRaw;
+            if (($direction === 1 && $sl >= $entry) || ($direction === -1 && $sl <= $entry)) {
+                throw new ProposalException('bad_proposal', 'Stop loss jest po złej stronie wejścia.', 400);
+            }
+            $risk = abs($entry - $sl) * $size;
+            $result = $after['result'] ?? null;
+            if ($result !== null && $risk > 0 && array_key_exists('r', $after) && $after['r'] !== null) {
+                if (abs((float) $after['r'] - (float) $result / $risk) > 0.05) {
+                    throw new ProposalException('bad_proposal', 'R nie zgadza się z wynikiem i ryzykiem.', 400);
+                }
+            }
+        }
+    }
+
+    private function assertRiskRules(array $after): void
+    {
+        $allowed = ['maxRisk', 'maxLosses', 'maxDailyLoss', 'block', 'requireReason', 'safetyEnabled', 'pushLimit', 'rules', 'checklist', 'reason'];
+        foreach ($after as $field => $_) {
+            if (!in_array($field, $allowed, true)) {
+                throw new ProposalException('bad_proposal', 'Pole ' . $field . ' nie należy do zasad ryzyka.', 400);
+            }
+        }
+        if (array_key_exists('safetyEnabled', $after) && !((bool) $after['safetyEnabled'])) {
+            throw new ProposalException('forbidden', 'Propozycja nie może wyłączyć wyłącznika bezpieczeństwa.', 403);
+        }
+        if (array_key_exists('requireReason', $after) && !((bool) $after['requireReason'])) {
+            throw new ProposalException('forbidden', 'Propozycja nie może wyłączyć wymogu powodu obejścia.', 403);
+        }
+        if (array_key_exists('pushLimit', $after) && !((bool) $after['pushLimit'])) {
+            throw new ProposalException('forbidden', 'Propozycja nie może wyłączyć powiadomienia o limicie.', 403);
+        }
+        foreach (['rules' => 10, 'checklist' => 20] as $field => $max) {
+            if (!array_key_exists($field, $after)) {
+                continue;
+            }
+            if (!is_array($after[$field]) || count($after[$field]) > $max) {
+                throw new ProposalException('bad_proposal', 'Pole ' . $field . ' musi być tablicą maks. ' . $max . ' pozycji.', 400);
+            }
+        }
+    }
+
+    private function canonicalField(mixed $value): string
+    {
+        return $this->canonicalJson($value === null ? null : $value);
     }
 
     private function assertCheckin(array $after): void
@@ -941,7 +1047,7 @@ final class ProposalService
     private function assertSetup(array $after): void
     {
         foreach ($after as $field => $_) {
-            if (!in_array($field, ['id', 'name', 'tf', 'grade', 'rules', 'bad', 'seed'], true)) {
+            if (!in_array($field, ['id', 'name', 'tf', 'grade', 'rules', 'bad', 'seed', 'description', 'confirmation', 'invalidation', 'stopLoss', 'minRR', 'exitRules', 'examples', 'createdAt', 'updatedAt'], true)) {
                 throw new ProposalException('bad_proposal', 'Pole ' . $field . ' nie należy do setupu.', 400);
             }
         }

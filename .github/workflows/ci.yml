@@ -121,6 +121,10 @@ jobs:
         env:
           ALPHA_VAULT_CONFIG: tests/config.test.json
         run: php tests/mcp.test.php
+      - name: MCP tools contract tests
+        env:
+          ALPHA_VAULT_CONFIG: tests/config.test.json
+        run: php tests/mcp-tools.test.php
 
       - name: MCP prop parity
         run: node tests/prop-parity.mjs
@@ -131,6 +135,12 @@ jobs:
           PHP_BIN: php
           MCP_TEST_PORT: "4176"
         run: node tests/mcp.e2e.mjs
+      - name: MCP tools E2E
+        env:
+          ALPHA_VAULT_CONFIG: tests/config.test.json
+          PHP_BIN: php
+          MCP_TOOLS_TEST_PORT: "4177"
+        run: node tests/mcp-tools.e2e.mjs
 
       - name: MCP login E2E
         env:

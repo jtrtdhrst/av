@@ -1,6 +1,25 @@
 # Changelog
 
-## 3.9.6 — 2026-11-15
+## 3.9.7 - 2026-11-15
+
+### Dodane
+- MCP 2.2: 38 nowych narzędzi — plan dnia (historia, zgodność, kontekst, propozycja), dziennik (kontekst, recenzja, screeny, propozycje transakcji i zmian), Playbook (szczegóły, skuteczność, propozycje), gotowość i korelacje z check-inami, zasady ryzyka i tryb ochronny (status, naruszenia, propozycja zaostrzenia), prop challenge (kontekst, budżet ryzyka, propozycje), analityka (setup, emocja, sesja, błąd, ocena, rynek, zgodność z planem, wzorce), kalkulator Alpha, historia kapitału, PIT-38, szczegóły wydarzenia makro, historia synchronizacji i postęp odznak.
+- MCP: 46 narzędzi odczytu i 20 zapisu; rejestr w `McpController`, schematy wejścia w `Schemas`, opisy dla modelu.
+- MCP: osobny zakres `alphavault.health` z checkboxem na ekranie zgody; dane zdrowotne tylko przy zgodzie urządzenia.
+- MCP: wspólny silnik `Metrics` dla `get_stats` i raportów analitycznych; brak danych daje `null` i `hasData=false`.
+- MCP: propozycje `trade_update` i `risk_rules`; `risk_rules` może tylko zaostrzać zabezpieczenia.
+- MCP: `get_proposal_status` dla nieistniejącego ID zwraca `found=false` zamiast błędu.
+- MCP: `get_macro_calendar` rozdziela `matchedCount`, `returnedCount`, `storedCount` i `sync.eventsCount`.
+- Testy: `tests/mcp-tools.test.php` (kontrakty silników) i `tests/mcp-tools.e2e.mjs` (38 narzędzi, 6 workflow, izolacja, cykle propozycji).
+
+### Naprawione
+- Metryki bez transakcji zwracały `0`; teraz `null` z `hasData=false`, żeby brak danych nie wyglądał jak wynik.
+- Zgodność z planem nie zależy już od zysku: liczą się rynek, kierunek, limit transakcji, ryzyko, godzina i SL.
+
+### Testy
+- CI: `MCP tools contract tests`, `MCP tools E2E` oraz istniejące `MCP security`, `MCP E2E`, `MCP login E2E`.
+
+## 3.9.6 - 2026-11-15
 
 ### Dodane
 - Pulpit: karta „Saldo portfela” z sumą sald, wynikiem od kapitału startowego i skrótem do „Konto i zasady”; kapitał startowy i saldo konta są edytowalne w tabeli.

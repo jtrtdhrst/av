@@ -54,7 +54,7 @@ final class MacroService
 
         $totalRow = $this->db->queryOne('SELECT COUNT(*) AS n FROM macro_events WHERE ' . $whereSql, $params);
         $rows = $this->db->query(
-            'SELECT id, source, name, description, currency, impact, starts_at_iso, forecast, previous
+            'SELECT id, external_id, source, name, description, currency, impact, starts_at_iso, forecast, previous
              FROM macro_events WHERE ' . $whereSql . ' ORDER BY starts_at_utc ASC LIMIT ' . $limit . ' OFFSET ' . $offset,
             $params
         );
@@ -65,6 +65,7 @@ final class MacroService
 
             return [
                 'id' => (string) $row['id'],
+                'externalId' => (string) $row['external_id'],
                 'source' => (string) $row['source'],
                 'name' => (string) $row['name'],
                 'description' => $row['description'] !== null ? mb_substr((string) $row['description'], 0, 500) : null,
@@ -78,12 +79,25 @@ final class MacroService
         }, $rows);
 
         $total = (int) ($totalRow['n'] ?? 0);
+        $stored = null;
+        try {
+            $storedRow = $this->db->queryOne('SELECT COUNT(*) AS n FROM macro_events WHERE is_deleted = 0');
+            $stored = (int) ($storedRow['n'] ?? 0);
+        } catch (\Throwable) {
+            $stored = null;
+        }
 
         return [
             'items' => $items,
             'total' => $total,
+            'matchedCount' => $total,
+            'returnedCount' => count($items),
+            'storedCount' => $stored,
+            'limit' => $limit,
+            'offset' => $offset,
             'nextOffset' => ($offset + count($items)) < $total ? $offset + count($items) : null,
             'sync' => $this->sync(),
+            'countsNote' => 'total/matchedCount = rekordy spełniające filtr, returnedCount = rekordy w tej odpowiedzi, storedCount = wszystkie rekordy w bazie, sync.eventsCount = liczba z ostatniej synchronizacji.',
         ];
     }
 
