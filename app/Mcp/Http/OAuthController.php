@@ -176,6 +176,12 @@ final class OAuthController
             );
         }
 
+        // POST bez znaczników zgody to żądanie autoryzacji od klienta OAuth
+        // (ChatGPT wysyła formularz z własnym Origin) — sprowadzamy je do GET.
+        if (!$this->isConsentDecision()) {
+            $this->normalizeAuthorizationPost();
+        }
+
         $this->auth->requireSameOrigin();
         $session = $this->auth->readSession();
         if ($session === null) {
@@ -605,6 +611,56 @@ final class OAuthController
         }
         $sep = str_contains($redirectUri, '?') ? '&' : '?';
         Http::redirect($redirectUri . $sep . http_build_query($query));
+    }
+
+    /**
+     * Decyzja na ekranie zgody pochodzi z naszej strony i tylko ona zmienia stan,
+     * więc tylko ona jest objęta kontrolą Origin.
+     */
+    private function isConsentDecision(): bool
+    {
+        return isset($_POST['consent_id']) || isset($_POST['csrf']) || isset($_POST['consent_token']);
+    }
+
+    /**
+     * Klienci OAuth (m.in. ChatGPT) wysyłają żądanie autoryzacji metodą POST
+     * z parametrami w ciele formularza. Takie żądanie niczego nie zmienia, a jego
+     * poprawność i tak wymusza serwer OAuth (client_id + dokładny redirect_uri),
+     * dlatego nie stosujemy tu requireSameOrigin: Origin klienta jest obcy z natury.
+     * Normalizujemy je do GET, żeby logowanie i zgoda miały jeden przebieg.
+     */
+    private function normalizeAuthorizationPost(): never
+    {
+        $params = $this->authorizationParams();
+        if ($params === []) {
+            $this->auth->requireSameOrigin();
+            Http::json(['error' => 'invalid_request', 'message' => 'Brak parametrów żądania autoryzacji.'], 400);
+        }
+        Http::redirect('/oauth/authorize?' . http_build_query($params), 303);
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function authorizationParams(): array
+    {
+        $source = array_merge($_GET, $_POST);
+        if ($source === []) {
+            $raw = (string) @file_get_contents('php://input');
+            if ($raw !== '' && strlen($raw) <= 8192) {
+                $parsed = [];
+                parse_str($raw, $parsed);
+                $source = $parsed;
+            }
+        }
+        $params = [];
+        foreach ($source as $key => $value) {
+            if (is_string($key) && is_string($value) && $value !== '') {
+                $params[$key] = $value;
+            }
+        }
+
+        return $params;
     }
 
     private function isAllowedResource(string $resource): bool
