@@ -3,6 +3,11 @@ declare(strict_types=1);
 
 namespace AlphaVault\Mcp\Support;
 
+/**
+ * Statystyki tradingowe. Metryki bazowe pochodzą ze wspólnego Metrics, więc
+ * raporty analityczne MCP nie mogą rozjechać się z get_stats. Brak transakcji
+ * daje hasData=false i null, nie zera.
+ */
 final class StatsService
 {
     public function __construct(private readonly TradeService $trades)
@@ -27,34 +32,13 @@ final class StatsService
             ));
         }
 
-        $n = count($closed);
-        $wins = [];
-        $losses = [];
-        $net = 0.0;
-        $grossProfit = 0.0;
-        $grossLoss = 0.0;
-        $rSum = 0.0;
-        $rCount = 0;
-        $fees = 0.0;
+        $metrics = Metrics::summarize($closed);
+        $n = (int) $metrics['sampleSize'];
         $withSl = 0;
         $planned = 0;
         $full = [];
         $part = [];
         foreach ($closed as $trade) {
-            $result = (float) ($trade['result'] ?? 0);
-            $net += $result;
-            if ($result > 0) {
-                $wins[] = $trade;
-                $grossProfit += $result;
-            } elseif ($result < 0) {
-                $losses[] = $trade;
-                $grossLoss += abs($result);
-            }
-            if (array_key_exists('r', $trade) && $trade['r'] !== null) {
-                $rSum += (float) $trade['r'];
-                $rCount++;
-            }
-            $fees += (float) ($trade['fee'] ?? 0);
             $sl = (string) ($trade['sl'] ?? 'brak');
             if ($sl !== '' && $sl !== 'brak' && $sl !== '—') {
                 $withSl++;
@@ -64,7 +48,7 @@ final class StatsService
             }
             $checklist = (int) ($trade['checklist'] ?? 0);
             $checkTotal = (int) ($trade['checkTotal'] ?? 7);
-            if ($checklist >= $checkTotal) {
+            if ($checkTotal > 0 && $checklist >= $checkTotal) {
                 $full[] = $trade;
             } else {
                 $part[] = $trade;
@@ -77,14 +61,14 @@ final class StatsService
         }
         $sorted = $closed;
         usort($sorted, static fn (array $a, array $b): int => (strtotime((string) ($a['date'] ?? '')) ?: 0) <=> (strtotime((string) ($b['date'] ?? '')) ?: 0));
-        $eq = $start;
+        $equity = $start;
         $peak = $start;
         $maxDd = 0.0;
         $maxDdPct = 0.0;
         foreach ($sorted as $trade) {
-            $eq += (float) ($trade['result'] ?? 0);
-            $peak = max($peak, $eq);
-            $dd = $eq - $peak;
+            $equity += (float) ($trade['result'] ?? 0);
+            $peak = max($peak, $equity);
+            $dd = $equity - $peak;
             if ($dd < $maxDd) {
                 $maxDd = $dd;
             }
@@ -96,83 +80,55 @@ final class StatsService
         $grades = [];
         foreach (['A', 'B', 'C'] as $grade) {
             $items = array_values(array_filter($closed, static fn (array $trade): bool => (string) ($trade['grade'] ?? '') === $grade));
-            $gradeWins = array_values(array_filter($items, static fn (array $trade): bool => (float) ($trade['result'] ?? 0) > 0));
-            $gradeNet = 0.0;
-            foreach ($items as $item) {
-                $gradeNet += (float) ($item['result'] ?? 0);
-            }
-            $grades[] = [
-                'grade' => $grade,
-                'trades' => count($items),
-                'winRate' => $items !== [] ? Numbers::round(count($gradeWins) / count($items) * 100) : 0.0,
-                'net' => Numbers::round($gradeNet),
-            ];
+            $grades[] = array_merge(['grade' => $grade], Metrics::summarize($items));
         }
 
         $setups = [];
         foreach ($closed as $trade) {
-            $key = (string) ($trade['setup'] ?? '—');
-            if (!isset($setups[$key])) {
-                $setups[$key] = ['setup' => $key, 'trades' => 0, 'wins' => 0, 'net' => 0.0];
-            }
-            $setups[$key]['trades']++;
-            $setups[$key]['net'] += (float) ($trade['result'] ?? 0);
-            if ((float) ($trade['result'] ?? 0) > 0) {
-                $setups[$key]['wins']++;
-            }
+            $key = trim((string) ($trade['setup'] ?? ''));
+            $setups[$key === '' ? '__none__' : $key][] = $trade;
         }
-        $bySetup = array_values(array_map(static function (array $row): array {
-            return [
-                'setup' => $row['setup'],
-                'trades' => $row['trades'],
-                'winRate' => $row['trades'] > 0 ? Numbers::round($row['wins'] / $row['trades'] * 100) : 0.0,
-                'net' => Numbers::round($row['net']),
+        $bySetup = [];
+        foreach ($setups as $setup => $items) {
+            $summary = Metrics::summarize($items);
+            $bySetup[] = [
+                'setup' => $setup === '__none__' ? null : $setup,
+                'trades' => $summary['sampleSize'],
+                'winRate' => $summary['winRate'],
+                'net' => $summary['net'],
             ];
-        }, $setups));
-        usort($bySetup, static fn (array $a, array $b): int => $b['net'] <=> $a['net']);
-
-        $avgWin = $wins !== [] ? $grossProfit / count($wins) : 0.0;
-        $avgLoss = $losses !== [] ? -$grossLoss / count($losses) : 0.0;
-        $checklistStats = static function (array $items): array {
-            $count = count($items);
-            $winsCount = count(array_filter($items, static fn (array $trade): bool => (float) ($trade['result'] ?? 0) > 0));
-            $sum = 0.0;
-            foreach ($items as $item) {
-                $sum += (float) ($item['result'] ?? 0);
-            }
-
-            return [
-                'trades' => $count,
-                'winRate' => $count > 0 ? Numbers::round($winsCount / $count * 100) : 0.0,
-                'net' => Numbers::round($sum),
-            ];
-        };
+        }
+        usort($bySetup, static fn (array $a, array $b): int => ($b['net'] ?? PHP_INT_MIN) <=> ($a['net'] ?? PHP_INT_MIN));
 
         return [
+            'hasData' => $metrics['hasData'],
+            'sampleSize' => $n,
             'period' => $period,
             'from' => $fromKey ?? ($sorted !== [] ? Dates::dateKey((string) ($sorted[0]['date'] ?? '')) : null),
             'to' => Dates::todayKey(),
             'trades' => $n,
-            'wins' => count($wins),
-            'losses' => count($losses),
-            'winRate' => $n > 0 ? Numbers::round(count($wins) / $n * 100) : 0.0,
-            'net' => Numbers::round($net),
-            'grossProfit' => Numbers::round($grossProfit),
-            'grossLoss' => Numbers::round($grossLoss),
-            'profitFactor' => $grossLoss > 0 ? Numbers::round($grossProfit / $grossLoss) : ($grossProfit > 0 ? 99.0 : 0.0),
-            'expectancyR' => $rCount > 0 ? Numbers::round($rSum / $rCount) : 0.0,
-            'avgWin' => Numbers::round($avgWin),
-            'avgLoss' => Numbers::round($avgLoss),
-            'maxDrawdown' => Numbers::round($maxDd),
-            'maxDrawdownPct' => Numbers::round($maxDdPct),
-            'fees' => Numbers::round($fees),
-            'withStopLoss' => $n > 0 ? Numbers::round($withSl / $n * 100) : 0.0,
-            'planAdherence' => $n > 0 ? Numbers::round($planned / $n * 100) : 0.0,
+            'wins' => $metrics['wins'],
+            'losses' => $metrics['losses'],
+            'winRate' => $metrics['winRate'],
+            'net' => $metrics['net'],
+            'grossProfit' => $metrics['grossProfit'],
+            'grossLoss' => $metrics['grossLoss'],
+            'profitFactor' => $metrics['profitFactor'],
+            'expectancyR' => $metrics['expectancyR'],
+            'expectancyCurrency' => $metrics['expectancyCurrency'],
+            'avgWin' => $metrics['avgWin'],
+            'avgLoss' => $metrics['avgLoss'],
+            'maxDrawdown' => $n > 0 ? Numbers::round($maxDd) : null,
+            'maxDrawdownPct' => $n > 0 ? Numbers::round($maxDdPct) : null,
+            'fees' => $metrics['fees'],
+            'withStopLoss' => $n > 0 ? Numbers::round($withSl / $n * 100) : null,
+            'planAdherence' => $n > 0 ? Numbers::round($planned / $n * 100) : null,
             'byGrade' => $grades,
             'bySetup' => array_slice($bySetup, 0, 5),
-            'fullChecklist' => $checklistStats($full),
-            'partialChecklist' => $checklistStats($part),
-            'currency' => 'USDT',
+            'fullChecklist' => Metrics::summarize($full),
+            'partialChecklist' => Metrics::summarize($part),
+            'currency' => Metrics::CURRENCY,
+            'note' => 'Metryki bez danych zwracają null (nie zero). profitFactor jest null, gdy nie ma strat do porównania.',
         ];
     }
 

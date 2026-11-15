@@ -29,9 +29,9 @@ final class Schemas
         return ['type' => 'string', 'minLength' => 8, 'maxLength' => 120];
     }
 
-    private static function input(array $properties = [], array $required = []): array
+    private static function input(array $properties = [], array $required = [], bool $additionalProperties = false): array
     {
-        return self::object($properties, $required, false);
+        return self::object($properties, $required, $additionalProperties);
     }
 
     // ------------------------------------------------------------------
@@ -115,6 +115,158 @@ final class Schemas
     {
         return self::input(['tradeId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128]], ['tradeId']);
     }
+
+    // ------------------------------------------------------------------
+    // Plan dnia, dziennik, playbook, gotowość, ryzyko, prop, analityka
+    // ------------------------------------------------------------------
+
+    private static function dateRange(): array
+    {
+        return [
+            'from' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'to' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+        ];
+    }
+
+    private static function minSample(): array
+    {
+        return ['minSample' => ['type' => 'integer', 'minimum' => 3, 'maximum' => 100, 'default' => 3]];
+    }
+
+    public static function inputDayPlanHistory(): array
+    {
+        return self::input(self::dateRange() + [
+            'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20],
+            'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100000, 'default' => 0],
+        ]);
+    }
+
+    public static function inputDayPlanCompliance(): array
+    {
+        return self::input([
+            'date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+        ] + self::dateRange() + [
+            'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20],
+            'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100000, 'default' => 0],
+        ]);
+    }
+
+    public static function inputDayPlanContext(): array
+    {
+        return self::input(['date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$']]);
+    }
+
+    public static function inputTradeJournal(): array
+    {
+        return self::input(['tradeId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128]], ['tradeId']);
+    }
+
+    public static function inputTradeScreenshots(): array
+    {
+        return self::input([
+            'tradeId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
+            'kind' => ['type' => 'string', 'enum' => ['before', 'after']],
+            'includeImages' => ['type' => 'boolean', 'default' => false, 'description' => 'true zwraca obrazy w base64 w limitach 2 obrazów i 200 KB każdy.'],
+            'maxImages' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 2, 'default' => 1],
+        ], ['tradeId']);
+    }
+
+    public static function inputSetupDetails(): array
+    {
+        return self::input(['setupId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 100]], ['setupId']);
+    }
+
+    public static function inputSetupPerformance(): array
+    {
+        return self::input(['setupId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 100]] + self::dateRange() + self::minSample(), ['setupId']);
+    }
+
+    public static function inputReadiness(): array
+    {
+        return self::input(['date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$']]);
+    }
+
+    public static function inputCheckinCorrelation(): array
+    {
+        return self::input(self::dateRange() + [
+            'minSample' => ['type' => 'integer', 'minimum' => 3, 'maximum' => 100, 'default' => 5],
+        ]);
+    }
+
+    public static function inputRiskViolations(): array
+    {
+        return self::input(self::dateRange() + [
+            'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 200, 'default' => 50],
+            'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100000, 'default' => 0],
+        ]);
+    }
+
+    public static function inputPropContext(): array
+    {
+        return self::input(['challengeId' => ['type' => 'string', 'maxLength' => 64]]);
+    }
+
+    public static function inputPerformance(): array
+    {
+        return self::input(self::dateRange() + self::minSample());
+    }
+
+    public static function inputTradePatterns(): array
+    {
+        return self::input(self::dateRange() + [
+            'minSample' => ['type' => 'integer', 'minimum' => 3, 'maximum' => 100, 'default' => 5],
+        ]);
+    }
+
+    public static function inputCalculator(): array
+    {
+        return self::input([
+            'mode' => ['type' => 'string', 'enum' => ['crypto', 'fx'], 'default' => 'crypto'],
+            'balance' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'riskPercent' => ['type' => 'number', 'minimum' => 0.1, 'maximum' => 100],
+            'direction' => ['type' => 'string', 'enum' => ['long', 'short']],
+            'entry' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'stopLoss' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'takeProfit' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'leverage' => ['type' => 'number', 'minimum' => 1, 'maximum' => 1000, 'default' => 1],
+            'instrument' => ['type' => 'string', 'maxLength' => 40],
+            'currency' => ['type' => 'string', 'pattern' => '^[A-Za-z]{3,5}$'],
+        ], ['balance', 'riskPercent', 'direction', 'entry', 'stopLoss']);
+    }
+
+    public static function inputAccountTransactions(): array
+    {
+        return self::input([
+            'account' => ['type' => 'string', 'maxLength' => 100],
+            'type' => ['type' => 'string', 'enum' => ['deposit', 'withdrawal']],
+        ] + self::dateRange() + [
+            'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 50],
+            'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100000, 'default' => 0],
+        ]);
+    }
+
+    public static function inputTaxSummary(): array
+    {
+        return self::input(['year' => ['type' => 'integer', 'minimum' => 2000, 'maximum' => 2100]]);
+    }
+
+    public static function inputMacroDetails(): array
+    {
+        return self::input(['eventId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64]], ['eventId']);
+    }
+
+    public static function inputSyncHistory(): array
+    {
+        return self::input([
+            'provider' => ['type' => 'string', 'pattern' => '^[A-Za-z0-9_-]{2,16}$'],
+            'status' => ['type' => 'string', 'pattern' => '^[A-Za-z0-9_-]{2,20}$'],
+            'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20],
+            'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100000, 'default' => 0],
+        ]);
+    }
+
+    public static function inputBadges(): array { return self::input(); }
+
 
     // ------------------------------------------------------------------
     // Propozycje
@@ -274,9 +426,215 @@ final class Schemas
         ], ['proposalId', 'idempotencyKey']);
     }
 
-    public static function inputProposePropChallenge(): array
+    // ------------------------------------------------------------------
+    // Nowe propozycje (plan, transakcja, setup, check-in, ryzyko, prop)
+    // ------------------------------------------------------------------
+
+    public static function inputCreateDayPlanProposal(): array
+    {
+        $scenario = self::input([
+            'condition' => ['type' => 'string', 'maxLength' => 2000],
+            'action' => ['type' => 'string', 'maxLength' => 2000],
+        ]);
+
+        return self::input([
+            'date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'markets' => ['type' => 'array', 'minItems' => 1, 'maxItems' => 3, 'items' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 20]],
+            'bias' => ['type' => 'string', 'enum' => ['long', 'short', 'neutral', 'none']],
+            'reason' => ['type' => 'string', 'maxLength' => 2000],
+            'levels' => [
+                'type' => 'array', 'maxItems' => 10,
+                'items' => self::input([
+                    'type' => ['type' => 'string', 'maxLength' => 20],
+                    'price' => ['type' => 'string', 'maxLength' => 30],
+                    'note' => ['type' => 'string', 'maxLength' => 200],
+                ]),
+            ],
+            'scenarioA' => $scenario,
+            'scenarioB' => $scenario,
+            'riskPercent' => ['type' => 'number', 'minimum' => 0.1, 'maximum' => 100],
+            'maxTrades' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 50],
+            'until' => ['type' => 'string', 'pattern' => '^([01]\\d|2[0-3]):[0-5]\\d$'],
+            'rulesNotToDo' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 300]],
+            'idempotencyKey' => self::idem(),
+        ], ['idempotencyKey']);
+    }
+
+    public static function inputCreateTradeProposal(): array
     {
         return self::input([
+            'pair' => ['type' => 'string', 'pattern' => '^[A-Za-z0-9._/-]{2,20}$'],
+            'dir' => ['type' => 'string', 'enum' => ['long', 'short', 'l', 's']],
+            'entry' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'exit' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'size' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'sl' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'tp' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'fee' => ['type' => 'number', 'minimum' => 0, 'maximum' => 100000],
+            'setup' => ['type' => 'string', 'maxLength' => 100],
+            'emotion' => ['type' => 'string', 'maxLength' => 30],
+            'grade' => ['type' => 'string', 'enum' => ['A', 'B', 'C']],
+            'checklist' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 20],
+            'checkTotal' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 20],
+            'errors' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'maxLength' => 60]],
+            'note' => ['type' => 'string', 'maxLength' => 2000],
+            'date' => ['type' => 'string', 'maxLength' => 40],
+            'time' => ['type' => 'string', 'pattern' => '^([01]\\d|2[0-3]):[0-5]\\d$'],
+            'account' => ['type' => 'string', 'maxLength' => 100],
+            'session' => ['type' => 'string', 'maxLength' => 40],
+            'idempotencyKey' => self::idem(),
+        ], ['pair', 'dir', 'entry', 'size', 'idempotencyKey']);
+    }
+
+    public static function inputUpdateTradeProposal(): array
+    {
+        return self::input([
+            'tradeId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
+            'changes' => self::input([
+                'pair' => ['type' => 'string', 'pattern' => '^[A-Za-z0-9._/-]{2,20}$'],
+                'dir' => ['type' => 'string', 'enum' => ['long', 'short', 'l', 's']],
+                'entry' => ['type' => 'number', 'exclusiveMinimum' => 0],
+                'exit' => ['type' => 'number', 'exclusiveMinimum' => 0],
+                'sl' => self::nullable(['type' => 'number', 'exclusiveMinimum' => 0]),
+                'tp' => self::nullable(['type' => 'number', 'exclusiveMinimum' => 0]),
+                'size' => ['type' => 'number', 'exclusiveMinimum' => 0],
+                'fee' => ['type' => 'number', 'minimum' => 0],
+                'setup' => ['type' => 'string', 'maxLength' => 100],
+                'grade' => ['type' => 'string', 'enum' => ['A', 'B', 'C']],
+                'emotion' => ['type' => 'string', 'maxLength' => 30],
+                'errors' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'maxLength' => 60]],
+                'note' => ['type' => 'string', 'maxLength' => 2000],
+                'checklist' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 20],
+                'checkTotal' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 20],
+                'session' => ['type' => 'string', 'maxLength' => 40],
+                'date' => ['type' => 'string', 'maxLength' => 40],
+            ], [], false),
+            'idempotencyKey' => self::idem(),
+        ], ['tradeId', 'changes', 'idempotencyKey']);
+    }
+
+    public static function inputCreateSetupProposal(): array
+    {
+        return self::input([
+            'name' => ['type' => 'string', 'minLength' => 2, 'maxLength' => 80],
+            'description' => ['type' => 'string', 'maxLength' => 1000],
+            'entryRules' => ['type' => 'array', 'minItems' => 2, 'maxItems' => 5, 'items' => ['type' => 'string', 'minLength' => 3, 'maxLength' => 200]],
+            'timeframes' => ['type' => 'string', 'maxLength' => 40],
+            'confirmation' => ['type' => 'string', 'maxLength' => 500],
+            'invalidation' => ['type' => 'string', 'maxLength' => 500],
+            'stopLoss' => ['type' => 'string', 'maxLength' => 200],
+            'minRR' => ['type' => 'number', 'minimum' => 0.1, 'maximum' => 20],
+            'exitRules' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'maxLength' => 200]],
+            'examples' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'maxLength' => 300]],
+            'grade' => ['type' => 'string', 'enum' => ['A', 'B', 'C']],
+            'idempotencyKey' => self::idem(),
+        ], ['name', 'entryRules', 'idempotencyKey']);
+    }
+
+    public static function inputUpdateSetupProposal(): array
+    {
+        return self::input([
+            'setupId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+            'changes' => self::input([
+                'name' => ['type' => 'string', 'minLength' => 2, 'maxLength' => 80],
+                'tf' => ['type' => 'string', 'maxLength' => 40],
+                'grade' => ['type' => 'string', 'enum' => ['A', 'B', 'C']],
+                'rules' => ['type' => 'array', 'minItems' => 2, 'maxItems' => 5, 'items' => ['type' => 'string', 'minLength' => 3, 'maxLength' => 200]],
+                'bad' => ['type' => 'boolean'],
+                'description' => ['type' => 'string', 'maxLength' => 1000],
+                'confirmation' => ['type' => 'string', 'maxLength' => 500],
+                'invalidation' => ['type' => 'string', 'maxLength' => 500],
+                'stopLoss' => ['type' => 'string', 'maxLength' => 200],
+                'minRR' => self::nullable(['type' => 'number', 'minimum' => 0.1, 'maximum' => 20]),
+                'exitRules' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'maxLength' => 200]],
+                'examples' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'maxLength' => 300]],
+            ], [], false),
+            'idempotencyKey' => self::idem(),
+        ], ['setupId', 'changes', 'idempotencyKey']);
+    }
+
+    public static function inputCreateCheckinProposal(): array
+    {
+        return self::input([
+            'mood' => ['type' => 'string', 'maxLength' => 30],
+            'energy' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 5],
+            'note' => ['type' => 'string', 'maxLength' => 500],
+            'date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'idempotencyKey' => self::idem(),
+        ], ['mood', 'energy', 'idempotencyKey']);
+    }
+
+    public static function inputCreateRiskRulesProposal(): array
+    {
+        return self::input([
+            'changes' => self::input([
+                'maxRisk' => ['type' => 'number', 'minimum' => 0.1, 'maximum' => 100],
+                'maxLosses' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 50],
+                'maxDailyLoss' => ['type' => 'number', 'minimum' => 0.1, 'maximum' => 100],
+                'block' => ['type' => 'string', 'enum' => ['1h', '4h', 'midnight']],
+                'safetyEnabled' => ['type' => 'boolean', 'description' => 'Można tylko potwierdzić true; MCP nie wyłącza wyłącznika.'],
+                'requireReason' => ['type' => 'boolean'],
+                'pushLimit' => ['type' => 'boolean'],
+                'rules' => ['type' => 'array', 'maxItems' => 10, 'items' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 200]],
+                'checklist' => ['type' => 'array', 'maxItems' => 20, 'items' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 100]],
+            ], [], false),
+            'reason' => ['type' => 'string', 'minLength' => 10, 'maxLength' => 500],
+            'idempotencyKey' => self::idem(),
+        ], ['changes', 'reason', 'idempotencyKey']);
+    }
+
+    public static function inputCreatePropChallengeProposal(): array
+    {
+        return self::input([
+            'templateId' => ['type' => 'string', 'maxLength' => 40, 'default' => 'custom'],
+            'name' => ['type' => 'string', 'maxLength' => 100],
+            'account' => ['type' => 'string', 'maxLength' => 100],
+            'phase' => ['type' => 'string', 'maxLength' => 50],
+            'currency' => ['type' => 'string', 'enum' => ['USD', 'USDT', 'EUR', 'PLN']],
+            'accountSize' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'startBalance' => ['type' => 'number', 'exclusiveMinimum' => 0],
+            'targetPct' => ['type' => 'number', 'minimum' => 0, 'maximum' => 1000],
+            'dailyLossPct' => ['type' => 'number', 'minimum' => 0, 'maximum' => 100],
+            'maxLossPct' => ['type' => 'number', 'minimum' => 0, 'maximum' => 100],
+            'drawdownType' => ['type' => 'string', 'enum' => ['static', 'trailing']],
+            'dailyBasis' => ['type' => 'string', 'enum' => ['initial', 'dayStart']],
+            'minDays' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 60],
+            'startDate' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'endDate' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'notes' => ['type' => 'string', 'maxLength' => 2000],
+            'idempotencyKey' => self::idem(),
+        ], ['idempotencyKey']);
+    }
+
+    public static function inputUpdatePropChallengeProposal(): array
+    {
+        return self::input([
+            'challengeId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+            'changes' => self::input([
+                'name' => ['type' => 'string', 'maxLength' => 100],
+                'firm' => ['type' => 'string', 'maxLength' => 100],
+                'templateId' => ['type' => 'string', 'maxLength' => 40],
+                'phase' => ['type' => 'string', 'maxLength' => 50],
+                'account' => ['type' => 'string', 'maxLength' => 100],
+                'currency' => ['type' => 'string', 'enum' => ['USD', 'USDT', 'EUR', 'PLN']],
+                'accountSize' => ['type' => 'number', 'exclusiveMinimum' => 0],
+                'startBalance' => ['type' => 'number', 'exclusiveMinimum' => 0],
+                'targetPct' => ['type' => 'number', 'minimum' => 0, 'maximum' => 1000],
+                'dailyLossPct' => ['type' => 'number', 'minimum' => 0, 'maximum' => 100],
+                'maxLossPct' => ['type' => 'number', 'minimum' => 0, 'maximum' => 100],
+                'drawdownType' => ['type' => 'string', 'enum' => ['static', 'trailing']],
+                'dailyBasis' => ['type' => 'string', 'enum' => ['initial', 'dayStart']],
+                'minDays' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 60],
+                'startDate' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+                'endDate' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+                'notes' => ['type' => 'string', 'maxLength' => 2000],
+            ], [], false),
+            'idempotencyKey' => self::idem(),
+        ], ['challengeId', 'changes', 'idempotencyKey']);
+    }
+
+    public static function inputProposePropChallenge(): array
+    {        return self::input([
             'id' => ['type' => 'string', 'maxLength' => 64],
             'name' => ['type' => 'string', 'maxLength' => 100],
             'firm' => ['type' => 'string', 'maxLength' => 100],

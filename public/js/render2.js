@@ -261,10 +261,14 @@
     manual_trade: 'Nowa transakcja',
     close_trade: 'Zamknięcie pozycji',
     trade_review: 'Recenzja transakcji',
+    trade_update: 'Zmiana transakcji',
     day_plan: 'Plan dnia',
     checkin: 'Check-in',
     setup: 'Setup w Playbooku',
-    prop_challenge: 'Prop challenge'
+    prop_challenge: 'Prop challenge',
+    account: 'Konto',
+    capital_flow: 'Wpłata lub wypłata',
+    risk_rules: 'Zasady ryzyka'
   }[kind] || kind);
 
   AV.mcpCodes = {};

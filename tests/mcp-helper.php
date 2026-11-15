@@ -45,6 +45,37 @@ try {
         echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         exit(0);
     }
+    if ($command === 'patch') {
+        $userId = (int) ($argv[2] ?? 0);
+        $jsonFile = (string) ($argv[3] ?? '');
+        $patch = json_decode((string) file_get_contents($jsonFile), true);
+        if (!is_array($patch)) {
+            fwrite(STDERR, "Patch nie jest obiektem JSON\n");
+            exit(2);
+        }
+        $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userId]);
+        $state = $row !== null ? json_decode((string) $row['state'], true) : [];
+        $state = is_array($state) ? $state : [];
+        foreach ($patch as $key => $value) {
+            $state[$key] = $value;
+        }
+        $json = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $db->execute(
+            'UPDATE user_states SET state = ?, revision = revision + 1, bytes = ? WHERE user_id = ?',
+            [$json, strlen($json), $userId]
+        );
+        echo json_encode(['ok' => true, 'revision' => 1]);
+        exit(0);
+    }
+    if ($command === 'expire') {
+        $proposalId = (string) ($argv[2] ?? '');
+        $db->execute(
+            "UPDATE mcp_proposals SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 MINUTE WHERE id = ? AND status = 'pending'",
+            [$proposalId]
+        );
+        echo json_encode(['ok' => true]);
+        exit(0);
+    }
     fwrite(STDERR, "Nieznana komenda\n");
     exit(2);
 } catch (ProposalException $err) {

@@ -242,11 +242,13 @@ Panel MCP jest dostępny w widoku `#/mentor-ai`. Endpointy panelu:
   TTL 10 min, rate limit 10/min, w bazie tylko SHA-256.
 
 MCP (`mcp.alphavault.pl`) ma własny OAuth 2.1 i nie zapisuje stanu bezpośrednio. Narzędzia
-`propose_*` tworzą wiersz `mcp_proposals`; zapis wykonuje transakcję MySQL z `SELECT ... FOR UPDATE`,
-sprawdza `base_revision`, inkrementuje `revision` i zapisuje audyt. Zatwierdzenie przez agenta
-(`approve_proposal`) wymaga kodu z panelu i zgodnego `diffHash`; sam tekst „potwierdzam” nie jest
-dowodem zgody. Odrzucenie przez MCP nie zmienia danych. Brak danych = puste tablice. Dane giełdowe
-są niezmienne. Szczegóły: [docs/MCP.md](docs/MCP.md).
+`propose_*`, `create_*_proposal` i `update_*_proposal` tworzą wiersz `mcp_proposals`; zapis wykonuje
+transakcję MySQL z `SELECT ... FOR UPDATE`, sprawdza `base_revision`, inkrementuje `revision`
+i zapisuje audyt. Zatwierdzenie przez agenta (`approve_proposal`) wymaga kodu z panelu i zgodnego
+`diffHash`; sam tekst „potwierdzam” nie jest dowodem zgody. Odrzucenie przez MCP nie zmienia danych.
+Brak danych = puste tablice, brak metryki = `null`. Dane giełdowe są niezmienne. Zakres
+`alphavault.health` jest osobny i wymaga zgody na ekranie OAuth oraz połączonego urządzenia.
+Szczegóły: [docs/MCP.md](docs/MCP.md).
 
 ## 7. Discord Scheduled Events — pełny przepływ
 
@@ -807,10 +809,10 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
 
 MCP 2.1: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje
 `db/schema.sql` + `db/migrations/20261114_mcp2.sql` + `db/migrations/20261115_mcp_approval.sql`,
-klucze OAuth i health check. Skrypt wymusza `MCP_WRITES_ENABLED=false`; 11 narzędzi zapisu pozostaje
+klucze OAuth i health check. Skrypt wymusza `MCP_WRITES_ENABLED=false`; 20 narzędzi zapisu pozostaje
 ukryte. Po włączeniu `MCP_WRITES_ENABLED=true` klient musi ponownie przejść OAuth, żeby uzyskać scope
-`alphavault.write`; stary token zachowuje tylko odczyt. Deploy MCP nie dotyka `alphavault.pl` ani
-WordPressa.
+`alphavault.write`; stary token zachowuje tylko odczyt. Zakres `alphavault.health` wymaga osobnego
+checkboxa na ekranie zgody. Deploy MCP nie dotyka `alphavault.pl` ani WordPressa.
 
 ## 15. Bezpieczeństwo
 

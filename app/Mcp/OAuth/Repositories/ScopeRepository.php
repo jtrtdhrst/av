@@ -48,7 +48,7 @@ final class ScopeRepository implements ScopeRepositoryInterface
 
     public function allowedScopes(): array
     {
-        $scopes = ['alphavault.read'];
+        $scopes = ['alphavault.read', 'alphavault.health'];
         if ((bool) $this->config->mcp['writesEnabled']) {
             $scopes[] = 'alphavault.write';
         }

@@ -35,15 +35,24 @@ const LOCAL_ENV = {
 };
 
 const READ_TOOLS = [
-  'get_accounts', 'get_capital_summary', 'get_checkin_history', 'get_connection_status',
-  'get_dashboard', 'get_day_plan', 'get_events', 'get_macro_calendar', 'get_profile',
-  'get_prop_challenges', 'get_proposal_status', 'get_stats', 'get_trade', 'get_trade_context',
+  'get_account_transactions', 'get_accounts', 'get_badges_progress', 'get_calculator_result',
+  'get_capital_summary', 'get_checkin_history', 'get_checkin_trading_correlation', 'get_connection_status',
+  'get_dashboard', 'get_day_plan', 'get_day_plan_compliance', 'get_day_plan_context', 'get_day_plan_history',
+  'get_events', 'get_integration_sync_history', 'get_macro_calendar', 'get_macro_event_details',
+  'get_performance_by_day_plan_compliance', 'get_performance_by_emotion', 'get_performance_by_error',
+  'get_performance_by_grade', 'get_performance_by_market', 'get_performance_by_session', 'get_performance_by_setup',
+  'get_profile', 'get_prop_challenge_context', 'get_prop_challenge_risk', 'get_prop_challenges',
+  'get_proposal_status', 'get_protection_status', 'get_readiness_context', 'get_risk_rules', 'get_risk_violations',
+  'get_setup_details', 'get_setup_performance', 'get_stats', 'get_tax_summary', 'get_trade', 'get_trade_context',
+  'get_trade_journal_context', 'get_trade_patterns', 'get_trade_review', 'get_trade_screenshots',
   'list_pending_proposals', 'list_setups', 'list_trades',
 ];
 const WRITE_TOOLS = [
-  'approve_proposal', 'propose_close_trade', 'propose_create_trade', 'propose_save_account',
-  'propose_save_capital_flow', 'propose_save_checkin', 'propose_save_day_plan',
-  'propose_save_prop_challenge', 'propose_save_setup', 'propose_trade_review', 'reject_proposal',
+  'approve_proposal', 'create_checkin_proposal', 'create_day_plan_proposal', 'create_prop_challenge_proposal',
+  'create_risk_rules_proposal', 'create_setup_proposal', 'create_trade_proposal', 'propose_close_trade',
+  'propose_create_trade', 'propose_save_account', 'propose_save_capital_flow', 'propose_save_checkin',
+  'propose_save_day_plan', 'propose_save_prop_challenge', 'propose_save_setup', 'propose_trade_review',
+  'reject_proposal', 'update_prop_challenge_proposal', 'update_setup_proposal', 'update_trade_proposal',
 ];
 
 function runPhp(script, args = []) {
@@ -194,13 +203,14 @@ async function main() {
   assert.equal(prm.res.status, 200);
   assert.equal(prm.json.resource, BASE + '/mcp');
   assert.ok(prm.json.scopes_supported.includes('alphavault.read'));
+  assert.ok(prm.json.scopes_supported.includes('alphavault.health'));
   assert.equal(prm.json.scopes_supported.includes('alphavault.write'), false);
   const asm = await req('/.well-known/oauth-authorization-server');
   assert.equal(asm.res.status, 200);
   assert.equal(asm.json.code_challenge_methods_supported[0], 'S256');
   const health = await req('/health');
   assert.equal(health.res.status, 200);
-  assert.equal(health.json.mcp.tools, 17);
+  assert.equal(health.json.mcp.tools, 46);
   assert.equal(health.json.mcp.writesEnabled, false);
 
   const authA = await authorize(client, a.session);
@@ -358,7 +368,7 @@ async function mainWrites() {
   const a = sessions['mcp-e2e-a'];
   const client = await register('MCP E2E Writer');
   const health = await req('/health');
-  assert.equal(health.json.mcp.tools, 28);
+  assert.equal(health.json.mcp.tools, 66);
   assert.equal(health.json.mcp.writesEnabled, true);
 
   const auth = await authorize(client, a.session, 'alphavault.read alphavault.write', true);
@@ -377,7 +387,7 @@ async function mainWrites() {
 
   const list = await rpc(tok.access_token, 'tools/list', {});
   const tools = list.json.result.tools;
-  assert.equal(tools.length, 28);
+  assert.equal(tools.length, 66);
   for (const name of WRITE_TOOLS) {
     const tool = tools.find((t) => t.name === name);
     assert.ok(tool, name);

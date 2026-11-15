@@ -345,7 +345,7 @@ Plik `integrations/mt5/AlphaVault.mq5` kompiluje się w MetaEditorze. Wymaga:
 
 - MCP 2.0 używa Composer (`league/oauth2-server`, `mcp/sdk`); deploy uruchamia `composer install`, jeśli `vendor/autoload.php` nie istnieje na runnerze.
 - Migracje MCP są addytywne: `db/schema.sql` tworzy tabele `mcp_*`, `db/migrations/20261114_mcp2.sql` dodaje `payload_hash` i rozszerza `mcp_proposals.kind`, a `db/migrations/20261115_mcp_approval.sql` dodaje `diff_hash`, kolumny kodu jednorazowego i idempotencji decyzji.
-- Domyślnie działa 17 narzędzi odczytu; 11 narzędzi zapisu (`propose_*`, `approve_proposal`, `reject_proposal`) pojawia się tylko przy `MCP_WRITES_ENABLED=true` i scope `alphavault.write`. Skrypt deployu wymusza `MCP_WRITES_ENABLED=false` w fazie 1.
+- Domyślnie działa 46 narzędzi odczytu; 20 narzędzi zapisu (`propose_*`, `create_*_proposal`, `update_*_proposal`, `approve_proposal`, `reject_proposal`) pojawia się tylko przy `MCP_WRITES_ENABLED=true` i scope `alphavault.write`. Skrypt deployu wymusza `MCP_WRITES_ENABLED=false` w fazie 1.
 - Zatwierdzanie w rozmowie wymaga kodu z panelu (`POST /api/mcp/proposals/{id}/approval-code`); po włączeniu zapisu klient musi ponownie przejść OAuth, żeby uzyskać nowy scope.
 - Pilot: `MCP_PILOT_DISCORD_IDS` (CSV) ogranicza zapis do wybranych kont Discord; puste = wszyscy z scope `alphavault.write`. Allowlista jest egzekwowana przy każdym wywołaniu zapisu, nie tylko na ekranie zgody.
 - Workflow sprawdza sekrety, uruchamia `php -l` i `scripts/deploy-mcp.sh`: backup, rsync, migracja, klucze OAuth, health check.

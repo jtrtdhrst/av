@@ -78,12 +78,25 @@ final class MacroService
         }, $rows);
 
         $total = (int) ($totalRow['n'] ?? 0);
+        $stored = null;
+        try {
+            $storedRow = $this->db->queryOne('SELECT COUNT(*) AS n FROM macro_events WHERE is_deleted = 0');
+            $stored = (int) ($storedRow['n'] ?? 0);
+        } catch (\Throwable) {
+            $stored = null;
+        }
 
         return [
             'items' => $items,
             'total' => $total,
+            'matchedCount' => $total,
+            'returnedCount' => count($items),
+            'storedCount' => $stored,
+            'limit' => $limit,
+            'offset' => $offset,
             'nextOffset' => ($offset + count($items)) < $total ? $offset + count($items) : null,
             'sync' => $this->sync(),
+            'countsNote' => 'total/matchedCount = rekordy spełniające filtr, returnedCount = rekordy w tej odpowiedzi, storedCount = wszystkie rekordy w bazie, sync.eventsCount = liczba z ostatniej synchronizacji.',
         ];
     }
 
