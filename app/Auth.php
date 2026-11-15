@@ -267,9 +267,15 @@ final class Auth
             $allowed[] = $alt;
         }
         if (!in_array($origin, array_values(array_unique($allowed)), true)) {
-            // Diagnostyka: odrzucony Origin trafia do logu serwera bez danych wrażliwych.
+            // Diagnostyka: odrzucony Origin trafia do logu i do odpowiedzi (to nagłówek
+            // wyłącznie od pytającego, więc nie ujawnia niczego osobom trzecim).
             error_log('[auth] bad_origin ' . substr($origin, 0, 200) . ' ' . Http::path());
-            Http::json(['error' => 'bad_origin', 'message' => 'Nieprawidłowe źródło żądania.'], 403);
+            Http::json([
+                'error' => 'bad_origin',
+                'message' => 'Nieprawidłowe źródło żądania.',
+                'origin' => substr($origin, 0, 200),
+                'path' => Http::path(),
+            ], 403);
         }
     }
 

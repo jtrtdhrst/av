@@ -260,7 +260,7 @@ To emulacja Chromium. Instalacja na fizycznym iPhone (Safari → Do ekranu pocz�
 | --- | --- |
 | `php tests/mcp.test.php` | propozycje, kod jednorazowy, idempotencja decyzji, konflikt rewizji, TTL, ochrona danych giełdowych, `target_missing`, izolacja, audyt |
 | `node tests/mcp.e2e.mjs` | OAuth 2.1 + PKCE, DCR, consent, token/refresh/revoke, 17 narzędzi odczytu, 11 narzędzi zapisu, `approve_proposal` kodem, `reject_proposal`, prompts, `MCP_WRITES_ENABLED=false/true` |
-| `node tests/mcp-login.e2e.mjs` | logowanie Discord na mocku: rola OK, brak roli, brak członkostwa, duplikat konta, `POST /oauth/authorize` z obcym `Origin` (303, bez `bad_origin`) i odrzucenie decyzji zgody z obcego `Origin` |
+| `node tests/mcp-login.e2e.mjs` | logowanie Discord na mocku: rola OK, brak roli, brak członkostwa, duplikat konta, `POST /oauth/authorize` z obcym `Origin` (303, bez `bad_origin`), decyzja zgody z obcego `Origin` i sfałszowany CSRF bez wydania kodu |
 | `node tests/mcp-ui.e2e.mjs` | panel: dwie propozycje, diff, kod do rozmowy, approve, reject, reload, trwałość i brak błędów JS |
 | `node tests/prop-parity.mjs` | parytet `PropChallengeService.php` z `public/js/prop.js` na wspólnych fixtures |
 | `php tests/mcp-user-service.php` | idempotentne dopasowanie konta wyłącznie po Discord ID |

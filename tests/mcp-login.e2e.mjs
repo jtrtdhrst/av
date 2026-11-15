@@ -226,7 +226,7 @@ async function finishConsent(client, verifier, challenge, sessionCookie) {
   const formBody = new URLSearchParams({ consent_id: 'wrong', csrf: 'wrong', consent_token: consentToken[1], decision: 'allow' }).toString();
   const post = await req(action, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: sessionCookie, Origin: BASE },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: sessionCookie, Origin: 'https://chatgpt.com' },
     body: formBody,
   });
   assert.equal(post.res.status, 302, post.text);
@@ -396,14 +396,16 @@ try {
   assert.equal(normalizedConsent.res.status, 200, normalizedConsent.text);
   assert.match(normalizedConsent.text, /name="consent_token"/);
 
-  // 7. Decyzja zgody z obcego Origin nadal jest odrzucana (CSRF zostaje na naszej stronie).
+  // 7. Sfałszowana decyzja zgody (obcy Origin, zły CSRF i token) nie wydaje kodu:
+  //    serwer wraca na ekran zgody, więc CSRF zostaje po stronie naszej strony.
   const forged = await req(normalized, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://evil.example', Cookie: firstSession },
     body: 'consent_id=forged&csrf=forged&consent_token=forged&decision=allow',
   });
-  assert.equal(forged.res.status, 403, forged.text);
-  assert.match(forged.text, /bad_origin/);
+  assert.equal(forged.res.status, 200, forged.text);
+  assert.doesNotMatch((forged.res.headers.get('location') || ''), /code=/);
+  assert.match(forged.text, /name="consent_token"/);
 
   console.log('MCP Login E2E PASS');
 } finally {

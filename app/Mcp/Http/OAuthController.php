@@ -182,7 +182,9 @@ final class OAuthController
             $this->normalizeAuthorizationPost();
         }
 
-        $this->auth->requireSameOrigin();
+        // Decyzja zgody nie wymaga kontroli Origin: ciasteczko sesji jest SameSite=Lax
+        // (cross-site POST go nie wyśle), a stan zmienia wyłącznie poprawny token CSRF
+        // z wiersza mcp_consents albo podpisany consent_token związany z sesją i userem.
         $session = $this->auth->readSession();
         if ($session === null) {
             $this->consentLog('authorize_post_no_session', ['query' => $_GET !== []]);
@@ -633,7 +635,6 @@ final class OAuthController
     {
         $params = $this->authorizationParams();
         if ($params === []) {
-            $this->auth->requireSameOrigin();
             Http::json(['error' => 'invalid_request', 'message' => 'Brak parametrów żądania autoryzacji.'], 400);
         }
         Http::redirect('/oauth/authorize?' . http_build_query($params), 303);
