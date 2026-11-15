@@ -33,6 +33,93 @@
 
   AV.SYM = { USD: '$', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', CHF: '₣', NZD: 'NZ$', CNY: '¥', PLN: 'zł' };
 
+  /* Słownik krypto — źródło dla panelu „Materiały”. */
+  AV.GLOSSARY = [
+    ['Altcoin', 'Każda kryptowaluta inna niż Bitcoin. Zwykle bardziej zmienna i mniej płynna.'],
+    ['AMM', 'Automatyczny animator rynku — algorytm wyceny w puli płynności zamiast arkusza zleceń.'],
+    ['ATH', 'All-Time High, historyczne maksimum ceny danego aktywa.'],
+    ['Bear market', 'Rynek niedźwiedzia — dominujący trend spadkowy i niska skłonność do ryzyka.'],
+    ['Blockchain', 'Rejestr transakcji połączonych kryptograficznie w łańcuch bloków.'],
+    ['Bridge', 'Most między sieciami — przenosi aktywa z jednego blockchaina do drugiego.'],
+    ['Bull market', 'Rynek byka — dominujący trend wzrostowy.'],
+    ['CEX', 'Giełda scentralizowana (np. Binance, OKX), która przechowuje środki użytkownika.'],
+    ['Cold wallet', 'Portfel sprzętowy lub offline; klucz prywatny nigdy nie trafia do internetu.'],
+    ['Consensus', 'Mechanizm, dzięki któremu sieć uzgadnia stan rejestru (np. PoW, PoS).'],
+    ['DEX', 'Giełda zdecentralizowana — handel odbywa się bezpośrednio z portfela.'],
+    ['DeFi', 'Zdecentralizowane finanse — pożyczki, handel i oszczędzanie bez pośrednika.'],
+    ['DEX aggregator', 'Narzędzie porównujące ceny w wielu DEX-ach i dzielące zlecenie na kilka tras.'],
+    ['DCA', 'Dollar Cost Averaging — regularne zakupy o stałej wartości, niezależnie od ceny.'],
+    ['Derivative', 'Instrument pochodny, którego wartość zależy od aktywa bazowego (futures, opcje).'],
+    ['EIP-1559', 'Zmiana w Ethereum wprowadzająca spalanie części opłat transakcyjnych.'],
+    ['ERC-20', 'Standard tokenów na Ethereum, który określa podstawowe funkcje kontraktu.'],
+    ['EVM', 'Ethereum Virtual Machine — środowisko wykonania smart kontraktów.'],
+    ['Exchange', 'Miejsce, w którym można kupić, sprzedać lub wymienić aktywa.'],
+    ['Futures', 'Kontrakt terminowy z dźwignią; rozliczany w przyszłości, często bez dostawy aktywa.'],
+    ['Funding', 'Opłata za utrzymanie pozycji na futures perpetual, płacona między traderami.'],
+    ['Gas', 'Opłata za wykonanie transakcji lub kontraktu w sieci Ethereum i innych EVM.'],
+    ['Halving', 'Proces zmniejszający o połowę nagrodę za wydobycie bloku (np. w Bitcoinie).'],
+    ['Hash rate', 'Łączna moc obliczeniowa sieci wydobywczej.'],
+    ['HODL', 'Strategia długoterminowego trzymania aktywa bez względu na krótkoterminowe wahania.'],
+    ['Hot wallet', 'Portfel połączony z internetem; wygodny, ale bardziej narażony na atak.'],
+    ['Impermanent loss', 'Strata wynikająca ze zmiany proporcji aktywów w puli płynności.'],
+    ['Layer 2', 'Druga warstwa nad blockchainem, która przyspiesza transakcje i obniża opłaty.'],
+    ['Liquidation', 'Przymusowe zamknięcie pozycji z dźwignią, gdy zabraknie marginesu.'],
+    ['Liquidity', 'Płynność — jak łatwo kupić lub sprzedać aktywo bez wpływu na cenę.'],
+    ['Market cap', 'Kapitalizacja: cena razy liczba tokenów w obrocie.'],
+    ['Mempool', 'Kolejka transakcji oczekujących na włączenie do bloku.'],
+    ['Merkle tree', 'Struktura drzewiasta pozwalająca zweryfikować zawartość bloku bez czytania całości.'],
+    ['NFT', 'Niepowtarzalny token reprezentujący własność konkretnego cyfrowego dobra.'],
+    ['Nonce', 'Licznik transakcji konta, zapobiegający wielokrotnemu użyciu tego samego podpisu.'],
+    ['Order book', 'Arkusz zleceń — lista aktywnych zleceń kupna i sprzedaży z cenami.'],
+    ['P2P', 'Handel bezpośrednio między ludźmi, bez pojedynczego pośrednika.'],
+    ['Perpetual', 'Kontrakt futures bez daty wygaśnięcia, utrzymywany przez funding.'],
+    ['PoS', 'Proof of Stake — konsensus oparty na stawce tokenów zamiast mocy obliczeniowej.'],
+    ['PoW', 'Proof of Work — konsensus oparty na pracy obliczeniowej.'],
+    ['Private key', 'Klucz prywatny — sekret, który daje pełną kontrolę nad środkami.'],
+    ['Public key', 'Klucz publiczny — adres, na który można wysłać środki.'],
+    ['Rekt', 'Sytuacja, w której trader poniósł dużą stratę lub został zlikwidowany.'],
+    ['Rug pull', 'Porzucenie projektu przez twórców po zabraniu płynności z puli.'],
+    ['Seed phrase', 'Zestaw 12 lub 24 słów odtwarzający portfel; nigdy nie udostępniaj go nikomu.'],
+    ['Smart contract', 'Program działający w blockchainie, który wykonuje warunki umowy automatycznie.'],
+    ['Stablecoin', 'Token o cenie powiązanej z walutą fiducjarną, np. USDT czy USDC.'],
+    ['Staking', 'Zablokowanie tokenów w sieci w zamian za nagrody.'],
+    ['Slippage', 'Poślizg — różnica między ceną oczekiwaną a zrealizowaną.'],
+    ['TVL', 'Total Value Locked — suma aktywów zdeponowanych w protokole DeFi.'],
+    ['Volatility', 'Zmienność — skala wahań ceny w danym okresie.'],
+    ['Wallet', 'Portfel — narzędzie do przechowywania kluczy i podpisywania transakcji.'],
+    ['Gas limit', 'Maksymalna ilość gazu, którą możesz przeznaczyć na transakcję.'],
+    ['Block explorer', 'Serwis do przeglądania bloków, transakcji i adresów w sieci.'],
+    ['Testnet', 'Sieć testowa; tokeny nie mają tam realnej wartości.']
+  ];
+
+  AV.GOLDEN_RULES = [
+    ['Ryzyko na trade', 'Maksymalnie 1–2% kapitału. Wielkość pozycji wynika ze stop lossa, nie z emocji.'],
+    ['Stop loss zawsze', 'SL ustalasz przed wejściem. Nie ma transakcji bez SL, nawet na demo.'],
+    ['Dźwignia to nie zysk', 'Dźwignia zwiększa wahania kapitału w obie strony. Nie zwiększa skuteczności.'],
+    ['Limit dzienny', 'Po dwóch stratach kończysz dzień. Zamykasz platformę, nie „odbijasz”.'],
+    ['Plan przed sesją', 'Rynek, bias, poziomy i scenariusze zapisane przed pierwszym kliknięciem.'],
+    ['Nie handluj przy danych', '15 minut przed i po publikacji makro ★★★ nie otwierasz nowych pozycji.'],
+    ['Klucze API tylko do odczytu', 'Nigdy nie dawaj botowi ani aplikacji prawa wypłat.'],
+    ['Seed phrase to sekret', 'Nikt z supportu o niego nie poprosi. Nie wpisujesz go w żadnej aplikacji.']
+  ];
+
+  AV.ALPHA_TEST = [
+    { q: 'Ryzykujesz 1% kapitału. Saldo 5 000 USDT. Ile możesz stracić na jednej transakcji?', a: ['50 USDT', '500 USDT', '5 USDT'], ok: 0, why: '1% z 5 000 USDT to 50 USDT.' },
+    { q: 'Stop loss jest 2% od wejścia, a ryzykujesz 100 USDT. Jaka wartość pozycji?', a: ['2 000 USDT', '5 000 USDT', '10 000 USDT'], ok: 1, why: '100 ÷ 0,02 = 5 000 USDT.' },
+    { q: 'Przy R:R 1:2 potrzebujesz skuteczności co najmniej:', a: ['25%', '50%', '33,4%'], ok: 2, why: 'Próg opłacalności to 1 ÷ (1 + 2) ≈ 33,4%.' },
+    { q: 'Cena spada do poziomu z planu, ale setup się nie pojawił. Co robisz?', a: ['Wchodzę, bo poziom', 'Czekam na potwierdzenie', 'Zwiększam pozycję'], ok: 1, why: 'Poziom bez potwierdzenia nie jest setupem.' },
+    { q: 'Po dwóch stratach masz ochotę „odbić”. Zasada mówi:', a: ['Koniec dnia', 'Podwoić pozycję', 'Zmienić interwał'], ok: 0, why: 'Limit dzienny chroni kapitał i głowę.' },
+    { q: 'Który klucz API jest bezpieczny do podłączenia panelu?', a: ['Wypłaty i handel', 'Tylko odczyt', 'Administrator'], ok: 1, why: 'Panel potrzebuje wyłącznie odczytu.' }
+  ];
+
+  AV.RECORDINGS = [
+    { id: 'rec1', title: 'Plan dnia od A do Z', category: 'Poranna odprawa', meta: 'Albert · 42 min', url: '' },
+    { id: 'rec2', title: 'Opening range — sesja NY', category: 'Sesja NY', meta: 'Marcin · 58 min', url: '' },
+    { id: 'rec3', title: 'Obsługa giełdy krok po kroku', category: 'Warsztat', meta: 'Albert i Marcin · 58 min', url: '' },
+    { id: 'rec4', title: 'Najczęstsze błędy na starcie', category: 'Q&A', meta: 'Albert · Q&A z psycholożką · 1:24 h', url: '' },
+    { id: 'rec5', title: 'Psychologia straty', category: 'Psychologia', meta: 'Marysia · 47 min', url: '' }
+  ];
+
   AV.TIPS = [
     ['MM', 'Ryzykujesz maksymalnie 1% kapitału. Przy {kapital} USDT to {ryzyko1} USDT na transakcję. Ani dolara więcej.'],
     ['MM', 'Najpierw stop loss, potem wielkość pozycji. Nigdy odwrotnie.'],
@@ -373,7 +460,7 @@
       settings: {
         remember: true, safetyEnabled: true, requireReason: true, pushLimit: true,
         macroBefore: true, macroChecklist: true, macroTwo: false,
-        remindDay: true, remindHour: true,
+        remindDay: true, remindHour: true, liveReminderMinutes: 15,
         maxLosses: 2, maxDailyLoss: 3, block: 'midnight',
         maxRisk: 1, rules: ['Max 1% ryzyka na transakcję', 'Zawsze stop loss', 'Po 2 stratach koniec dnia'],
         checklist: ['Trend wyższego TF', 'Poziom z planu', 'Potwierdzenie', 'SL przed wejściem', 'R:R ≥ 2', 'Brak makro 15 min', 'Spokojna głowa'],
@@ -400,11 +487,11 @@
         { id: 'acc3', name: 'MT5 · demo', exchange: 'MetaTrader 5', type: 'Forex · ćwiczenia', currency: 'USD', start: 10000, date: '01.10.2026', lev: '30×', goal: 'trening', balance: 9640, include: false, primary: false }
       ],
       flows: [
-        { id: 'f1', date: '2026-03-12', account: 'WEEX', type: 'Wpłata', op: 'zakup USDT za PLN (P2P)', amount: 508.4, currency: 'PLN', fiat: 2000, fx: 1, tax: 'cost' },
-        { id: 'f2', date: '2026-06-02', account: 'WEEX', type: 'Wpłata', op: 'zakup USDT za PLN (P2P)', amount: 791.6, currency: 'PLN', fiat: 2980, fx: 1, tax: 'cost' },
+        { id: 'f1', date: '2026-03-12', account: 'WEEX', type: 'Wpłata', op: 'zakup USDT za PLN (P2P)', amount: 508.4, currency: 'PLN', fiat: 2000, fx: 1, tax: 'cost' },        { id: 'f2', date: '2026-06-02', account: 'WEEX', type: 'Wpłata', op: 'zakup USDT za PLN (P2P)', amount: 791.6, currency: 'PLN', fiat: 2980, fx: 1, tax: 'cost' },
         { id: 'f3', date: '2026-08-18', account: 'OKX', type: 'Wypłata', op: 'sprzedaż USDT za EUR', amount: 560, currency: 'EUR', fiat: 520, fx: 4.265, tax: 'income' },
         { id: 'f4', date: '2026-10-30', account: 'WEEX', type: 'Wypłata', op: 'sprzedaż USDT za PLN (P2P)', amount: 1402.1, currency: 'PLN', fiat: 5202.94, fx: 1, tax: 'income' }
       ],
+      recordings: AV.RECORDINGS.map((x) => Object.assign({}, x)),
       tax: { version: 2, carryLoss: 380, year: 2026 },
       checkins,
       chat: [],

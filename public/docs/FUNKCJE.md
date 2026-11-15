@@ -44,6 +44,7 @@ Legenda:
 | Makro-widget | ✅ | najbliższe wydarzenia ★★★, odświeżanie |
 | Alarm mentora | ✅ | na podstawie ostatnich transakcji |
 | Krzywa kapitału 30 dni | ✅ | liczona z transakcji |
+| Saldo portfela | ✅ | suma sald kont włączonych do statystyk, % od kapitału startowego, informacja o koncie głównym; kliknięcie prowadzi do „Konto i zasady” |
 | Szybkie przejście do statystyk | ✅ | |
 
 ---
@@ -52,7 +53,7 @@ Legenda:
 
 | Funkcja | Stan | Opis |
 |---|---|---|
-| Rynek, bias, uzasadnienie | ✅ | klikalne chipy rynku i biasu; zapis do `plans[data]` i natychmiastowy PUT `/api/state` |
+| Rynek, bias, uzasadnienie | ✅ | lista rynku (wszystkie instrumenty + „Inny rynek…” z własną nazwą) i chipy szybkiego wyboru; bias jako przyciski Long/Short/Neutralnie/Nie gram; zapis do `plans[data]` i PUT `/api/state` |
 | Kluczowe poziomy | ✅ | dodawanie/usuwanie, walidacja ceny; pusty wiersz zostaje w szkicu |
 | Scenariusze główny/awaryjny | ✅ | |
 | Limity (ryzyko, max transakcji, godzina) | ✅ | wpływają na pulpit |
@@ -113,11 +114,12 @@ Import XLS/XLSX nie jest czytany — zapisz jako CSV (komunikat w UI).
 | Cena instrumentu live | ✅ | `GET /api/quotes?symbols=…`, Yahoo Finance, odświeżanie co 60 s; brak notowań = `—`, bez wartości demo |
 | Long/Short | ✅ | walidacja SL/TP |
 | Szybkie kwoty | ✅ | saldo, dźwignia, ryzyko |
-| Auto SL/TP 1:3 | ✅ | tylko z aktualnej ceny rynkowej |
-| Reset | ✅ | |
+| Portfel i MM z planu | ✅ | wybór konta ustawia saldo, dźwignię i `settings.maxRisk`; wartości można zmienić ręcznie, wybór zapisany w `state.calc` |
+| Auto SL/TP z wybranym R:R | ✅ | 1:1, 1:2, 1:3, 1:5 lub własna wartość; tylko z aktualnej ceny rynkowej; kierunek Long/Short |
+| Reset | ✅ | czyści wybór portfela, R:R i wartości |
 | Kroki obliczeń | ✅ | |
 
-Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnicze.
+Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnicze. Ostatnie wartości (portfel, instrument, R:R) wracają po przeładowaniu.
 
 ---
 
@@ -130,7 +132,7 @@ Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnic
 | Max obsunięcie | ✅ | z krzywej kapitału |
 | % ze SL, zgodność z planem, opłaty | ✅ | przy 0 transakcji „—”; opłaty 0,00 bez ujemnego zera |
 | Krzywa kapitału | ✅ | SVG z realnych danych |
-| Kalendarz PnL | ✅ | 35 dni |
+| Kalendarz PnL | ✅ | własny zakres 7 dni / 30 dni / miesiąc, nawigacja poprzedni/następny/bieżący; liczby dni w komórkach, kolor = wynik dnia |
 | Wynik wg oceny | ✅ | bez pochwał przy braku danych |
 | Checklista a wynik | ✅ | etykiety z długości checklisty użytkownika, nie stałe 7/7 |
 | Koszt błędów | ✅ | pusty stan bez „Tak trzymaj” |
@@ -184,7 +186,7 @@ Limity liczone są z **zamkniętych** transakcji. Silnik nie zna ruchów śródd
 
 | Funkcja | Stan | Opis |
 |---|---|---|
-| Harmonogram live'ów | ✅ | synchronizacja Discord Scheduled Events → `/api/events`; grupowanie po `Europe/Warsaw`, `DZIŚ`, wiele wydarzeń dnia |
+| Harmonogram live'ów | ✅ | synchronizacja Discord Scheduled Events → `/api/events`; grupowanie po `Europe/Warsaw`, `DZIŚ`, wiele wydarzeń dnia; widok tygodnia i miesiąca z nawigacją poprzedni/następny/bieżący |
 | Najbliższy live (bez countdownu) | ✅ | wyłącznie z realnego wydarzenia `live`; karta ukryta, gdy brak wydarzenia |
 | Liczba zainteresowanych | ✅ | z `user_count`, jeśli Discord je zwróci; brak = pole puste |
 | Konsultacje 1:1 | ✅ | karta „Najbliższa” z wydarzenia `consultation`; prowadzący i czas trwania tylko z danych wydarzenia |
@@ -192,8 +194,11 @@ Limity liczone są z **zamkniętych** transakcji. Silnik nie zna ruchów śródd
 | Puste pola | ✅ | brak tekstów zastępczych, brak domyślnego 20:00 |
 | Błąd synchronizacji | ✅ | ostatni dobry zestaw pozostaje; UI pokazuje stan „błąd synchronizacji” |
 | Rezerwacja konsultacji | ✅ | niezależna od synchronizacji, zapis w stanie |
-| Dołącz / przypomnienie | ✅ | link do `https://discord.com/events/{guild}/{event}`; przypomnienie przeglądarki bez zmian |
-| Nagrania | ✅ | karta i modal z linkiem do Discorda; bez fałszywego playera |
+| Dołącz / przypomnienie | ✅ | „Dołącz” widoczne od 15 minut przed startem; przypomnienie z wyborem 5/15/30/60 min, raz na wydarzenie |
+| Nagrania | ✅ | biblioteka z `state.recordings`, kategorie (Poranna odprawa, Sesja NY, Warsztat, Q&A, Psychologia), filtr; brak linku = pole do wklejenia, link YouTube odtwarzany w panelu |
+| Słownik krypto | ✅ | 55 pojęć w modalu z wyszukiwaniem |
+| Alpha Testy | ✅ | 6 pytań, wynik zapisany w `meta.alphaTestScore` |
+| Złote zasady bezpieczeństwa | ✅ | 8 zasad w modalu |
 | Materiały / postęp kursu | ✅ | postęp w stanie |
 | Plan solo vs pełny | ✅ | podgląd, nadpisywany przez subskrypcję |
 
@@ -225,6 +230,7 @@ To zestawienie pomocnicze, nie porada podatkowa.
 | Funkcja | Stan | Opis |
 |---|---|---|
 | Ten/następny tydzień | ✅ | `macro_events` + `/api/macro-events`; FF (bieżący) i TradingView (następny) |
+| Nawigacja tygodni | ✅ | poprzedni, bieżący, następny, +2 i +3 tydzień; zakres dat w nagłówku; dane zależne od okna synchronizacji |
 | Filtr ★★ | ✅ | toggle `macroTwo` |
 | Statusy (zakończone/dziś/za X min) | ✅ | odświeżanie |
 | Następne ważne | ✅ | |
@@ -278,7 +284,7 @@ Poświadczenia są szyfrowane po stronie serwera (`INTEGRATIONS_KEY`) i nigdy ni
 | Personalizacja (rynki, akcent, strefa, godziny) | ✅ | |
 | Wyłącznik bezpieczeństwa | ✅ | limit strat, limit dzienny, czas blokady, wymóg powodu |
 | 3 zasady + punkty checklisty | ✅ | własny punkt checklisty |
-| Konta i kapitał | ✅ | dodawanie/usuwanie, włączanie do statystyk |
+| Konta i kapitał | ✅ | dodawanie/usuwanie, włączanie do statystyk, edycja kapitału startowego i bieżącego salda bezpośrednio w tabeli |
 | Wpłaty/wypłaty | ✅ | saldo + PIT |
 | Odznaki | ✅ | 8 progów liczbowych z realnych danych; licznik „X z 8” i poziom wyliczane z liczby zdobytych; data zdobycia lub pozostała wartość w podpowiedzi |
 | Bezpieczeństwo i dane | ✅ | prawdziwa sesja serwerowa, wylogowanie, eksport, usunięcie konta; bez deklaracji 2FA i listy sesji |
@@ -323,7 +329,7 @@ To celowy fallback, nie drugi równoległy backend.
 | Service worker | ✅ | `/sw.js`: cache powłoki, offline fallback, `notificationclick` → `/?qa=<id>` |
 | Powiadomienie lokalne po zamknięciu w panelu | ✅ | po zamknięciu pozycji w panelu i zapisie stanu; treść: para, kierunek, wynik; klik otwiera szybkie dodanie |
 | Szybkie dodanie | ✅ | emocja + ocena + zdjęcie wykresu (`capture="environment"`), zapis do stanu i MySQL; E2E 0,6–0,7 s |
-| Mobile 390 px | ✅ | menu „☰” zamiast poziomej listy; inline gridy kolapsują do 1 kolumny; konto, nowa transakcja i Akademia bez przepełnienia |
+| Mobile 390 px | ✅ | menu „☰” zamiast poziomej listy; wszystkie widoki bez treści poza ekranem i bez poziomego przewijania (E2E dla 390 i 1024 px); gridy zwężają się do `minmax(0,1fr)` |
 | Push serwerowy | ⛔ | brak serwerowego źródła zdarzeń o zamknięciu transakcji; handler `push` w service workerze jest gotowy i testowany przez CDP. Wdrożyć razem z auto-importem z giełd. |
 
 Powiadomienie o zamknięciu powstaje po stronie klienta, więc działa, gdy panel jest otwarty albo gdy transakcję zamyka się w panelu. Powiadomienie „po zamknięciu na giełdzie” przy zamkniętej aplikacji wymaga workera giełdowego i Web Push z VAPID — to osobny zakres.

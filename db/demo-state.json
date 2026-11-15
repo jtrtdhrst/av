@@ -39,6 +39,7 @@
     "macroTwo": false,
     "remindDay": true,
     "remindHour": true,
+    "liveReminderMinutes": 15,
     "greeting": true,
     "maxLosses": 2,
     "maxDailyLoss": 3,
@@ -2032,6 +2033,13 @@
       "include": false,
       "primary": false
     }
+  ],
+  "recordings": [
+    { "id": "rec1", "title": "Plan dnia od A do Z", "category": "Poranna odprawa", "meta": "Albert · 42 min", "url": "" },
+    { "id": "rec2", "title": "Opening range — sesja NY", "category": "Sesja NY", "meta": "Marcin · 58 min", "url": "" },
+    { "id": "rec3", "title": "Obsługa giełdy krok po kroku", "category": "Warsztat", "meta": "Albert i Marcin · 58 min", "url": "" },
+    { "id": "rec4", "title": "Najczęstsze błędy na starcie", "category": "Q&A", "meta": "Albert · Q&A z psycholożką · 1:24 h", "url": "" },
+    { "id": "rec5", "title": "Psychologia straty", "category": "Psychologia", "meta": "Marysia · 47 min", "url": "" }
   ],
   "flows": [
     {

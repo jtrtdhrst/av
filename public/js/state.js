@@ -114,10 +114,14 @@
   AV.normalize = (raw, fallback, taxOpts) => {
     const demo = fallback || AV.buildDemo();
     const s = deepMerge(demo, raw || {});
-    ['plans', 'trades', 'setups', 'accounts', 'flows', 'checkins', 'chat', 'overrides'].forEach((k) => {
+    ['plans', 'trades', 'setups', 'accounts', 'flows', 'checkins', 'chat', 'overrides', 'recordings'].forEach((k) => {
       if (!Array.isArray(s[k]) && k !== 'plans') s[k] = demo[k];
     });
     if (!s.plans || typeof s.plans !== 'object') s.plans = {};
+    if (!s.recordings || !Array.isArray(s.recordings)) s.recordings = [];
+    if (!s.settings) s.settings = {};
+    const mins = Number(s.settings.liveReminderMinutes);
+    s.settings.liveReminderMinutes = [5, 15, 30, 60].includes(mins) ? mins : 15;
     if (!s.prop || typeof s.prop !== 'object') s.prop = { challenges: [], selectedId: null };
     if (!Array.isArray(s.prop.challenges)) s.prop.challenges = [];
     s.prop.challenges = s.prop.challenges
@@ -167,6 +171,7 @@
       start: 0, date: AV.dateLabel(new Date()), lev: '10×', goal: '', balance: 0, include: true, primary: true
     }];
     s.setups = [];
+    s.recordings = [];
     s.prop = { challenges: [], selectedId: null };
     s.health = null;
     s.user.name = 'Trader';
@@ -180,6 +185,7 @@
       streakBase: 0,
       notified: {},
       liveReminder: false,
+      liveNotified: {},
       consultation: null,
       consultationUsed: 0,
       courseProgress: 0,

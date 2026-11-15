@@ -351,6 +351,12 @@
     const group = $(selector);
     if (!group || !chip) return null;
     $$(selector + ' .chip').forEach((c) => c.classList.toggle('on', c === chip));
+    if (selector === '#planMarkets') {
+      const sel = $('#planMarketSelect');
+      if (sel) sel.value = chip.dataset.m;
+      const input = $('#planMarketCustom');
+      if (input) { input.style.display = 'none'; input.value = ''; }
+    }
     return AV.savePlanDraft();
   };
   AV.commitPlan = async (p, message) => {
@@ -384,6 +390,20 @@
         AV.planDate = b.dataset.day === '0' ? AV.dateKey(new Date()) : AV.dateKey(AV.addDays(new Date(), -1));
         AV.renderPlan();
       }
+    });
+    $('#planMarketSelect')?.addEventListener('change', (e) => {
+      const v = e.target.value;
+      const input = $('#planMarketCustom');
+      if (input) {
+        input.style.display = v === '__other' ? '' : 'none';
+        if (v === '__other') { input.value = ''; input.focus(); }
+      }
+      if (v !== '__other') {
+        $$('#planMarkets .chip').forEach((c) => c.classList.toggle('on', c.dataset.m === v));
+        AV.savePlanDraft();
+        AV.renderPlanSide();
+      }
+      e.stopPropagation();
     });
     $('#planMarkets')?.addEventListener('click', (e) => {
       const chip = e.target.closest('.chip');
@@ -757,7 +777,93 @@
   });
 
   /* ---------- kalkulator ---------- */
-  AV.calc = { mode: 'crypto', dir: 'long' };
+  AV.calc = { mode: 'crypto', dir: 'long', accountId: '', rrMode: '3', rrCustom: '' };
+  AV.calcRR = () => {
+    if (AV.calc.rrMode === 'custom') {
+      const n = AV.pnum(AV.calc.rrCustom);
+      return n > 0 ? n : 3;
+    }
+    return Number(AV.calc.rrMode) || 3;
+  };
+  AV.calcRRLabel = () => {
+    const rr = AV.calcRR();
+    return '1 : ' + (Number.isInteger(rr) ? rr : AV.fmt(rr, 1));
+  };
+  AV.syncCalcRRUI = () => {
+    const sel = $('#cRR');
+    if (sel) sel.value = AV.calc.rrMode;
+    const wrap = $('#cRRCustomWrap');
+    if (wrap) wrap.style.display = AV.calc.rrMode === 'custom' ? '' : 'none';
+    const btn = $('#cAuto');
+    if (btn) btn.textContent = 'Zaproponuj SL i TP (' + AV.calcRRLabel() + ')';
+  };
+  AV.renderCalcPortfolios = () => {
+    const sel = $('#cPortfolio');
+    if (!sel) return;
+    const accounts = (AV.state && Array.isArray(AV.state.accounts)) ? AV.state.accounts : [];
+    sel.innerHTML = '<option value="">Bez portfela (ręcznie)</option>' + accounts.map((a) =>
+      '<option value="' + AV.attr(a.id) + '">' + AV.esc(a.name) + ' · ' + AV.fmt(a.balance, 2) + ' ' + AV.esc(a.currency || 'USDT') + '</option>').join('');
+    sel.value = accounts.some((a) => a.id === AV.calc.accountId) ? AV.calc.accountId : '';
+    AV.updateCalcMM();
+  };
+  AV.updateCalcMM = () => {
+    const el = $('#cMM');
+    if (!el) return;
+    const s = AV.state || {};
+    const risk = Number((s.settings || {}).maxRisk) || 1;
+    const acc = (s.accounts || []).find((a) => a.id === AV.calc.accountId);
+    el.textContent = risk + '% kapitału' + (acc ? ' · ' + acc.name : ' · bez portfela');
+    el.title = 'Limit ryzyka z sekcji Konto i zasady. Możesz go zmienić ręcznie w polu ryzyka.';
+  };
+  AV.applyCalcPortfolio = () => {
+    const s = AV.state || {};
+    const acc = (s.accounts || []).find((a) => a.id === AV.calc.accountId);
+    if (acc) {
+      const bal = Number(acc.balance) || Number(acc.start) || 0;
+      AV.setVal('#cBal', String(bal));
+      const risk = Number((s.settings || {}).maxRisk) || 1;
+      AV.setVal('#cRisk', String(risk));
+      const lev = parseInt(String(acc.lev || '').replace(/[^0-9]/g, ''), 10);
+      if (lev > 0) AV.setVal('#cLev', String(lev));
+    }
+    AV.updateCalcMM();
+    AV.calcResult();
+    AV.saveCalcState();
+  };
+  AV.saveCalcState = () => {
+    if (!AV.state) return;
+    AV.state.calc = {
+      mode: AV.calc.mode, dir: AV.calc.dir, accountId: AV.calc.accountId,
+      rrMode: AV.calc.rrMode, rrCustom: AV.calc.rrCustom,
+      inst: +($('#cInst')?.value || 0),
+      bal: $('#cBal')?.value || '', lev: $('#cLev')?.value || '', risk: $('#cRisk')?.value || '',
+      en: $('#cEn')?.value || '', sl: $('#cSl')?.value || '', tp: $('#cTp')?.value || ''
+    };
+    AV.save();
+  };
+  AV.restoreCalc = () => {
+    const c = (AV.state && AV.state.calc) || {};
+    AV.calc.mode = c.mode === 'fx' ? 'fx' : 'crypto';
+    AV.calc.dir = c.dir === 'short' ? 'short' : 'long';
+    AV.calc.accountId = c.accountId || '';
+    AV.calc.rrMode = ['1', '2', '3', '5', 'custom'].includes(String(c.rrMode)) ? String(c.rrMode) : '3';
+    AV.calc.rrCustom = c.rrCustom || '';
+    $$('#calcMode button').forEach((x) => x.classList.toggle('on', x.dataset.m === AV.calc.mode));
+    $$('#cDir .chip').forEach((x) => x.classList.toggle('on', x.dataset.d === AV.calc.dir));
+    AV.fillInst(false);
+    const instSel = $('#cInst');
+    if (instSel && Number.isInteger(c.inst) && instSel.options[c.inst]) instSel.value = String(c.inst);
+    AV.setPrice();
+    if (typeof c.bal === 'string' && c.bal) AV.setVal('#cBal', c.bal);
+    if (typeof c.lev === 'string' && c.lev) AV.setVal('#cLev', c.lev);
+    if (typeof c.risk === 'string' && c.risk) AV.setVal('#cRisk', c.risk);
+    if (typeof c.en === 'string' && c.en) AV.setVal('#cEn', c.en);
+    if (typeof c.sl === 'string' && c.sl) AV.setVal('#cSl', c.sl);
+    if (typeof c.tp === 'string' && c.tp) AV.setVal('#cTp', c.tp);
+    AV.syncCalcRRUI();
+    AV.renderCalcPortfolios();
+    AV.calcResult();
+  };
   AV.fillInst = (withQuotes = true) => {
     const list = AV.INST[AV.calc.mode];
     AV.setHTML('#cInst', list.map((x, i) => '<option value="' + i + '">' + AV.esc(x[0]) + '</option>').join(''));
@@ -785,9 +891,10 @@
     if (!q) { AV.calcResult(); return; }
     const p = q.price, k = AV.calc.mode === 'crypto' ? 0.012 : x[2] === 'fx' ? 0.004 : 0.008;
     const s = AV.calc.dir === 'long' ? 1 : -1;
+    const rr = AV.calcRR();
     AV.setVal('#cEn', AV.fmt(p, AV.dec(p)));
     AV.setVal('#cSl', AV.fmt(p * (1 - s * k), AV.dec(p)));
-    AV.setVal('#cTp', AV.fmt(p * (1 + s * k * 3), AV.dec(p)));
+    AV.setVal('#cTp', AV.fmt(p * (1 + s * k * rr), AV.dec(p)));
     AV.calcResult();
   };
   AV.pipVal = (x, pr) => {
@@ -864,26 +971,50 @@
       AV.calc.mode = b.dataset.m;
       $$('#calcMode button').forEach((x) => x.classList.toggle('on', x === b));
       AV.fillInst();
+      AV.saveCalcState();
     }));
-    $('#cInst')?.addEventListener('change', AV.selectInstrument);
+    $('#cInst')?.addEventListener('change', () => { AV.selectInstrument(); AV.saveCalcState(); });
     $$('#cDir .chip').forEach((c) => c.addEventListener('click', () => {
       AV.calc.dir = c.dataset.d;
       $$('#cDir .chip').forEach((x) => x.classList.toggle('on', x === c));
       AV.autoLv();
+      AV.saveCalcState();
     }));
     $$('.qk').forEach((q) => q.querySelectorAll('.chip').forEach((c) => c.onclick = () => {
       $('#' + q.dataset.for).value = c.dataset.v;
       q.querySelectorAll('.chip').forEach((x) => x.classList.toggle('on', x === c));
       AV.calcResult();
+      AV.saveCalcState();
     }));
-    ['#cBal', '#cLev', '#cRisk', '#cEn', '#cSl', '#cTp'].forEach((i) => $(i)?.addEventListener('input', AV.calcResult));
-    $('#cAuto')?.addEventListener('click', AV.autoLv);
+    const persist = AV.debounce(() => AV.saveCalcState(), 400);
+    ['#cBal', '#cLev', '#cRisk', '#cEn', '#cSl', '#cTp'].forEach((i) => $(i)?.addEventListener('input', () => { AV.calcResult(); persist(); }));
+    $('#cAuto')?.addEventListener('click', () => { AV.autoLv(); AV.saveCalcState(); });
+    $('#cPortfolio')?.addEventListener('change', (e) => {
+      AV.calc.accountId = e.target.value;
+      AV.applyCalcPortfolio();
+    });
+    $('#cRR')?.addEventListener('change', (e) => {
+      AV.calc.rrMode = e.target.value;
+      AV.syncCalcRRUI();
+      if (AV.calc.rrMode === 'custom') $('#cRRCustom')?.focus();
+      AV.saveCalcState();
+    });
+    $('#cRRCustom')?.addEventListener('input', AV.debounce(() => {
+      AV.calc.rrCustom = $('#cRRCustom').value;
+      AV.syncCalcRRUI();
+      AV.saveCalcState();
+    }, 250));
     $('#cReset')?.addEventListener('click', () => {
+      AV.calc.accountId = ''; AV.calc.rrMode = '3'; AV.calc.rrCustom = '';
+      if (AV.state) delete AV.state.calc;
       AV.setVal('#cBal', '1000'); AV.setVal('#cLev', '50'); AV.setVal('#cRisk', '1');
       $$('.qk .chip').forEach((x) => x.classList.remove('on'));
+      AV.syncCalcRRUI();
+      AV.renderCalcPortfolios();
       AV.autoLv();
+      if (AV.state) AV.saveNow();
     });
-    AV.fillInst(false);
+    AV.restoreCalc();
   };
 
   /* ---------- mentor ---------- */
@@ -991,8 +1122,39 @@
       AV.state.meta.liveReminder = !AV.state.meta.liveReminder;
       AV.saveNow();
       AV.ensurePermission();
-      AV.toast(AV.state.meta.liveReminder ? 'Przypomnę 15 minut przed live' : 'Przypomnienie wyłączone');
+      AV.renderAcademy();
+      const m = AV.state.settings.liveReminderMinutes || 15;
+      AV.toast(AV.state.meta.liveReminder ? 'Przypomnę ' + m + ' min przed live' : 'Przypomnienie wyłączone');
     });
+    $('#liveRemMin')?.addEventListener('change', (e) => {
+      const v = Number(e.target.value);
+      AV.state.settings.liveReminderMinutes = [5, 15, 30, 60].includes(v) ? v : 15;
+      AV.saveNow();
+      AV.renderAcademy();
+      AV.toast('Przypomnienie: ' + AV.state.settings.liveReminderMinutes + ' min przed live');
+    });
+    $('#acadSeg')?.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      const next = b.dataset.s === 'month' ? 'month' : 'week';
+      if (next !== AV.ui.acadScale) AV.ui.acadOffset = 0;
+      AV.ui.acadScale = next;
+      AV.renderAcademy();
+    });
+    $$('#akad [data-aw]').forEach((b) => b.addEventListener('click', () => {
+      const v = b.dataset.aw;
+      if (v === 'today') AV.ui.acadOffset = 0;
+      else AV.ui.acadOffset = (AV.ui.acadOffset || 0) + (Number(v) || 0);
+      AV.ui.acadOffset = Math.max(-12, Math.min(24, AV.ui.acadOffset));
+      AV.renderAcademy();
+    }));
+    $('#recCats')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-rcat]'); if (!b) return;
+      AV.ui.recCat = b.dataset.rcat;
+      AV.renderAcademy();
+    });
+    $('#glossaryOpen')?.addEventListener('click', AV.openGlossary);
+    $('#alphaTestsOpen')?.addEventListener('click', AV.openAlphaTest);
+    $('#goldenRulesOpen')?.addEventListener('click', AV.openGoldenRules);
     $('#bookBtn')?.addEventListener('click', () => {
       const options = [];
       let d = AV.addDays(new Date(), 1);
@@ -1025,12 +1187,110 @@
     });
   };
 
-  AV.openRecording = (title) => {
-    AV.openModal('<div class="eyebrow">Nagranie</div><h1 style="font-size:26px;margin-top:6px">' + AV.esc(title) + '</h1><div style="background:var(--panel2);border:1px solid var(--line2);border-radius:16px;padding:22px;margin-top:16px"><p class="mut" style="font-size:14px;line-height:1.6">Nagranie jest dostępne na serwerze Alpha Moves na Discordzie. Otwórz kanał Akademii i wybierz materiał.</p><a class="btn p" style="margin-top:16px;display:inline-flex" href="https://discord.com" target="_blank" rel="noopener">Otwórz Discord ↗</a></div><div style="display:flex;gap:10px;margin-top:18px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '620px' });
+  AV.youtubeId = (url) => {
+    const m = String(url || '').match(/(?:youtube\.com\/(?:watch\?.*v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{6,})/);
+    return m ? m[1] : '';
+  };
+  AV.openRecording = (key) => {
+    const list = Array.isArray(AV.state.recordings) ? AV.state.recordings : [];
+    const rec = list.find((r) => r.id === key) || list.find((r) => r.title === key) || null;
+    const title = rec ? rec.title : String(key || 'Nagranie');
+    const url = rec ? String(rec.url || '') : '';
+    const yt = AV.youtubeId(url);
+    const meta = rec ? [rec.category, rec.meta].filter(Boolean).join(' · ') : '';
+    let content;
+    if (yt) {
+      content = '<div style="position:relative;padding-top:56.25%;border-radius:16px;overflow:hidden;margin-top:16px;background:#000"><iframe src="https://www.youtube.com/embed/' + AV.attr(yt) + '" title="' + AV.attr(title) + '" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>' +
+        '<a class="btn g sm" style="margin-top:12px;display:inline-flex" href="' + AV.attr(url) + '" target="_blank" rel="noopener">Otwórz w YouTube ↗</a>';
+    } else if (url) {
+      content = '<div class="ticket" style="margin-top:16px"><div class="lbl">Link do nagrania</div><div class="mono" style="margin-top:6px;overflow-wrap:anywhere">' + AV.esc(url) + '</div></div>' +
+        '<a class="btn p" style="margin-top:14px;display:inline-flex" href="' + AV.attr(url) + '" target="_blank" rel="noopener">Odtwórz nagranie ↗</a>';
+    } else {
+      content = '<div class="ticket" style="margin-top:16px"><div class="lbl">Link do nagrania</div><p class="mut" style="font-size:13.5px;margin-top:6px;line-height:1.55">Wklej link do nagrania (YouTube, Discord albo inny host). Zapisze się w Twoim panelu i będzie gotowy do odtworzenia.</p>' +
+        '<input class="input" id="recUrlInput" placeholder="https://…" style="margin-top:10px">' +
+        '<button class="btn p sm" id="recUrlSave" style="margin-top:10px">Zapisz link</button></div>';
+    }
+    const body = AV.openModal('<div class="eyebrow">Nagranie</div><h1 style="font-size:26px;margin-top:6px">' + AV.esc(title) + '</h1>' +
+      (meta ? '<div class="mut" style="font-size:13px;margin-top:4px">' + AV.esc(meta) + '</div>' : '') + content +
+      '<div style="display:flex;gap:10px;margin-top:18px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '720px' });
+    const save = body && body.querySelector('#recUrlSave');
+    if (save) save.onclick = () => {
+      const input = body.querySelector('#recUrlInput');
+      const value = (input ? input.value : '').trim();
+      if (!/^https?:\/\//i.test(value)) { AV.toast('Podaj pełny link zaczynający się od http(s)://'); return; }
+      if (!Array.isArray(AV.state.recordings)) AV.state.recordings = [];
+      let target = AV.state.recordings.find((r) => r && r.id === (rec && rec.id));
+      if (!target) {
+        target = { id: 'rec' + Date.now().toString(36), title, category: '', meta: '', url: '' };
+        AV.state.recordings.push(target);
+      }
+      target.url = value;
+      AV.saveNow();
+      AV.closeModal();
+      AV.renderAcademy();
+      AV.openRecording(target.id);
+      AV.toast('Link do nagrania zapisany');
+    };
   };
   AV.openRecordings = () => {
-    const list = ['Najczęstsze błędy na starcie', 'Obsługa giełdy krok po kroku', 'Blockchain bez żargonu', 'Plan dnia od A do Z', 'Psychologia straty'];
-    AV.openModal('<div class="eyebrow">Biblioteka</div><h1 style="font-size:26px;margin-top:6px">Wszystkie nagrania</h1><div class="grid" style="margin-top:16px;gap:8px">' + list.map((x) => '<div class="card flat" style="padding:14px;cursor:pointer" data-recording="' + AV.attr(x) + '"><b>' + AV.esc(x) + '</b><div class="hint">nagranie Akademii · kliknij, żeby otworzyć</div></div>').join('') + '</div>', { maxWidth: '620px' });
+    const list = Array.isArray(AV.state.recordings) ? AV.state.recordings : [];
+    AV.openModal('<div class="eyebrow">Biblioteka</div><h1 style="font-size:26px;margin-top:6px">Wszystkie nagrania</h1><div class="grid" style="margin-top:16px;gap:8px">' +
+      list.map((r) => '<div class="card flat" style="padding:14px;cursor:pointer" data-recording="' + AV.attr(r.id || r.title) + '"><b>' + AV.esc(r.title) + '</b><div class="hint">' +
+        AV.esc([r.category, r.meta].filter(Boolean).join(' · ')) + '</div></div>').join('') +
+      '</div><div style="display:flex;gap:10px;margin-top:18px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '620px' });
+  };
+
+  AV.openGlossary = () => {
+    const total = AV.GLOSSARY.length;
+    const body = AV.openModal('<div class="eyebrow">Materiały</div><h1 style="font-size:26px;margin-top:6px">Słownik krypto</h1>' +
+      '<p class="mut" style="font-size:13.5px;margin-top:6px">' + total + ' ' + AV.plural(total, 'pojęcie', 'pojęcia', 'pojęć') + ' z krótkim wyjaśnieniem.</p>' +
+      '<input class="input" id="glossSearch" placeholder="Szukaj pojęcia" style="margin-top:12px" aria-label="Szukaj pojęcia">' +
+      '<div id="glossList" style="max-height:52vh;overflow-y:auto;margin-top:10px"></div>' +
+      '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '720px' });
+    const render = (q) => {
+      const needle = String(q || '').trim().toLowerCase();
+      const items = AV.GLOSSARY.filter((x) => !needle || x[0].toLowerCase().includes(needle) || x[1].toLowerCase().includes(needle));
+      AV.setHTML('#glossList', items.map((x) => '<div class="kv" style="align-items:flex-start"><b style="min-width:130px">' + AV.esc(x[0]) + '</b><span style="text-align:left;line-height:1.5">' + AV.esc(x[1]) + '</span></div>').join(''));
+    };
+    render('');
+    const input = body && body.querySelector('#glossSearch');
+    if (input) input.addEventListener('input', () => render(input.value));
+  };
+
+  AV.openAlphaTest = () => {
+    const qs = AV.ALPHA_TEST;
+    const body = AV.openModal('<div class="eyebrow">Alpha Testy</div><h1 style="font-size:26px;margin-top:6px">Test Tradera · Mini Gry</h1>' +
+      '<p class="mut" style="font-size:13.5px;margin-top:6px">' + qs.length + ' pytań z zarządzania kapitałem i bezpieczeństwa.</p>' +
+      '<div id="alphaTestForm" style="margin-top:12px">' + qs.map((x, i) =>
+        '<div class="card flat" style="padding:14px;margin-top:10px"><b>' + (i + 1) + '. ' + AV.esc(x.q) + '</b>' +
+        '<div style="display:grid;gap:6px;margin-top:10px">' + x.a.map((a, j) =>
+          '<label class="check" style="margin:0"><input type="radio" name="at' + i + '" value="' + j + '" style="accent-color:var(--alpha)"> ' + AV.esc(a) + '</label>').join('') +
+        '</div></div>').join('') + '</div>' +
+      '<button class="btn p" id="alphaTestSubmit" style="margin-top:14px">Sprawdź wynik</button>' +
+      '<div id="alphaTestResult" style="margin-top:12px"></div>' +
+      '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '720px' });
+    const submit = body && body.querySelector('#alphaTestSubmit');
+    if (!submit) return;
+    submit.onclick = () => {
+      let score = 0;
+      qs.forEach((x, i) => {
+        const picked = body.querySelector('input[name="at' + i + '"]:checked');
+        if (picked && Number(picked.value) === x.ok) score++;
+      });
+      AV.state.meta.alphaTestScore = score;
+      AV.state.meta.alphaTestAt = Date.now();
+      AV.saveNow();
+      AV.setHTML('#alphaTestResult', '<div class="ticket"><div class="lbl">Wynik</div><div class="val ' + (score === qs.length ? 'win' : 'warnc') + '">' + score + ' / ' + qs.length + '</div><p class="mut" style="font-size:13px;margin-top:6px">' +
+        (score === qs.length ? 'Komplet. Zasady masz opanowane.' : 'Wróć do słownika i złotych zasad, potem powtórz test.') + '</p></div>');
+      AV.renderAcademy();
+    };
+  };
+
+  AV.openGoldenRules = () => {
+    AV.openModal('<div class="eyebrow">Materiały</div><h1 style="font-size:26px;margin-top:6px">Złote zasady bezpieczeństwa</h1>' +
+      '<div style="margin-top:14px">' + AV.GOLDEN_RULES.map((r, i) =>
+        '<div class="row" style="align-items:flex-start"><div><b>' + (i + 1) + '. ' + AV.esc(r[0]) + '</b><span style="line-height:1.5">' + AV.esc(r[1]) + '</span></div></div>').join('') + '</div>' +
+      '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '720px' });
   };
 
   /* ---------- podatki ---------- */
@@ -1057,7 +1317,7 @@
   AV.bindCalendar = () => {
     $('#calSeg')?.addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
-      AV.ui.weekOffset = Number(b.dataset.w) || 0;
+      AV.ui.weekOffset = Math.max(-1, Math.min(3, Number(b.dataset.w) || 0));
       AV.renderCalendar();
     });
     $('#mwPill')?.addEventListener('click', (e) => { e.stopPropagation(); $('#mw').classList.toggle('open'); });
@@ -1298,7 +1558,25 @@
       });
       AV.saveNow(); $('#accForm').style.display = 'none';
       ['#accName', '#accStart', '#accDate', '#accLev', '#accGoal'].forEach((x) => $(x).value = '');
-      AV.renderAccounts(); AV.renderSettings(); AV.renderDashboard(); AV.toast('Konto dodane');
+      AV.renderAccounts(); AV.renderSettings(); AV.renderDashboard(); AV.renderCalcPortfolios(); AV.toast('Konto dodane');
+    });
+    $('#accBody')?.addEventListener('change', (e) => {
+      const startEl = e.target.closest('[data-acc-start]');
+      const balEl = e.target.closest('[data-acc-balance]');
+      const el = startEl || balEl;
+      if (!el) return;
+      const id = startEl ? startEl.dataset.accStart : balEl.dataset.accBalance;
+      const acc = AV.state.accounts.find((x) => x.id === id);
+      if (!acc) return;
+      const val = AV.pnum(el.value);
+      if (startEl) acc.start = Math.max(0, val);
+      else acc.balance = Math.max(0, val);
+      AV.saveNow();
+      AV.renderSettings();
+      AV.renderDashboard();
+      AV.renderTax();
+      AV.renderCalcPortfolios();
+      AV.toast('Saldo konta zapisane');
     });
     $('#accBody')?.addEventListener('click', (e) => {
       const del = e.target.closest('[data-acc-del]');
@@ -1728,10 +2006,17 @@
     if (!AV.state.meta.liveReminder) return;
     const info = AV.liveInfo();
     if (!info.live || info.liveNow) return;
-    if (info.sec <= 900 && info.sec > 840 && !AV.state.meta.liveNotified) {
-      AV.state.meta.liveNotified = true; AV.save();
-      AV.toast('Za 15 min live: ' + info.live.name, 5000);
-      AV.pushNotification('Live za 15 min', info.live.name);
+    const mins = [5, 15, 30, 60].includes(Number(AV.state.settings.liveReminderMinutes)) ? Number(AV.state.settings.liveReminderMinutes) : 15;
+    const win = mins * 60;
+    const key = String(info.live.id || info.live.startAt || info.live.name);
+    const notified = AV.state.meta.liveNotified;
+    const already = notified && typeof notified === 'object' ? !!notified[key] : !!notified;
+    if (info.sec <= win && info.sec > 0 && !already) {
+      if (!notified || typeof notified !== 'object') AV.state.meta.liveNotified = {};
+      AV.state.meta.liveNotified[key] = Date.now();
+      AV.save();
+      AV.toast('Za ' + mins + ' min live: ' + info.live.name, 5000);
+      AV.pushNotification('Live za ' + mins + ' min', info.live.name);
     }
   };
 

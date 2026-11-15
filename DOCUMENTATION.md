@@ -629,13 +629,27 @@ Zasady:
   - `#liveTitle`, `#liveWho`, `#liveWhen`, `#liveCd`,
   - `#nextConsult`, `#nextConsultWho`, `#consultMonth`,
   - `#liveTop`, `#consultTopWrap`,
-  - `#acad` — 7 dni tygodnia, wydarzenia pogrupowane po `localDate`,
+  - `#acad` — widok tygodnia albo miesiąca; `#acadSeg` przełącza skalę, `[data-aw]` przesuwa okres, `#acadRange` pokazuje zakres,
+  - `#liveJoin` jest widoczne tylko od 15 minut przed startem; przed oknem `#liveJoinNote` podaje godzinę odblokowania,
+  - `#liveRemMin` — 5/15/30/60 minut przypomnienia,
+  - `#recCats` i `#recList` — kategorie i lista z `state.recordings`,
+  - `#glossaryCount`, `#alphaTestScore` — liczniki materiałów,
   - `#acadUpdated` — czas ostatniego sukcesu / „nieaktualne” / „błąd synchronizacji”,
   - `#adminEventsCard` — tylko dla admina i tylko gdy są `unassigned`.
 - Dni tygodnia: `PN WT ŚR CZW PT SB ND`; bieżący dzień: `· DZIŚ`.
+- Modal nagrania: brak linku → pole `#recUrlInput` i zapis do `state.recordings[].url`; link YouTube → iframe w panelu, pozostałe → przycisk otwarcia.
+- Słownik (`AV.GLOSSARY`), Alpha Testy (`AV.ALPHA_TEST`, wynik w `meta.alphaTestScore`) i złote zasady (`AV.GOLDEN_RULES`) to modale z danych `data.js`.
+
+### 11.3a. Pulpit, plan dnia, kalkulator, statystyki i makro
+
+- `renderDashBalance()` — suma sald kont włączonych do statystyk (`AV.totalCapital`), wynik od kapitału startowego, konto główne; karta `#dashBal` prowadzi do `#/konto`.
+- `renderAccounts()` — kapitał startowy i saldo są edytowalne w tabeli (`[data-acc-start]`, `[data-acc-balance]`); zapis przez `AV.saveNow()`.
+- `renderPlan()` — `#planMarketSelect` (wszystkie instrumenty + „Inny rynek…” i `#planMarketCustom`) oraz przyciski `#planBias`; `readPlanForm()` czyta select jako źródło prawdy.
+- Kalkulator: `#cPortfolio` ustawia saldo, dźwignię i `settings.maxRisk`; `#cMM` pokazuje limit; `#cRR` + `#cRRCustom` sterują sugestią SL/TP; stan w `state.calc`.
+- `renderPnlCal(daily)` — niezależny od `#statSeg` zakres 7/30/miesiąc, nawigacja `[data-pcnav]`, numer dnia w komórce.
+- `renderCalendar()` — `#calSeg` obsługuje −1/0/1/2/3 tygodnie, `#calRange` pokazuje zakres; źródło danych nadal ogranicza się do okna synchronizacji makro.
 
 ### 11.4. Odświeżanie
-
 | Timer | Akcja |
 | --- | --- |
 | 1 s | countdown blokady ochronnej |
@@ -649,8 +663,8 @@ Zasady:
 ### 11.5. Przypomnienia
 
 - `liveReminder` w stanie użytkownika,
-- okno 15 minut przed startem (840–900 s),
-- jednorazowy `liveNotified`,
+- czas wybierany w `#liveRemMin` (5/15/30/60 min, `settings.liveReminderMinutes`),
+- okno `0 < sec ≤ minuty × 60`; powiadomienie raz na wydarzenie (`meta.liveNotified[eventId]`),
 - toast + `AV.pwa.notify` (service worker, jeśli zarejestrowany; w przeciwnym razie `Notification`).
 
 ### 11.6. Offline
@@ -662,11 +676,11 @@ Zasady:
 ### 11.7. PWA i powiadomienia
 
 - `manifest.webmanifest` + ikony + meta iOS czynią panel instalowalnym bez App Store.
-- Na ekranach do 900 px boczna nawigacja jest schowana za przyciskiem „☰ Menu”; wybór widoku zamyka panel. Inline `grid-template-columns` są zastępowane jedną kolumną, a `min-width:0` zapobiega przepełnieniu konta, nowej transakcji i Akademii.
+- Na ekranach do 900 px boczna nawigacja jest schowana za przyciskiem „☰ Menu”; wybór widoku zamyka panel. Gridy używają `minmax(0,1fr)`, więc zwężają się zamiast wypychać treść; `main` nie obcina już zawartości (`overflow-x` usunięte), a `main:before` nie wychodzi poza viewport. E2E sprawdza prostokąty elementów we wszystkich 15 widokach przy 390 i 1024 px.
 - `pwa.js` rejestruje `/sw.js`, obsługuje `beforeinstallprompt`, `appinstalled` i przyciski `[data-install]`, `[data-pwa-notify]`.
 - `sw.js` cache'uje powłokę (HTML/JS/ikony), ale **nie** cache'uje `/api/` ani `/auth/`; nawigacja jest network-first z fallbackiem offline.
 - `AV.pwa.notify()` używa `registration.showNotification()` (iOS/Android) albo `Notification` w przeglądarce; `notifyTradeClosed()` wysyła deep link `/?qa=<tradeId>`.
-- Nagrania Akademii nie mają playera: modal pokazuje link do Discorda, gdzie znajduje się materiał.
+- Nagrania Akademii korzystają z `state.recordings`: kategoria, opis i opcjonalny `url`. Link YouTube jest odtwarzany w panelu (iframe), inne linki otwierają się w nowej karcie; brak linku to pole do jego dodania, bez fałszywego playera.
 - Notowania instrumentów są pobierane dopiero po wejściu w `#/kalkulator`; start nie wysyła trzech zapytań `/api/quotes`.
 - `notificationclick` fokusuje istniejące okno albo otwiera nowe z deep linkiem; `AV.quickAddFromUrl()` otwiera modal i czyści parametr z URL.
 - `AV.openQuickAdd()` wybiera transakcję: wskazany `id` → najnowsza bez emocji/oceny → najnowsza zamknięta → najnowsza. Modal pokazuje prawdziwe dane, nie statyczny BTC.
@@ -827,9 +841,9 @@ WordPressa.
 | Notowania | `tests/quotes.test.php` | cache, TTL, fallback, cząstkowe pobranie, uszkodzony cache | 14/14 PASS |
 | Daty demo | `tests/demo-state.test.php` | przesunięcie fixture na dziś, idempotencja, plany jako punkt zaczepienia, błędne dane | 15/15 PASS |
 | API | `tests/api.e2e.mjs` | health, sesja, CSRF, stan, events, macro, admin, eksport, prop | 23/23 PASS |
-| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro, pusty stan, zapisy, plan dnia z reloadem z MySQL, 8 odznak, nagłówek | 60/60 PASS |
+| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro z nawigacją tygodni, pusty stan, zapisy, plan dnia z reloadem z MySQL, saldo portfela, portfel/MM i R:R w kalkulatorze, kalendarz PnL, Akademia (Dołącz, przypomnienie, harmonogram, nagrania, słownik, testy, zasady), 8 odznak, nagłówek | PASS |
 | UI empty | `tests/ui-empty.e2e.mjs` | puste pola po sukcesie z `[]` | 12/12 PASS |
-| PWA mobile | `tests/pwa.e2e.mjs` | manifest, SW, instalacja, powiadomienie, deep link, 10 s, push, offline | 20/20 PASS |
+| PWA mobile | `tests/pwa.e2e.mjs` | manifest, SW, instalacja, powiadomienie, deep link, 10 s, push, offline, brak przepełnienia 15 widoków przy 390 i 1024 px | PASS |
 | Urządzenia | `tests/wearables.e2e.mjs` | OAuth2 + PKCE Oura, rotacja tokenów i klucza, statusy, Apple, UI, bezpieczeństwo, wyłączenie Garmin/Whoop | PASS |
 | Konfiguracja urządzeń | `tests/wearables-config.test.php` | lista dostawców, brak fallbacku klucza, start OAuth 503, gotowość po ustawieniu klucza | 5/5 PASS |
 | Dokumentacja | `tests/docs.test.mjs` | linki, sekcje, spójność kopii publicznych | PASS |

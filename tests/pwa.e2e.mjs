@@ -170,18 +170,41 @@ try {
   const navClosed = await page.evaluate(() => !document.body.classList.contains('nav-open'));
   log('mobile: wybór widoku zamyka menu', navClosed);
 
-  const mobileOverflow = await page.evaluate(async () => {
-    const bad = [];
-    for (const view of ['ust', 'nowa', 'akad']) {
-      AV.showView(view);
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const el = document.querySelector('#' + view);
-      const max = Math.max(el?.scrollWidth || 0, document.documentElement.scrollWidth);
-      if (max > window.innerWidth + 1) bad.push({ view, max, width: window.innerWidth });
-    }
-    return bad;
-  });
-  log('mobile: konto/nowa/akademia bez przepełnienia', mobileOverflow.length === 0, JSON.stringify(mobileOverflow));
+  const overflowAt = async (width, height) => {
+    await page.setViewportSize({ width, height });
+    return page.evaluate(async () => {
+      const bad = [];
+      const views = ['pulpit', 'plan', 'trans', 'play', 'nowa', 'kalk', 'prop', 'akad', 'stat', 'tax', 'mentor', 'kal', 'cialo', 'gieldy', 'ust'];
+      for (const view of views) {
+        AV.showView(view);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const root = document.querySelector('#' + view);
+        if (!root) continue;
+        const limit = window.innerWidth + 1;
+        const walk = (node) => {
+          if (!(node instanceof Element)) return;
+          const cs = getComputedStyle(node);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return;
+          if (cs.position === 'fixed') return;
+          const scrollable = cs.overflowX !== 'visible';
+          if (scrollable) return;
+          const rect = node.getBoundingClientRect();
+          if (rect.width > 0 && rect.right > limit) {
+            bad.push({ view, tag: node.tagName.toLowerCase(), id: node.id, cls: String(node.className || '').slice(0, 40), right: Math.round(rect.right) });
+          }
+          for (const child of node.children) walk(child);
+        };
+        walk(root);
+        if (document.documentElement.scrollWidth > limit) bad.push({ view, scroll: document.documentElement.scrollWidth });
+      }
+      return { count: bad.length, sample: bad.slice(0, 10), width: window.innerWidth };
+    });
+  };
+  const mobileOverflow = await overflowAt(390, 844);
+  log('mobile 390: wszystkie widoki bez przepełnienia', mobileOverflow.count === 0, JSON.stringify(mobileOverflow));
+  const narrowDesktop = await overflowAt(1024, 900);
+  log('desktop 1024: wszystkie widoki bez przepełnienia', narrowDesktop.count === 0, JSON.stringify(narrowDesktop));
+  await page.setViewportSize({ width: 390, height: 844 });
 
   const installLabel = (await page.locator('[data-install]').first().innerText()).trim();
   const notifyLabel = (await page.locator('[data-pwa-notify]').first().innerText()).trim();
