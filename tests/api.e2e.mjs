@@ -243,6 +243,7 @@ async function main() {
   const index = await req('/');
   assert.equal(index.res.status, 200);
   assert.ok(index.text.includes('Alpha Vault'));
+  assert.match(index.text, /src="js\/actions\.js\?v=\d+"/, 'JS z wersją cache-busting');
   log('GET / (UI)', true);
 
   const docs = await req('/docs/API.md');

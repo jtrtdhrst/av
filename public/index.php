@@ -34,7 +34,20 @@ if ($path === '/index.html') {
 }
 if ($path === '/') {
     header('Cache-Control: no-store');
-    readfile(__DIR__ . '/index.html');
+    $html = (string) file_get_contents(__DIR__ . '/index.html');
+    $stamp = 0;
+    foreach (glob(__DIR__ . '/js/*.js') ?: [] as $script) {
+        $stamp = max($stamp, (int) filemtime($script));
+    }
+    if ($stamp > 0) {
+        // Wersja w URL wymusza pobranie nowego JS nawet przy cache-first service workera.
+        $html = (string) preg_replace_callback(
+            '/(src="js\/[A-Za-z0-9._-]+\.js)"/',
+            static fn (array $match): string => $match[1] . '?v=' . $stamp . '"',
+            $html
+        );
+    }
+    echo $html;
     exit;
 }
 if ($path === '/docs') {

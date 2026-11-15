@@ -12,6 +12,7 @@
 
 ### Naprawione
 - Responsywność: usunięte obcinanie treści (`main{overflow-x:clip}`), gridy `minmax(0,1fr)`, poprawione wiersze poziomów, tabele i pasek górny; na 390 i 1024 px żaden widok nie wystaje poza ekran.
+- Stary JS po deployu: `index.php` dokleja do skryptów `?v=<mtime>`, więc service worker nie serwuje poprzedniej wersji, a nowe przyciski (m.in. harmonogram Akademii) działają od pierwszego odświeżenia.
 
 ### Testy
 - UI e2e: saldo portfela i edycja salda, select rynku i własny rynek, portfel/MM i R:R w kalkulatorze, kalendarz PnL, harmonogram i materiały Akademii, nawigacja tygodni makro.
