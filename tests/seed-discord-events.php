@@ -12,7 +12,21 @@ $db->execute('DELETE FROM discord_scheduled_events WHERE guild_id = ?', [$guild]
 
 $utc = new DateTimeZone('UTC');
 $now = new DateTimeImmutable('now', $utc);
-$liveStart = $now->modify('+2 hours');
+// Wydarzenie "live" jest 2 h do przodu, ale zawsze w bieżącym tygodniu Europe/Warsaw.
+// Harmonogram tygodnia w UI pokazuje domyślnie bieżący tydzień, a bez tej klamry
+// wydarzenie z niedzielnego wieczoru wpadało w poniedziałek następnego tygodnia
+// i siatka tygodnia była pusta (fałszywy FAIL w niedziele 22:00-24:00).
+$warsaw = new DateTimeZone('Europe/Warsaw');
+$nowLocal = new DateTimeImmutable('now', $warsaw);
+$liveLocal = $nowLocal->modify('+2 hours');
+$weekEnd = $nowLocal->modify('next monday')->setTime(0, 0)->modify('-1 minute');
+if ($liveLocal > $weekEnd) {
+    $liveLocal = $weekEnd;
+}
+if ($liveLocal <= $nowLocal) {
+    $liveLocal = $nowLocal->modify('+1 minute');
+}
+$liveStart = $liveLocal->setTimezone($utc);
 $liveEnd = $liveStart->modify('+1 hour');
 $consultStart = $now->modify('+2 days')->setTime(17, 0);
 $consultEnd = $consultStart->modify('+1 hour');

@@ -808,6 +808,10 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
   do `GET`; decyzja na ekranie zgody nie wymaga kontroli `Origin` (sesja `SameSite=Lax` + token CSRF
   z `mcp_consents` albo podpisany `consent_token`). Odrzucony `Origin` na pozostałych mutujących
   endpointach trafia do logu serwera i do odpowiedzi `403` jako `[auth] bad_origin <origin> <path>`.
+- `/oauth/connected/revoke` akceptuje dosłowne `Origin: null`, bo formularz HTML jest chroniony
+  tokenem CSRF podpisanym kluczem sesji; obcy `Origin` nadal daje `403`. `mcp/public/.htaccess`
+  używa `Referrer-Policy: strict-origin-when-cross-origin` — przy `no-referrer` Chromium i Firefox
+  zerują `Origin` formularzy `POST`, co wcześniej blokowało unieważnianie dostępu.
 
 MCP 2.1: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje
 `db/schema.sql` + `db/migrations/20261114_mcp2.sql` + `db/migrations/20261115_mcp_approval.sql`,
@@ -824,7 +828,7 @@ checkboxa na ekranie zgody. Deploy MCP nie dotyka `alphavault.pl` ani WordPressa
 | Token bota | tylko PHP/CLI; redagowany w logach; nigdy w HTML/JS/URL |
 | Bot | `View Channels`, bez Manage Events, bez Privileged Intents |
 | Sesja | cookie HttpOnly, SameSite=Lax, Secure, hash w DB |
-| CSRF | `Origin` dla mutacji |
+| CSRF | `Origin` dla mutacji API; formularze HTML (`/oauth/authorize`, `/oauth/connected/revoke`) dodatkowo token CSRF związany z sesją |
 | Rate limit | MySQL, per bucket/IP |
 | Nagłówki | CSP, HSTS, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy` |
 | Payloady | `raw_payload` niewysyłany do klienta |

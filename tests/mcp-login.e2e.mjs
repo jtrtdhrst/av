@@ -407,6 +407,50 @@ try {
   assert.doesNotMatch((forged.res.headers.get('location') || ''), /code=/);
   assert.match(forged.text, /name="consent_token"/);
 
+  // 8. Unieważnianie dostępu na /oauth/connected. Formularz w przeglądarce
+  //    wysyła `Origin: null`, gdy dokument nie ujawnia pochodzenia
+  //    (Referrer-Policy); token CSRF związany z sesją jest wystarczającą ochroną.
+  const connected = await req('/oauth/connected', { headers: { Cookie: firstSession } });
+  assert.equal(connected.res.status, 200, connected.text);
+  const revokeCsrf = /name="csrf" value="([^"]+)"/.exec(connected.text);
+  assert.ok(revokeCsrf, 'brak tokenu CSRF na /oauth/connected');
+  const revokeBody = new URLSearchParams({ client_id: first.client.client_id, csrf: revokeCsrf[1] }).toString();
+
+  const badCsrf = await req('/oauth/connected/revoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'null', Cookie: firstSession },
+    body: new URLSearchParams({ client_id: first.client.client_id, csrf: 'wrong' }).toString(),
+  });
+  assert.equal(badCsrf.res.status, 403, 'zły CSRF musi dostać 403: ' + badCsrf.text);
+
+  const foreignRevoke = await req('/oauth/connected/revoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://evil.example', Cookie: firstSession },
+    body: revokeBody,
+  });
+  assert.equal(foreignRevoke.res.status, 403, 'obcy Origin musi dostać 403: ' + foreignRevoke.text);
+  assert.equal(foreignRevoke.json?.error, 'bad_origin');
+  assert.match((await callProfile(firstToken)).id, /^av_\d+$/, 'odrzucone żądanie nie może unieważnić tokenu');
+
+  const nullOriginRevoke = await req('/oauth/connected/revoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'null', Cookie: firstSession },
+    body: revokeBody,
+  });
+  assert.equal(nullOriginRevoke.res.status, 302, 'Origin: null z poprawnym CSRF nie może zwracać bad_origin: ' + nullOriginRevoke.text);
+
+  const revokedProfile = await req('/mcp', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      Authorization: 'Bearer ' + firstToken,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_profile', arguments: {} } }),
+  });
+  assert.equal(revokedProfile.res.status, 401, 'unieważniony token musi przestać działać: ' + revokedProfile.text);
+  assert.match((await callProfile(secondToken)).id, /^av_\d+$/, 'unieważnienie nie może ruszać innych klientów');
+
   console.log('MCP Login E2E PASS');
 } finally {
   server.kill('SIGTERM');
