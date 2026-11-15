@@ -49,9 +49,11 @@ Zasady:
 - Authorization Code + PKCE `S256`, public client (`none`) lub `client_secret_post`.
 - `/oauth/authorize` przyjmuje żądanie autoryzacji także metodą `POST` (tak robi ChatGPT):
   parametry z ciała formularza są normalizowane `303` do `GET` tego samego endpointu, więc logowanie,
-  zgoda i decyzja mają jeden przebieg. Kontrola `Origin` dotyczy wyłącznie decyzji na ekranie zgody
-  (formularz z naszej domeny, dodatkowo chroniony tokenem CSRF); żądanie autoryzacji nic nie zmienia,
-  a jego poprawność wymusza serwer OAuth (`client_id` + dokładny `redirect_uri`).
+  zgoda i decyzja mają jeden przebieg. Decyzja na ekranie zgody nie wymaga kontroli `Origin`:
+  ciasteczko sesji jest `SameSite=Lax` (cross-site `POST` go nie wyśle), a stan zmienia wyłącznie
+  poprawny token CSRF z wiersza `mcp_consents` albo podpisany `consent_token` związany z sesją
+  i użytkownikiem. Żądanie autoryzacji nic nie zmienia, a jego poprawność wymusza serwer OAuth
+  (`client_id` + dokładny `redirect_uri`).
 - Dokładne `redirect_uri`; allowlista hostów: `chatgpt.com`, `chat.openai.com`, `platform.openai.com`,
   `claude.ai`, `grok.com`, `x.ai` (localhost tylko poza produkcją).
 - Access token: JWT RS256, 1 h, `aud=https://mcp.alphavault.pl/mcp`; w bazie `mcp_access_tokens`.

@@ -801,8 +801,9 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
 - `scripts/deploy-mcp.sh` wykonuje backup, rsync, migrację, klucze OAuth i health check; `MCP_WRITES_ENABLED=false` jest wymuszone.
 - Workflow nie dotyka `alphavault.pl` ani WordPressa; używa environment `alphavault-production`.
 - `/oauth/authorize` przyjmuje żądanie autoryzacji metodą `POST` (m.in. ChatGPT) i normalizuje je `303`
-  do `GET`; `requireSameOrigin` pilnuje wyłącznie decyzji na ekranie zgody. Odrzucony `Origin` trafia
-  do logu serwera jako `[auth] bad_origin <origin> <path>`.
+  do `GET`; decyzja na ekranie zgody nie wymaga kontroli `Origin` (sesja `SameSite=Lax` + token CSRF
+  z `mcp_consents` albo podpisany `consent_token`). Odrzucony `Origin` na pozostałych mutujących
+  endpointach trafia do logu serwera i do odpowiedzi `403` jako `[auth] bad_origin <origin> <path>`.
 
 MCP 2.1: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje
 `db/schema.sql` + `db/migrations/20261114_mcp2.sql` + `db/migrations/20261115_mcp_approval.sql`,
