@@ -1262,7 +1262,9 @@ final class ProposalBuilder
     {
         $key = trim((string) ($args['idempotencyKey'] ?? ''));
         if (mb_strlen($key) < 8 || mb_strlen($key) > 120) {
-            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8–120 znaków.', 400);
+            // Diagnostyka: długość klucza i nazwy przekazanych pól, bez wartości.
+            error_log('[mcp] idempotency_invalid len=' . mb_strlen($key) . ' fields=' . implode(',', array_keys($args)) . ' type=' . get_debug_type($args['idempotencyKey'] ?? null));
+            throw new ProposalException('bad_request', 'idempotencyKey musi mieć 8-120 znaków.', 400);
         }
 
         return $key;
