@@ -485,7 +485,7 @@ final class ProposalBuilder
             }
         }
 
-        $templateId = trim((string) ($args['templateId'] ?? 'custom'));
+        $templateId = trim((string) ($args['templateId'] ?? ($before['templateId'] ?? 'custom')));
         if (PropChallengeService::templateById($templateId) === null) {
             throw new ProposalException('bad_request', 'Nieznany templateId.', 400);
         }

@@ -705,12 +705,13 @@ final class Schemas
     public static function outputProposalStatus(): array
     {
         return self::object([
-            'proposalId' => ['type' => 'string'],
-            'kind' => ['type' => 'string'],
-            'target' => ['type' => 'string'],
-            'status' => ['type' => 'string'],
-            'baseRevision' => ['type' => 'integer'],
-            'diffHash' => ['type' => 'string'],
+            'found' => ['type' => 'boolean'],
+            'proposalId' => self::nullable(['type' => 'string']),
+            'kind' => self::nullable(['type' => 'string']),
+            'target' => self::nullable(['type' => 'string']),
+            'status' => self::nullable(['type' => 'string']),
+            'baseRevision' => self::nullable(['type' => 'integer']),
+            'diffHash' => self::nullable(['type' => 'string']),
             'changes' => ['type' => 'array', 'items' => ['type' => 'string']],
             'before' => self::nullable(['type' => 'object']),
             'after' => self::nullable(['type' => 'object']),
@@ -723,6 +724,7 @@ final class Schemas
             'canApprove' => ['type' => 'boolean'],
             'approvalCodeActive' => ['type' => 'boolean'],
             'approvalCodeExpiresAt' => self::nullable(['type' => 'string']),
+            'note' => ['type' => 'string'],
         ]);
     }
 
