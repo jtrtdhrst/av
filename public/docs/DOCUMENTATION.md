@@ -680,6 +680,7 @@ Zasady:
 - `manifest.webmanifest` + ikony + meta iOS czynią panel instalowalnym bez App Store.
 - Na ekranach do 900 px boczna nawigacja jest schowana za przyciskiem „☰ Menu”; wybór widoku zamyka panel. Gridy używają `minmax(0,1fr)`, więc zwężają się zamiast wypychać treść; `main` nie obcina już zawartości (`overflow-x` usunięte), a `main:before` nie wychodzi poza viewport. E2E sprawdza prostokąty elementów we wszystkich 15 widokach przy 390 i 1024 px.
 - `pwa.js` rejestruje `/sw.js`, obsługuje `beforeinstallprompt`, `appinstalled` i przyciski `[data-install]`, `[data-pwa-notify]`.
+- `/` (przez `index.php`) dokleja do skryptów `?v=<max mtime js>`; zmiana JS zmienia URL, więc cache-first service workera nie poda starej wersji po deployu.
 - `sw.js` cache'uje powłokę (HTML/JS/ikony), ale **nie** cache'uje `/api/` ani `/auth/`; nawigacja jest network-first z fallbackiem offline.
 - `AV.pwa.notify()` używa `registration.showNotification()` (iOS/Android) albo `Notification` w przeglądarce; `notifyTradeClosed()` wysyła deep link `/?qa=<tradeId>`.
 - Nagrania Akademii korzystają z `state.recordings`: kategoria, opis i opcjonalny `url`. Link YouTube jest odtwarzany w panelu (iframe), inne linki otwierają się w nowej karcie; brak linku to pole do jego dodania, bez fałszywego playera.
