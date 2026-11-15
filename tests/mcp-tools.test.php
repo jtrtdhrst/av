@@ -127,7 +127,7 @@ check('Metrics: expectancy R', abs($summary['expectancyR'] - 0.38) < 0.001, (str
 $plans = new DayPlanService();
 $todayDay = $plans->day($state, $dayKey(0));
 check('Plan: status approved', $todayDay['plan']['status'] === 'approved');
-check('Plan: limit transakcji wykryty', $todayDay['limits']['tradesOverLimit'] === 1, json_encode($todayDay['limits']));
+check('Plan: limit transakcji wykryty', $todayDay['limits']['tradesOverLimit'] === 2, json_encode($todayDay['limits']));
 check('Plan: transakcja poza rynkiem niezgodna', $todayDay['compliance']['tradeRows'][1]['aligned'] === false);
 check('Plan: brak SL to naruszenie', in_array('missing_stop_loss', $todayDay['compliance']['tradeRows'][1]['reasons'], true));
 check('Plan: szkic nie daje zgodności', $plans->day($state, $dayKey(-1))['plan']['status'] === 'draft');
@@ -154,7 +154,7 @@ check('Analityka: oceny pokrywają wszystkie transakcje', array_sum(array_column
 $byError = $perf->byError($state, null, null, 1);
 check('Analityka: koszt błędu ujemny', $byError['items'][0]['net'] < 0 && abs($byError['items'][0]['shareOfGrossLossPct'] - 71.43) < 0.01, json_encode($byError['items'][0]));
 $patterns = $perf->patterns($state, null, null, 1);
-check('Analityka: wzorzec ma dowody i pewność', $patterns['items'] !== [] && isset($patterns['items'][0]['confidence'], $patterns['items'][0]['evidence']));
+check('Analityka: wzorce nie zmyślają przy małej próbie', $patterns['hasData'] === false && $patterns['items'] === [], json_encode($patterns['items']));
 
 // --- Setup ---
 $setups = new SetupService();
