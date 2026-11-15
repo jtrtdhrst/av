@@ -596,7 +596,7 @@ async function main() {
 
   const tradeStatus = await call(at, 'get_proposal_status', { proposalId: tradeProposal.proposalId });
   assert.equal(tradeStatus.status, 'approved');
-  assert.ok(tradeStatus.before);
+  assert.equal(tradeStatus.before, null, 'nowa transakcja nie ma stanu przed');
   assert.ok(tradeStatus.after);
 
   const updateProposal = await call(at, 'update_trade_proposal', {
