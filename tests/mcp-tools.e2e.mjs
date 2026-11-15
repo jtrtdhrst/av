@@ -607,7 +607,7 @@ async function main() {
   for (const field of ['grade', 'note', 'setup']) {
     assert.ok(updateProposal.changes.includes(field), `${field} nie ma w diffie: ${updateProposal.changes}`);
   }
-  assert.equal(stateOf(a.userId).state.trades.find((row) => row.id === newTrade.id).note, '');
+  assert.equal(stateOf(a.userId).state.trades.find((row) => row.id === newTrade.id).note, 'E2E wpis', 'propozycja zmieniła stan przed zgodą');
   await approve(updateProposal);
   const updatedTrade = stateOf(a.userId).state.trades.find((row) => row.id === newTrade.id);
   assert.equal(updatedTrade.note, 'Poprawiona notatka');
