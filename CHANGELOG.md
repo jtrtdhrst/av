@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.9.8 - 2026-11-15
+
+### Naprawione
+- MCP: unieważnianie dostępu na `/oauth/connected` kończyło się `403 bad_origin` z `origin: "null"`. Strona MCP wysyłała `Referrer-Policy: no-referrer`, a Chromium i Firefox zerują wtedy `Origin` formularzy `POST`. `mcp/public/.htaccess` ustawia teraz `strict-origin-when-cross-origin`, a `POST /oauth/connected/revoke` akceptuje dosłowne `Origin: null`, bo broni go token CSRF podpisany kluczem sesji. Obcy `Origin` nadal dostaje `403`.
+
+### Testy
+- `tests/mcp-login.e2e.mjs`: `GET /oauth/connected`, unieważnienie z `Origin: null` (302, token przestaje działać, drugi klient zachowuje dostęp), obcy `Origin` i zły CSRF bez efektu (403).
+
 ## 3.9.7 - 2026-11-15
 
 ### Dodane

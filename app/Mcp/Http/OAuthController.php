@@ -523,7 +523,10 @@ final class OAuthController
 
     public function connectedRevoke(): never
     {
-        $this->auth->requireSameOrigin();
+        // Formularz na /oauth/connected wysyła `Origin: null`, gdy przeglądarka
+        // zeruje pochodzenie. Ochroną jest token CSRF podpisany kluczem sesji,
+        // więc `null` jest tu akceptowalne; obcy Origin nadal dostaje 403.
+        $this->auth->requireSameOrigin(true);
         $session = $this->auth->readSession();
         if ($session === null) {
             Http::html('<h1>401</h1><p>Sesja wygasła.</p>', 401);

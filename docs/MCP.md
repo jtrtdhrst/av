@@ -54,6 +54,11 @@ Zasady:
   poprawny token CSRF z wiersza `mcp_consents` albo podpisany `consent_token` związany z sesją
   i użytkownikiem. Żądanie autoryzacji nic nie zmienia, a jego poprawność wymusza serwer OAuth
   (`client_id` + dokładny `redirect_uri`).
+- `/oauth/connected/revoke` jest zwykłym formularzem HTML, więc broni go token CSRF podpisany
+  kluczem sesji (`hmac(sessionId)`); endpoint akceptuje dosłowne `Origin: null`, obcy `Origin`
+  nadal dostaje `403 bad_origin`. `mcp/public/.htaccess` ustawia
+  `Referrer-Policy: strict-origin-when-cross-origin`, bo przy `no-referrer` Chromium i Firefox
+  zerują `Origin` formularzy `POST` – wcześniej blokowało to unieważnianie dostępu.
 - Dokładne `redirect_uri`; allowlista hostów: `chatgpt.com`, `chat.openai.com`, `platform.openai.com`,
   `claude.ai`, `grok.com`, `x.ai` (localhost tylko poza produkcją).
 - Access token: JWT RS256, 1 h, `aud=https://mcp.alphavault.pl/mcp`; w bazie `mcp_access_tokens`.

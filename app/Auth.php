@@ -249,10 +249,24 @@ final class Auth
         ];
     }
 
-    public function requireSameOrigin(): void
+    /**
+     * Ochrona mutacji nagłówkiem Origin.
+     *
+     * Przeglądarka wysyła dosłowne `Origin: null`, gdy dokument nie ujawnia
+     * pochodzenia — m.in. przy `Referrer-Policy: no-referrer` (Chromium i Firefox
+     * zerują wtedy Origin formularza) oraz w kontekstach sandbox. Taki nagłówek
+     * nie niesie informacji o pochodzeniu, więc endpointy, które mają własny token
+     * CSRF związany z sesją, mogą go traktować jak brak nagłówka
+     * (`$allowNullOrigin = true`). Endpointy opierające się wyłącznie na Origin
+     * nadal odrzucają `null`.
+     */
+    public function requireSameOrigin(bool $allowNullOrigin = false): void
     {
         $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
         if ($origin === '') {
+            return;
+        }
+        if ($allowNullOrigin && strtolower($origin) === 'null') {
             return;
         }
         $allowed = [$this->config->origin];
