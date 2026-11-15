@@ -226,14 +226,14 @@ async function finishConsent(client, verifier, challenge, sessionCookie) {
   const formBody = new URLSearchParams({ consent_id: 'wrong', csrf: 'wrong', consent_token: consentToken[1], decision: 'allow' }).toString();
   const post = await req(action, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: sessionCookie },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: sessionCookie, Origin: BASE },
     body: formBody,
   });
   assert.equal(post.res.status, 302, post.text);
   const retryBody = new URLSearchParams({ consent_id: 'wrong', csrf: 'wrong', consent_token: consentToken[1] + 'x', decision: 'allow' }).toString();
   const retry = await req(action, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: sessionCookie },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: sessionCookie, Origin: BASE },
     body: retryBody,
   });
   assert.equal(retry.res.status, 200, retry.text);
@@ -366,6 +366,44 @@ try {
   assert.equal(existingCallback.res.status, 302, existingCallback.text);
   assert.equal(dbScalar("SELECT COUNT(*) AS v FROM users WHERE discord_id = 'mcp-discord-ok'"), '1');
   assert.equal(dbScalar("SELECT id AS v FROM users WHERE discord_id = 'mcp-discord-ok'"), existingId);
+
+  // 6. Żądanie autoryzacji wysłane POST-em z obcego Origin (tak robi ChatGPT):
+  //    musi być 303 na GET, a nie 403 bad_origin.
+  const postClient = await register();
+  const postPkce = pkce();
+  const postParams = new URLSearchParams({
+    response_type: 'code',
+    client_id: postClient.client_id,
+    redirect_uri: postClient.redirect_uris[0],
+    scope: 'alphavault.read',
+    state: 'post-' + crypto.randomBytes(6).toString('hex'),
+    code_challenge: postPkce.challenge,
+    code_challenge_method: 'S256',
+    resource: BASE + '/mcp',
+  });
+  const postAuthorize = await req('/oauth/authorize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://chatgpt.com' },
+    body: postParams.toString(),
+  });
+  assert.equal(postAuthorize.res.status, 303, 'POST żądania autoryzacji nie może zwracać bad_origin: ' + postAuthorize.text);
+  const normalized = postAuthorize.res.headers.get('location') || '';
+  assert.ok(normalized.startsWith('/oauth/authorize?'), normalized);
+  const normalizedQuery = new URL(normalized, BASE).searchParams;
+  assert.equal(normalizedQuery.get('client_id'), postClient.client_id);
+  assert.equal(normalizedQuery.get('code_challenge'), postPkce.challenge);
+  const normalizedConsent = await req(normalized, { headers: { Cookie: firstSession } });
+  assert.equal(normalizedConsent.res.status, 200, normalizedConsent.text);
+  assert.match(normalizedConsent.text, /name="consent_token"/);
+
+  // 7. Decyzja zgody z obcego Origin nadal jest odrzucana (CSRF zostaje na naszej stronie).
+  const forged = await req(normalized, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://evil.example', Cookie: firstSession },
+    body: 'consent_id=forged&csrf=forged&consent_token=forged&decision=allow',
+  });
+  assert.equal(forged.res.status, 403, forged.text);
+  assert.match(forged.text, /bad_origin/);
 
   console.log('MCP Login E2E PASS');
 } finally {
