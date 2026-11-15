@@ -192,7 +192,7 @@ Test używa lokalnej bazy testowej; nie pobiera feedów z sieci.
 
 Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `db/schema.sql` oraz `db/migrations/*.sql` (w tym `mcp_*`). Runner jest idempotentny.
 
-## UI - 60 scenariuszy
+## UI — pełny przebieg
 
 `tests/ui.e2e.mjs` używa Playwright + systemowego Chrome/Edge:
 
@@ -202,7 +202,11 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - live i konsultacja z `/api/events`,
 - harmonogram tygodnia i strip,
 - nawigacja 15 widoków (w tym prop),
-- plan dnia: chipy rynku/biasu, poziomy, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie,
+- plan dnia: lista rynku (w tym własna nazwa) i chipy biasu, poziomy, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie,
+- pulpit: podgląd salda portfela, skrót do „Konto i zasady” i edycja salda konta,
+- kalkulator: wybór portfela ustawia saldo/MM, wybór R:R 1:1–1:5 lub własny, SL/TP zgodne z wybranym stosunkiem,
+- statystyki: kalendarz PnL dla 7 dni, miesiąca i nawigacji okresu,
+- akademia: „Dołącz” dopiero 15 min przed startem, własny czas przypomnienia, harmonogram tydzień/miesiąc, kategorie nagrań i odtwarzanie z linku, słownik z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady,
 - filtry dziennika, szczegóły transakcji,
 - nagłówek: brak technicznego statusu bazy, ukryty chip giełd bez połączeń, ticker z `/api/quotes`,
 - tryb ochronny: deterministyczne 2 straty dnia i obejście limitu,
@@ -212,7 +216,7 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - prop: alarm limitu + banner na pulpicie,
 - prop: archiwum, empty state i przywrócenie,
 - prop: zapis w MySQL, reload i usunięcie,
-- kalendarz + makro-widget z API, check-in, profil,
+- kalendarz + makro-widget z API, nawigacja tygodni makro (poprzedni/ten/następny/+2) i powrót, check-in, profil,
 - 8 odznak niezależnie (próg, podpowiedź, pusty stan, poziom z licznika),
 - nowa transakcja i zamknięcie,
 - przywrócenie stanu demo,
@@ -239,6 +243,7 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - rejestrację service workera i przejęcie kontroli nad stroną,
 - `Page.getAppManifest` i `Page.getInstallabilityErrors` bez błędów,
 - brak poziomego przewijania na pulpicie,
+- brak przepełnienia we wszystkich 15 widokach przy 390 px i 1024 px: sprawdzane są prostokąty widocznych elementów i `scrollWidth`, z pominięciem celowych kontenerów `overflow-x:auto`,
 - przycisk instalacji i stan powiadomień,
 - zamknięcie transakcji → powiadomienie systemowe z deep linkiem `?qa=<id>`,
 - deep link otwiera modal z prawdziwą transakcją,

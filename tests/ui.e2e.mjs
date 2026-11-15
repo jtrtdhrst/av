@@ -295,6 +295,27 @@ try {
   });
   log('plan dnia: zapis w bazie po reloadzie', planReload.market === 'ETH' && planReload.bias === 'short' && planReload.why === why && planReload.levels >= 1 && planReload.approved, JSON.stringify(planReload));
 
+  // plan: edycja przez select rynku (działa też na telefonie) i własny rynek
+  await page.selectOption('#planMarketSelect', 'SOL');
+  await page.click('#planBias [data-b="long"]');
+  await page.waitForTimeout(300);
+  const planSelect = await page.evaluate(() => {
+    const p = AV.state.plans[AV.planDate] || {};
+    return { market: p.market, bias: p.bias, select: document.querySelector('#planMarketSelect').value, chip: document.querySelector('#planMarkets .chip.on')?.dataset.m };
+  });
+  log('plan: select rynku i bias', planSelect.market === 'SOL' && planSelect.bias === 'long' && planSelect.select === 'SOL' && planSelect.chip === 'SOL', JSON.stringify(planSelect));
+
+  await page.selectOption('#planMarketSelect', '__other');
+  await page.fill('#planMarketCustom', 'EURUSD');
+  await page.waitForTimeout(900);
+  const planCustom = await page.evaluate(() => ({
+    market: (AV.state.plans[AV.planDate] || {}).market,
+    visible: getComputedStyle(document.querySelector('#planMarketCustom')).display !== 'none'
+  }));
+  log('plan: własny rynek spoza listy', planCustom.market === 'EURUSD' && planCustom.visible, JSON.stringify(planCustom));
+  await page.selectOption('#planMarketSelect', 'ETH');
+  await page.waitForTimeout(200);
+
   // dziennik: filtry
   await page.click('.navg button[data-v="trans"]');
   await page.click('#fRes [data-f="win"]');
@@ -343,6 +364,36 @@ try {
   assert.ok(liveCalc.ticker.includes('BTC') && liveCalc.ticker.includes('NAS100'), 'ticker z API: ' + liveCalc.ticker);
   log('cena live z API + czysty nagłówek', true, 'SOL/USDT ' + liveCalc.shown + ' · 8 notowań w tickerze');
 
+  // kalkulator: portfel → saldo i MM z planu
+  await page.selectOption('#cPortfolio', 'acc1');
+  const calcPortfolio = await page.evaluate(() => {
+    const acc = AV.state.accounts.find((a) => a.id === 'acc1');
+    return {
+      bal: document.querySelector('#cBal').value,
+      expected: String(acc.balance),
+      risk: document.querySelector('#cRisk').value,
+      lev: document.querySelector('#cLev').value,
+      mm: document.querySelector('#cMM').textContent,
+      account: AV.calc.accountId
+    };
+  });
+  log('kalkulator: portfel ustawia saldo i MM', calcPortfolio.bal === calcPortfolio.expected && calcPortfolio.risk === '1' && calcPortfolio.lev === '10' && calcPortfolio.mm.includes('1%') && calcPortfolio.account === 'acc1', JSON.stringify(calcPortfolio));
+
+  // kalkulator: wybór R:R i własna wartość
+  await page.selectOption('#cRR', 'custom');
+  await page.fill('#cRRCustom', '4');
+  await page.waitForTimeout(500);
+  const rrLabel = await page.locator('#cAuto').innerText();
+  await page.click('#cAuto');
+  const rrRatio = await page.evaluate(() => {
+    const en = AV.pnum(document.querySelector('#cEn').value);
+    const sl = AV.pnum(document.querySelector('#cSl').value);
+    const tp = AV.pnum(document.querySelector('#cTp').value);
+    return { en, sl, tp, ratio: (tp - en) / (en - sl) };
+  });
+  log('kalkulator: SL/TP wg wybranego R:R', /1 : 4/.test(rrLabel) && Math.abs(rrRatio.ratio - 4) < 0.2, JSON.stringify(rrRatio));
+  await page.selectOption('#cRR', '3');
+
   // statystyki
   await page.click('.navg button[data-v="stat"]');
   const st90 = await page.locator('#stResult').innerText();
@@ -350,6 +401,22 @@ try {
   const st7 = await page.locator('#stResult').innerText();
   await page.click('#statSeg [data-r="90"]');
   log('statystyki: zakresy', st90 !== st7, st90 + ' → ' + st7);
+
+  // statystyki: kalendarz PnL ma własny zakres i nawigację
+  const pnl7 = await page.evaluate(() => {
+    document.querySelector('#pnlCalSeg [data-pc="7"]').click();
+    return { cells: document.querySelectorAll('#pnlCal i').length, label: document.querySelector('#pnlCalLabel').textContent };
+  });
+  const pnlMonth = await page.evaluate(() => {
+    document.querySelector('#pnlCalSeg [data-pc="month"]').click();
+    return { cells: document.querySelectorAll('#pnlCal i').length, label: document.querySelector('#pnlCalLabel').textContent };
+  });
+  const pnlPrev = await page.evaluate(() => {
+    document.querySelector('#stat [data-pcnav="-1"]').click();
+    return document.querySelector('#pnlCalLabel').textContent;
+  });
+  log('statystyki: kalendarz PnL zmienia okres', pnl7.cells !== pnlMonth.cells && pnl7.label !== pnlMonth.label && pnlPrev !== pnlMonth.label, `${pnl7.cells} (${pnl7.label}) → ${pnlMonth.cells} (${pnlMonth.label}) → ${pnlPrev}`);
+  await page.evaluate(() => document.querySelector('#stat [data-pcnav="today"]').click());
 
   // prop challenge: szablony, create, walidacja, XSS, alert, archiwum, reload, delete
   const dayKeyLocal = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -518,20 +585,105 @@ try {
   const planFromStep = await page.evaluate(() => ({ on: document.querySelector('#plan').classList.contains('on'), hash: location.hash }));
   log('mentor: krok plan dnia → zakładka', planFromStep.on && planFromStep.hash === '#/plan', JSON.stringify(planFromStep));
 
+  // pulpit: podgląd salda portfela i skrót do ustawień balansu
+  await page.evaluate(() => AV.showView('pulpit'));
+  const dashBal = await page.evaluate(() => ({
+    val: (document.querySelector('#dashBalVal')?.textContent || '').replace(/\s+/g, ' ').trim(),
+    sub: document.querySelector('#dashBalSub')?.textContent || ''
+  }));
+  log('pulpit: podgląd salda portfela', dashBal.val.length > 0 && dashBal.sub.includes('główne'), JSON.stringify(dashBal));
+
+  await page.click('#dashBal');
+  const balGo = await page.evaluate(() => ({ view: AV.currentView, hash: location.hash }));
+  log('pulpit: saldo prowadzi do Konto i zasady', balGo.view === 'ust' && balGo.hash === '#/konto', JSON.stringify(balGo));
+
+  const balEdit = await page.evaluate(async () => {
+    const input = document.querySelector('[data-acc-balance="acc1"]');
+    if (!input) return { ok: false };
+    input.value = '2000';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return { value: AV.state.accounts.find((a) => a.id === 'acc1').balance, total: AV.totalCapital(AV.state) };
+  });
+  log('konto: edycja salda zapisuje portfel', balEdit.value === 2000 && balEdit.total >= 2000, JSON.stringify(balEdit));
+
   // akademia
   await page.click('.navg button[data-v="akad"]');
-  const liveHrefAgain = await page.locator('#liveJoin').getAttribute('href');
-  assert.match(liveHrefAgain || '', /^https:\/\/discord\.com\/events\/\d{17,20}\/\d{17,20}$/);
-  log('akademia: link wydarzenia Discord', true, liveHrefAgain);
+  const liveJoinState = await page.evaluate(() => ({
+    href: document.querySelector('#liveJoin')?.getAttribute('href') || '',
+    hidden: getComputedStyle(document.querySelector('#liveJoin')).display === 'none',
+    note: document.querySelector('#liveJoinNote')?.textContent || ''
+  }));
+  log('akademia: „Dołącz” dopiero 15 min przed startem', liveJoinState.hidden && /15 minut przed startem/.test(liveJoinState.note), JSON.stringify(liveJoinState).slice(0, 180));
 
   const recording = await page.evaluate(() => {
-    AV.openRecording('Test nagrania');
+    const rec = AV.state.recordings[0];
+    AV.openRecording(rec.id);
     const modal = document.querySelector('.modal.on');
-    const out = { text: modal?.innerText || '', discord: !!modal?.querySelector('a[href^="https://discord.com"]') };
+    const out = {
+      hasInput: !!modal?.querySelector('#recUrlInput'),
+      fake: (modal?.innerText || '').includes('Odtwarzanie w wersji produkcyjnej')
+    };
     AV.closeModal();
     return out;
   });
-  log('nagrania: link do Discorda bez fałszywego playera', recording.discord && !recording.text.includes('Odtwarzanie w wersji produkcyjnej'), JSON.stringify(recording).slice(0, 160));
+  log('nagrania: brak linku → pole na link, bez fałszywego playera', recording.hasInput && !recording.fake, JSON.stringify(recording));
+
+  await page.click('#recCats [data-rcat="Poranna odprawa"]');
+  const recFiltered = await page.locator('#recList .rec').count();
+  await page.click('#recList .rec');
+  await page.fill('#recUrlInput', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+  await page.click('#recUrlSave');
+  await page.waitForTimeout(250);
+  const recPlay = await page.evaluate(() => ({
+    iframe: !!document.querySelector('.modal.on iframe'),
+    url: (AV.state.recordings.find((r) => r.id === 'rec1') || {}).url || ''
+  }));
+  await page.evaluate(() => AV.closeModal());
+  log('nagrania: kategorie i odtwarzanie z linku', recFiltered === 1 && recPlay.iframe && /youtube/.test(recPlay.url), `${recFiltered} w kategorii, iframe=${recPlay.iframe}`);
+
+  const acadSchedule = await page.evaluate(() => {
+    document.querySelector('#acadSeg [data-s="month"]').click();
+    const month = { cells: document.querySelectorAll('#acad .mcell').length, range: document.querySelector('#acadRange').textContent, cls: document.querySelector('#acad').className };
+    document.querySelector('#acadSeg [data-s="week"]').click();
+    const week = { days: document.querySelectorAll('#acad .aday').length, range: document.querySelector('#acadRange').textContent };
+    return { month, week };
+  });
+  log('akademia: harmonogram tydzień/miesiąc', acadSchedule.month.cells >= 28 && acadSchedule.month.cls === 'mcal' && acadSchedule.week.days === 7, JSON.stringify(acadSchedule));
+
+  const remCustom = await page.evaluate(() => {
+    const sel = document.querySelector('#liveRemMin');
+    sel.value = '30';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return { value: AV.state.settings.liveReminderMinutes, label: document.querySelector('#liveRem').textContent };
+  });
+  log('akademia: własny czas przypomnienia', remCustom.value === 30 && /30 min/.test(remCustom.label), JSON.stringify(remCustom));
+
+  const materials = await page.evaluate(() => {
+    AV.openGlossary();
+    const total = document.querySelectorAll('#glossList .kv').length;
+    const search = document.querySelector('#glossSearch');
+    search.value = 'staking';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    const filtered = document.querySelectorAll('#glossList .kv').length;
+    AV.closeModal();
+    AV.openAlphaTest();
+    AV.ALPHA_TEST.forEach((x, i) => {
+      const el = document.querySelector('input[name="at' + i + '"][value="' + x.ok + '"]');
+      if (el) el.checked = true;
+    });
+    document.querySelector('#alphaTestSubmit').click();
+    const score = AV.state.meta.alphaTestScore;
+    const result = document.querySelector('#alphaTestResult').textContent;
+    AV.closeModal();
+    AV.openGoldenRules();
+    const rules = document.querySelectorAll('.modal.on .row').length;
+    AV.closeModal();
+    return { total, filtered, score, result, rules, glossary: AV.GLOSSARY.length };
+  });
+  log('akademia: słownik z wyszukiwaniem', materials.total === materials.glossary && materials.filtered === 1, `${materials.total} pojęć, filtr=${materials.filtered}`);
+  log('akademia: Alpha Testy zapisują wynik', materials.score === 6 && /6 \/ 6/.test(materials.result), JSON.stringify({ score: materials.score, result: materials.result }));
+  log('akademia: złote zasady bezpieczeństwa', materials.rules === 8, materials.rules + ' zasad');
 
   const emptyJournal = await page.evaluate(() => {
     const backup = AV.state.trades;
@@ -546,12 +698,18 @@ try {
 
   // kalendarz
   await page.click('.navg button[data-v="kal"]');
+  const calWeek0 = await page.locator('#calRange').innerText();
   const ev0 = await page.locator('#evFull .ev').count();
   await page.click('#calSeg [data-w="1"]');
   const ev1 = await page.locator('#evFull .ev').count();
+  await page.click('#calSeg [data-w="2"]');
+  const ev2 = await page.locator('#evFull .ev').count();
+  const calWeek2 = await page.locator('#calRange').innerText();
   await page.click('#calSeg [data-w="0"]');
+  const calBack = await page.locator('#calRange').innerText();
   const widget = await page.locator('#mwList .mev').count();
   log('kalendarz: tygodnie', ev1 > 0, `${ev0} → ${ev1}`);
+  log('kalendarz: kolejne tygodnie i powrót', ev2 > 0 && calWeek2 !== calWeek0 && calBack === calWeek0, `${calWeek0} → ${calWeek2} → ${calBack}`);
   log('makro: widget z API', widget > 0, `${widget} wydarzeń`);
 
   // ciało: check-in

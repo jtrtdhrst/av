@@ -166,6 +166,27 @@
     AV.setText('#dashGradeA', Math.round((stats.byGrade.find((g) => g.grade === 'A')?.n || 0) / (stats.n || 1) * 100) + '%');
     AV.renderSpark(stats.curve);
     AV.renderDashMentor(today);
+    AV.renderDashBalance();
+  };
+
+  AV.renderDashBalance = () => {
+    const s = AV.state;
+    const accounts = Array.isArray(s.accounts) ? s.accounts : [];
+    const total = AV.totalCapital(s);
+    const startTotal = AV.startCapital(s);
+    const primary = accounts.find((a) => a.primary) || accounts[0] || null;
+    const cur = AV.curLabel();
+    AV.setHTML('#dashBalVal', accounts.length
+      ? AV.fmt(total, 2) + ' <span class="mut" style="font-size:12px;font-weight:600">' + AV.esc(cur) + '</span>'
+      : '');
+    const pct = startTotal > 0 && accounts.length ? (total - startTotal) / startTotal * 100 : null;
+    let sub = 'Dodaj pierwsze konto i wpisz balans w Konto i zasady.';
+    if (accounts.length) {
+      sub = accounts.length + ' ' + AV.plural(accounts.length, 'konto', 'konta', 'kont') +
+        (primary ? ' · główne: ' + primary.name : '') +
+        (pct === null ? '' : ' · ' + AV.signed(pct, 1, '%') + ' od startu');
+    }
+    AV.setText('#dashBalSub', sub + ' · ustaw balans');
   };
 
   AV.renderSpark = (curve) => {
@@ -202,6 +223,26 @@
 
   /* ---------- plan dnia ---------- */
   AV.planDate = AV.planDate || AV.dateKey(new Date());
+  AV.PLAN_MARKETS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'LINK', 'AVAX', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCHF', 'USDCAD', 'NZDUSD', 'EURGBP', 'NAS100', 'US500', 'US30', 'GER40', 'UK100', 'JPN225', 'XAUUSD', 'XAGUSD', 'OIL'];
+  AV.syncPlanMarket = (p) => {
+    const sel = $('#planMarketSelect');
+    const input = $('#planMarketCustom');
+    if (!sel) return;
+    if (!sel.dataset.built) {
+      sel.innerHTML = '<option value="">— wybierz rynek —</option>' +
+        AV.PLAN_MARKETS.map((m) => '<option value="' + AV.attr(m) + '">' + AV.esc(m) + '</option>').join('') +
+        '<option value="__other">Inny rynek…</option>';
+      sel.dataset.built = '1';
+    }
+    const market = String((p && p.market) || '');
+    const known = AV.PLAN_MARKETS.includes(market);
+    sel.value = !market ? '' : (known ? market : '__other');
+    if (input) {
+      input.style.display = sel.value === '__other' ? '' : 'none';
+      if (!known && market && document.activeElement !== input) input.value = market;
+    }
+    $$('#planMarkets .chip').forEach((c) => c.classList.toggle('on', c.dataset.m === market));
+  };
   AV.renderPlan = () => {
     const s = AV.state;
     const key = AV.planDate;
@@ -213,7 +254,7 @@
     const active = document.activeElement;
     const editing = !!(editor && active && active !== document.body && editor.contains(active));
     if (!editing) {
-      $$('#planMarkets .chip').forEach((c) => c.classList.toggle('on', c.dataset.m === p.market));
+      AV.syncPlanMarket(p);
       $$('#planBias .chip').forEach((c) => c.classList.toggle('on', c.dataset.b === p.bias));
       AV.setVal('#planWhy', p.why || '');
       AV.setVal('#planIfMain', p.ifMain || '');
@@ -240,9 +281,14 @@
       price: row.querySelectorAll('input')[0].value.trim(),
       note: row.querySelectorAll('input')[1].value.trim()
     }));
+    const sel = $('#planMarketSelect');
+    const selVal = sel ? sel.value : '';
+    const market = selVal === '__other'
+      ? ($('#planMarketCustom')?.value || '').trim()
+      : (selVal || $('#planMarkets .chip.on')?.dataset.m || '');
     return {
       date: AV.planDate,
-      market: $('#planMarkets .chip.on')?.dataset.m || '',
+      market: market,
       bias: $('#planBias .chip.on')?.dataset.b || '',
       why: $('#planWhy').value.trim(),
       levels: opts.pruneEmptyLevels ? levels.filter((l) => l.price || l.note) : levels,

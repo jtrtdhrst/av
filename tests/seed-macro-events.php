@@ -57,6 +57,14 @@ $fixture = [
         'forecast' => '-0,6M',
         'previous' => '-0,9M',
     ],
+    [
+        'title' => 'Decyzja Fed',
+        'country' => 'USD',
+        'date' => $nextMonday->modify('+8 days')->setTime(20, 0)->format('Y-m-d\TH:i:sP'),
+        'impact' => 'High',
+        'forecast' => '',
+        'previous' => '',
+    ],
 ];
 
 $result = $macro->syncPayload(MacroEvents::normalize($fixture));

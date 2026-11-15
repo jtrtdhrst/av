@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.9.6 — 2026-11-15
+
+### Dodane
+- Pulpit: karta „Saldo portfela” z sumą sald, wynikiem od kapitału startowego i skrótem do „Konto i zasady”; kapitał startowy i saldo konta są edytowalne w tabeli.
+- Plan dnia: lista wszystkich instrumentów + „Inny rynek…” z własną nazwą obok chipów; bias jako przyciski.
+- Kalkulator: wybór portfela ustawia saldo, dźwignię i limit MM z zasad; wybór R:R 1:1/1:2/1:3/1:5 lub własny steruje sugestią SL/TP; stan wraca po przeładowaniu.
+- Akademia: „Dołącz” od 15 minut przed startem, przypomnienie 5/15/30/60 min, harmonogram tydzień/miesiąc z nawigacją, kategorie nagrań i odtwarzanie z linku (YouTube w panelu), słownik krypto z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady bezpieczeństwa.
+- Statystyki: kalendarz PnL z własnym zakresem 7/30 dni albo miesiąc i nawigacją okresu.
+- Kalendarz makro: poprzedni/ten/następny/+2/+3 tydzień i zakres dat w nagłówku.
+
+### Naprawione
+- Responsywność: usunięte obcinanie treści (`main{overflow-x:clip}`), gridy `minmax(0,1fr)`, poprawione wiersze poziomów, tabele i pasek górny; na 390 i 1024 px żaden widok nie wystaje poza ekran.
+
+### Testy
+- UI e2e: saldo portfela i edycja salda, select rynku i własny rynek, portfel/MM i R:R w kalkulatorze, kalendarz PnL, harmonogram i materiały Akademii, nawigacja tygodni makro.
+- PWA e2e: brak przepełnienia we wszystkich 15 widokach przy 390 i 1024 px (prostokąty elementów + `scrollWidth`).
+
 ## 3.9.5 — 2026-11-13
 
 ### Naprawione

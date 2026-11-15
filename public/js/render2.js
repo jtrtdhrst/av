@@ -10,6 +10,23 @@
       AV.ui.statRange = b.dataset.r === 'all' ? 'all' : Number(b.dataset.r);
       AV.renderStats();
     });
+    $('#pnlCalSeg')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pc]'); if (!b) return;
+      AV.ui.pnlMode = b.dataset.pc;
+      AV.ui.pnlAnchor = new Date();
+      AV.renderPnlCal(AV.dailyMap(AV.closedTrades(AV.state)));
+    });
+    $$('#stat [data-pcnav]').forEach((b) => b.addEventListener('click', () => {
+      const v = b.dataset.pcnav;
+      if (v === 'today') AV.ui.pnlAnchor = new Date();
+      else if (AV.ui.pnlMode === 'month') {
+        const a = AV.ui.pnlAnchor;
+        AV.ui.pnlAnchor = new Date(a.getFullYear(), a.getMonth() + (Number(v) || 0), 1);
+      } else {
+        AV.ui.pnlAnchor = AV.addDays(AV.ui.pnlAnchor, (Number(v) || 0) * (Number(AV.ui.pnlMode) || 30));
+      }
+      AV.renderPnlCal(AV.dailyMap(AV.closedTrades(AV.state)));
+    }));
   };
   AV.ui.statRange = 90;
   AV.renderStats = () => {
@@ -36,14 +53,13 @@
     setVal('stFees', st.fees ? '−' + AV.fmt(st.fees, 2) : '0,00', st.fees ? 'warnc' : '');
     AV.setText('#stFeesHint', empty ? '—' : st.gp ? Math.round(st.fees / st.gp * 100) + '% zysków brutto' : 'brak zysków');
     AV.renderEquity(st);
-    AV.renderPnlCal(st);
+    AV.renderPnlCal(AV.dailyMap(AV.closedTrades(s)));
     AV.renderGradeStats(st);
     AV.renderChecklistStats(st);
     AV.renderErrorCost(st);
     AV.renderMae(st);
     AV.renderGroups(st);
     AV.setText('#eqLabel', AV.dispMoney(AV.startCapital(s), 0) + ' → ' + AV.dispMoney(AV.startCapital(s) + st.net, 0));
-    AV.setText('#pnlCalLabel', AV.ui.statRange === 'all' ? 'wszystko' : AV.ui.statRange + ' dni');
   };
 
   AV.renderEquity = (st) => {
@@ -63,21 +79,44 @@
     svg.innerHTML = g;
   };
 
-  AV.renderPnlCal = (st) => {
+  AV.ui.pnlMode = AV.ui.pnlMode || '30';
+  AV.ui.pnlAnchor = AV.ui.pnlAnchor || new Date();
+  AV.renderPnlCal = (daily) => {
     const el = $('#pnlCal');
     if (!el) return;
+    const map = daily || {};
     const today = AV.startOfDay(new Date());
-    const start = AV.addDays(AV.monday(today), -28);
+    const mode = AV.ui.pnlMode;
+    const anchor = AV.startOfDay(AV.ui.pnlAnchor);
+    let first, last, label;
+    if (mode === 'month') {
+      first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+      last = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
+      label = first.toLocaleDateString('pl-PL', { month: 'long', year: 'numeric' });
+    } else {
+      const days = Number(mode) || 30;
+      first = AV.addDays(anchor, -(days - 1));
+      last = anchor;
+      label = first.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }) + ' – ' +
+        last.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }) + ' · ' + days + ' dni';
+    }
+    const lead = (first.getDay() || 7) - 1;
+    const span = Math.round((last - first) / 86400000) + 1;
+    const cells = Math.ceil((lead + span) / 7) * 7;
+    const start = AV.addDays(first, -lead);
     let h = ['pn', 'wt', 'śr', 'czw', 'pt', 'sb', 'nd'].map((d) => '<i class="h">' + d + '</i>').join('');
-    for (let i = 0; i < 35; i++) {
+    for (let i = 0; i < cells; i++) {
       const d = AV.addDays(start, i), k = AV.dateKey(d);
-      const v = st.daily[k] || 0;
+      const inRange = d >= first && d <= last;
+      const v = map[k] || 0;
       const future = d > today;
       const a = Math.min(0.85, 0.12 + Math.abs(v) / 80);
-      const bg = future ? 'rgba(255,255,255,.015)' : v === 0 ? 'rgba(255,255,255,.04)' : v > 0 ? 'rgba(79,207,138,' + a + ')' : 'rgba(255,93,98,' + a + ')';
-      h += '<i style="background:' + bg + '" title="' + k + ': ' + (v ? AV.money(v, 2) : 'bez handlu') + '"></i>';
+      const bg = !inRange ? 'transparent' : future ? 'rgba(255,255,255,.015)' : v === 0 ? 'rgba(255,255,255,.04)' : v > 0 ? 'rgba(79,207,138,' + a + ')' : 'rgba(255,93,98,' + a + ')';
+      h += '<i style="background:' + bg + ';' + (inRange ? '' : 'opacity:.25;') + '" title="' + k + ': ' + (v ? AV.money(v, 2) : 'bez handlu') + '">' + d.getDate() + '</i>';
     }
     el.innerHTML = h;
+    AV.setText('#pnlCalLabel', label);
+    $$('#pnlCalSeg .chip').forEach((c) => c.classList.toggle('on', c.dataset.pc === mode));
   };
 
   AV.renderGradeStats = (st) => {
@@ -470,6 +509,64 @@
     return { now, target: start, sec, liveNow, live };
   };
 
+  AV.ui.acadScale = AV.ui.acadScale || 'week';
+  AV.ui.acadOffset = AV.ui.acadOffset || 0;
+  AV.renderAcadSchedule = (events, todayKey) => {
+    const box = $('#acad');
+    if (!box) return;
+    const [y, m, d] = todayKey.split('-').map(Number);
+    const dayKey = (dt) => dt.toISOString().slice(0, 10);
+    const evFor = (key) => events.filter((e) => e.localDate === key);
+    $$('#acadSeg button').forEach((b) => b.classList.toggle('on', b.dataset.s === AV.ui.acadScale));
+    if (AV.ui.acadScale === 'month') {
+      const base = new Date(Date.UTC(y, m - 1, 1, 12));
+      base.setUTCMonth(base.getUTCMonth() + AV.ui.acadOffset);
+      const year = base.getUTCFullYear(), mon = base.getUTCMonth();
+      const first = new Date(Date.UTC(year, mon, 1, 12));
+      const lead = (first.getUTCDay() || 7) - 1;
+      const total = new Date(Date.UTC(year, mon + 1, 0, 12)).getUTCDate();
+      const cells = [];
+      for (let i = 0; i < lead; i++) cells.push(null);
+      for (let i = 1; i <= total; i++) cells.push(new Date(Date.UTC(year, mon, i, 12)));
+      while (cells.length % 7) cells.push(null);
+      let h = ['pn', 'wt', 'śr', 'czw', 'pt', 'sb', 'nd'].map((x) => '<div class="mchead">' + x + '</div>').join('');
+      cells.forEach((dt) => {
+        if (!dt) { h += '<div class="mcell pad"></div>'; return; }
+        const key = dayKey(dt), evs = evFor(key);
+        h += '<div class="mcell ' + (key === todayKey ? 'today' : '') + '" title="' + AV.attr(evs.map((e) => (e.localTime || '') + ' ' + e.name).join(' | ')) + '">' +
+          '<div class="dnum">' + dt.getUTCDate() + '</div>' +
+          (evs.length > 2
+            ? '<span class="dot"></span><b>' + evs.length + ' wydarzenia</b>'
+            : evs.map((e) => '<b>' + AV.esc(e.localTime || '') + ' ' + AV.esc(e.name) + '</b>').join('')) +
+          '</div>';
+      });
+      box.className = 'mcal';
+      box.innerHTML = h;
+      AV.setText('#acadRange', first.toLocaleDateString('pl-PL', { timeZone: 'UTC', month: 'long', year: 'numeric' }));
+      return;
+    }
+    const monday = new Date(Date.UTC(y, m - 1, d, 12));
+    monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() || 7) + 1 + AV.ui.acadOffset * 7);
+    const labels = ['PN', 'WT', 'ŚR', 'CZW', 'PT', 'SB', 'ND'];
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const dt = new Date(monday);
+      dt.setUTCDate(monday.getUTCDate() + i);
+      days.push({ key: dayKey(dt), label: labels[i], today: dayKey(dt) === todayKey });
+    }
+    box.className = 'acad';
+    box.innerHTML = days.map((day) => {
+      const evs = evFor(day.key);
+      return '<div class="aday ' + (day.today ? 'today' : '') + '"><div class="d">' + day.label + (day.today ? ' · DZIŚ' : '') + '</div>' +
+        evs.map((e) => '<b>' + AV.esc(e.name) + '</b><span>' + AV.esc(e.host || '') + '</span><span class="mono" style="margin-top:8px">' +
+          AV.esc(e.localTime || '') + (e.userCount !== null && e.userCount !== undefined ? ' · ' + e.userCount + ' os.' : '') + '</span>').join('') +
+        '</div>';
+    }).join('');
+    const sunday = new Date(monday);
+    sunday.setUTCDate(monday.getUTCDate() + 6);
+    AV.setText('#acadRange', monday.toLocaleDateString('pl-PL', { timeZone: 'UTC', day: '2-digit', month: '2-digit' }) + ' – ' + sunday.toLocaleDateString('pl-PL', { timeZone: 'UTC', day: '2-digit', month: '2-digit' }));
+  };
+
   AV.renderAcademy = () => {
     const s = AV.state;
     const data = AV.api.events || { live: [], consultations: [], unassigned: [], nextConsultation: null, sync: null };
@@ -493,16 +590,40 @@
     showEl('#liveTop', !!live);
     showEl('#liveSep', !!live);
     const join = document.querySelector('#liveJoin');
+    let joinOpen = false, joinOpensAt = null;
+    if (live && live.startAt) {
+      const startMs = new Date(live.startAt).getTime();
+      const endMs = live.endAt ? new Date(live.endAt).getTime() : startMs + 3 * 3600 * 1000;
+      const nowMs = Date.now();
+      joinOpen = nowMs >= startMs - 15 * 60 * 1000 && nowMs <= endMs;
+      joinOpensAt = new Date(startMs - 15 * 60 * 1000);
+    }
     if (join) {
       if (live && live.url) {
         join.href = live.url;
-        join.style.display = '';
+        join.style.display = joinOpen ? '' : 'none';
       } else {
         join.removeAttribute('href');
         join.style.display = 'none';
       }
     }
+    if (live && live.url && !joinOpen && joinOpensAt) {
+      AV.setText('#liveJoinNote', 'Przycisk „Dołącz” odblokuje się 15 minut przed startem, o ' + AV.timeFmt(joinOpensAt, s) + '.');
+    } else if (live && joinOpen) {
+      AV.setText('#liveJoinNote', 'Dołączanie otwarte — wejdź na Discorda.');
+    } else {
+      AV.setText('#liveJoinNote', '');
+    }
     showEl('#liveRem', !!live);
+    showEl('#liveRemMin', !!live);
+    showEl('#liveJoinNote', !!live);
+    const remMins = [5, 15, 30, 60].includes(Number(s.settings.liveReminderMinutes)) ? Number(s.settings.liveReminderMinutes) : 15;
+    const remSel = document.querySelector('#liveRemMin');
+    if (remSel) remSel.value = String(remMins);
+    const remBtn = document.querySelector('#liveRem');
+    if (remBtn) {
+      remBtn.innerHTML = '<svg class="i"><use href="#i-bell"/></svg>' + (s.meta.liveReminder ? 'Przypomnienie włączone · ' + remMins + ' min' : 'Przypomnij ' + remMins + ' min przed');
+    }
 
     const c = data.nextConsultation;
     if (c) {
@@ -532,27 +653,8 @@
     const bar = document.querySelector('#consultBar');
     if (bar) bar.style.width = Math.min(100, (used / 3) * 100) + '%';
 
-    const labels = ['PN', 'WT', 'ŚR', 'CZW', 'PT', 'SB', 'ND'];
-    const [y, m, d] = todayKey.split('-').map(Number);
-    const monday = new Date(Date.UTC(y, m - 1, d, 12));
-    const dow = monday.getUTCDay() || 7;
-    monday.setUTCDate(monday.getUTCDate() - dow + 1);
-
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      const dt = new Date(monday);
-      dt.setUTCDate(monday.getUTCDate() + i);
-      const key = dt.toISOString().slice(0, 10);
-      days.push({ key, label: labels[i], today: key === todayKey });
-    }
     const liveEvents = (data.live || []).slice().sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
-    AV.setHTML('#acad', days.map((day) => {
-      const events = liveEvents.filter((e) => e.localDate === day.key);
-      return '<div class="aday ' + (day.today ? 'today' : '') + '"><div class="d">' + day.label + (day.today ? ' · DZIŚ' : '') + '</div>' +
-        events.map((e) => '<b>' + AV.esc(e.name) + '</b><span>' + AV.esc(e.host || '') + '</span><span class="mono" style="margin-top:8px">' +
-          AV.esc(e.localTime || '') + (e.userCount !== null && e.userCount !== undefined ? ' · ' + e.userCount + ' os.' : '') + '</span>').join('') +
-        '</div>';
-    }).join(''));
+    AV.renderAcadSchedule(liveEvents, todayKey);
 
     const sync = data.sync;
     if (sync && sync.lastSuccessAt) {
@@ -584,6 +686,18 @@
         set('#adminSyncState', sync && sync.stale ? 'synchronizacja nieaktualna' : (sync && sync.lastSuccessAt ? 'zsynchronizowano' : ''));
       }
     }
+
+    const recs = Array.isArray(s.recordings) ? s.recordings : [];
+    if (!AV.ui.recCat) AV.ui.recCat = 'Wszystkie';
+    const cats = ['Wszystkie'].concat(Array.from(new Set(recs.map((r) => r.category).filter(Boolean))));
+    if (!cats.includes(AV.ui.recCat)) AV.ui.recCat = 'Wszystkie';
+    AV.setHTML('#recCats', cats.length > 1 ? cats.map((c) => '<button type="button" class="chip ' + (c === AV.ui.recCat ? 'on' : '') + '" data-rcat="' + AV.attr(c) + '">' + AV.esc(c) + '</button>').join('') : '');
+    const visibleRecs = recs.filter((r) => AV.ui.recCat === 'Wszystkie' || r.category === AV.ui.recCat);
+    AV.setHTML('#recList', visibleRecs.map((r) =>
+      '<div class="rec" data-recording="' + AV.attr(r.id || r.title) + '" style="cursor:pointer"><div class="th">' + AV.ic('play') + '</div><div><b>' + AV.esc(r.title) + '</b><span>' +
+      AV.esc([r.category, r.meta].filter(Boolean).join(' · ')) + '</span></div></div>').join(''));
+    AV.setText('#glossaryCount', AV.GLOSSARY.length + ' ' + AV.plural(AV.GLOSSARY.length, 'pojęcie', 'pojęcia', 'pojęć'));
+    AV.setText('#alphaTestScore', s.meta.alphaTestScore ? 'Wynik: ' + s.meta.alphaTestScore + ' z ' + AV.ALPHA_TEST.length : 'Test Tradera · Mini Gry');
 
     AV.show('#akUp', s.subscription.plan === 'solo');
     AV.show('#akFull', s.subscription.plan !== 'solo');
@@ -621,6 +735,7 @@
     const events = AV.buildEvents();
     const monday = AV.addDays(AV.monday(new Date()), AV.ui.weekOffset * 7);
     const sunday = AV.addDays(monday, 6);
+    AV.setText('#calRange', monday.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }) + ' – ' + sunday.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }));
     const list = events.filter((e) => {
       const d = new Date(e.date);
       return d >= AV.startOfDay(monday) && d <= new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate(), 23, 59, 59);
@@ -1173,7 +1288,7 @@
     const s = AV.state;
     AV.setHTML('#accBody', s.accounts.map((a) => {
       const pct = a.start ? (a.balance - a.start) / a.start * 100 : 0;
-      return '<tr><td><b>' + AV.esc(a.name) + '</b> <span class="dim" style="font-size:12px">' + (a.primary ? '· główne' : '') + (a.primary ? '' : ' <span class="link" data-acc-del="' + a.id + '">usuń</span>') + '</span></td><td class="mut">' + AV.esc(a.type) + '</td><td class="mono">' + AV.esc(a.currency) + '</td><td class="mono" style="text-align:right">' + AV.fmt(a.start, 2) + '</td><td class="mono dim">' + AV.esc(a.date) + '</td><td class="mono" style="text-align:right">' + AV.fmt(a.balance, 2) + '</td><td class="mono ' + (pct >= 0 ? 'win' : 'loss') + '" style="text-align:right">' + AV.signed(pct, 1, '%') + '</td><td class="mono">' + AV.esc(a.lev) + '</td><td><div class="toggle ' + (a.include ? 'on' : '') + '" data-acc-inc="' + a.id + '"></div></td></tr>';
+      return '<tr><td><b>' + AV.esc(a.name) + '</b> <span class="dim" style="font-size:12px">' + (a.primary ? '· główne' : '') + (a.primary ? '' : ' <span class="link" data-acc-del="' + a.id + '">usuń</span>') + '</span></td><td class="mut">' + AV.esc(a.type) + '</td><td class="mono">' + AV.esc(a.currency) + '</td><td class="mono" style="text-align:right"><input class="input mono" data-acc-start="' + AV.attr(a.id) + '" value="' + AV.attr(a.start ? String(a.start) : '') + '" inputmode="decimal" aria-label="Kapitał startowy" style="text-align:right;padding:6px 8px"></td><td class="mono dim">' + AV.esc(a.date) + '</td><td class="mono" style="text-align:right"><input class="input mono" data-acc-balance="' + AV.attr(a.id) + '" value="' + AV.attr(a.balance === 0 ? '0' : String(a.balance || '')) + '" inputmode="decimal" aria-label="Saldo" style="text-align:right;padding:6px 8px"></td><td class="mono ' + (pct >= 0 ? 'win' : 'loss') + '" style="text-align:right">' + AV.signed(pct, 1, '%') + '</td><td class="mono">' + AV.esc(a.lev) + '</td><td><div class="toggle ' + (a.include ? 'on' : '') + '" data-acc-inc="' + a.id + '"></div></td></tr>';
     }).join(''));
   };
 
