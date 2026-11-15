@@ -54,7 +54,7 @@ final class MacroService
 
         $totalRow = $this->db->queryOne('SELECT COUNT(*) AS n FROM macro_events WHERE ' . $whereSql, $params);
         $rows = $this->db->query(
-            'SELECT id, source, name, description, currency, impact, starts_at_iso, forecast, previous
+            'SELECT id, external_id, source, name, description, currency, impact, starts_at_iso, forecast, previous
              FROM macro_events WHERE ' . $whereSql . ' ORDER BY starts_at_utc ASC LIMIT ' . $limit . ' OFFSET ' . $offset,
             $params
         );
@@ -65,6 +65,7 @@ final class MacroService
 
             return [
                 'id' => (string) $row['id'],
+                'externalId' => (string) $row['external_id'],
                 'source' => (string) $row['source'],
                 'name' => (string) $row['name'],
                 'description' => $row['description'] !== null ? mb_substr((string) $row['description'], 0, 500) : null,
