@@ -125,7 +125,10 @@ final class TradeService
             if (!Dates::isValidKey($to)) {
                 throw new \InvalidArgumentException('Pole to musi mieć format YYYY-MM-DD.');
             }
-            $toTs = Dates::startOfLocalDay($to)->modify('+1 day')->getTimestamp();
+            $toTs = Dates::startOfNextLocalDay($to)->getTimestamp();
+        }
+        if ($from !== '' && $to !== '' && $from > $to) {
+            throw new \InvalidArgumentException('Pole from nie może być późniejsze niż to.');
         }
 
         $filtered = [];
@@ -152,7 +155,7 @@ final class TradeService
             if ($grade !== '' && strtoupper((string) ($trade['grade'] ?? '')) !== $grade) {
                 continue;
             }
-            $ts = strtotime((string) ($trade['date'] ?? '')) ?: 0;
+            $ts = Dates::timestamp((string) ($trade['date'] ?? '')) ?? 0;
             if ($fromTs !== null && $ts < $fromTs) {
                 continue;
             }
@@ -163,7 +166,7 @@ final class TradeService
         }
 
         usort($filtered, static function (array $a, array $b): int {
-            return (strtotime((string) ($b['date'] ?? '')) ?: 0) <=> (strtotime((string) ($a['date'] ?? '')) ?: 0);
+            return (Dates::timestamp((string) ($b['date'] ?? '')) ?? 0) <=> (Dates::timestamp((string) ($a['date'] ?? '')) ?? 0);
         });
 
         $total = count($filtered);
@@ -206,24 +209,15 @@ final class TradeService
             $this->closedTrades($state),
             static fn (array $trade): bool => (string) ($trade['setup'] ?? '') === $setupName
         ));
-        $wins = array_values(array_filter($trades, static fn (array $trade): bool => (float) $trade['result'] > 0));
-        $net = 0.0;
-        $rSum = 0.0;
-        $rCount = 0;
-        foreach ($trades as $trade) {
-            $net += (float) $trade['result'];
-            if (isset($trade['r']) && $trade['r'] !== null) {
-                $rSum += (float) $trade['r'];
-                $rCount++;
-            }
-        }
+        $metrics = Metrics::summarize($trades);
 
         return [
-            'trades' => count($trades),
-            'wins' => count($wins),
-            'winRate' => $trades !== [] ? Numbers::round(count($wins) / count($trades) * 100) : 0.0,
-            'net' => Numbers::round($net),
-            'avgR' => $rCount > 0 ? Numbers::round($rSum / $rCount) : 0.0,
+            'trades' => $metrics['sampleSize'],
+            'wins' => $metrics['wins'],
+            'breakeven' => $metrics['breakeven'],
+            'winRate' => $metrics['winRate'],
+            'net' => $metrics['net'],
+            'avgR' => $metrics['avgR'],
         ];
     }
 
@@ -253,6 +247,7 @@ final class TradeService
             'takeProfitPrice' => $tpRaw === '—' ? null : Numbers::round(Numbers::pnum($tpRaw), 8),
             'sizeValue' => Numbers::round(Numbers::pnum($trade['size'] ?? 0), 8),
             'exit' => $trade['exit'] ?? null,
+            'closedAt' => $trade['closedAt'] ?? null,
             'result' => $trade['result'] !== null ? Numbers::round((float) $trade['result']) : null,
             'r' => $trade['r'] !== null ? Numbers::round((float) $trade['r']) : null,
             'grade' => $trade['grade'] ?? null,

@@ -32,7 +32,8 @@ const keys = [
   'MCP_REFRESH_TOKEN_TTL',
   'MCP_AUTH_CODE_TTL',
   'MCP_BODY_LIMIT',
-  'MCP_LOG_FILE'
+  'MCP_LOG_FILE',
+  'MCP_BUILD_SHA'
 ];
 
 const out = {};

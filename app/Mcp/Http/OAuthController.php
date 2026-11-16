@@ -549,6 +549,7 @@ final class OAuthController
             'ok' => true,
             'service' => 'alphavault-mcp',
             'version' => $this->config->version,
+            'revision' => $this->config->mcp['buildSha'] !== '' ? $this->config->mcp['buildSha'] : null,
             'db' => $db,
             'now' => gmdate('Y-m-d\TH:i:s\Z'),
             'mcp' => [

@@ -79,9 +79,13 @@ final class WriteEngine
     ];
 
     private const TRADE_EDITABLE = [
-        'pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size', 'result', 'r', 'fee',
-        'mae', 'mfe', 'durationMin', 'grade', 'checklist', 'checkTotal', 'errors',
+        'pair', 'dir', 'entry', 'sl', 'tp', 'size', 'fee',
+        'mae', 'mfe', 'grade', 'emotion', 'checklist', 'checkTotal', 'errors',
         'note', 'mentor', 'setup', 'session', 'plan', 'date', 'account',
+    ];
+    private const CLOSED_TRADE_EXECUTION_FIELDS = [
+        'pair', 'dir', 'entry', 'sl', 'tp', 'size', 'fee', 'mae', 'mfe',
+        'date', 'account', 'session', 'plan',
     ];
 
     private const REVIEW_FIELDS = ['grade', 'setup', 'emotion', 'errors', 'note', 'checklist', 'recommendations'];
@@ -402,7 +406,7 @@ final class WriteEngine
             'errors' => $this->stringList($args['errors'] ?? [], 'errors', 10, 80),
             'emotion' => $emotion,
             'note' => $this->text($args['note'] ?? '', 2000),
-            'mentor' => $this->mentorForGrade($grade, (array) ($args['errors'] ?? [])),
+            'mentor' => $this->mentorForGrade($grade, (array) ($args['errors'] ?? []), $checklist, $checkTotal),
             'setup' => $setup,
             'session' => $this->text($args['session'] ?? $this->sessionNow(), 40),
             'mae' => 0,
@@ -450,6 +454,14 @@ final class WriteEngine
         if ($allowed === []) {
             throw new WriteException('bad_request', 'changes nie może być puste.');
         }
+        if (($trade['result'] ?? null) !== null
+            && array_intersect(array_keys($allowed), self::CLOSED_TRADE_EXECUTION_FIELDS) !== []) {
+            throw new WriteException(
+                'closed_trade_execution_readonly',
+                'Pola wykonania zamkniętej transakcji są niezmienne; poprawiaj wyłącznie ocenę i recenzję.',
+                409
+            );
+        }
 
         $updated = $trade;
         if (isset($allowed['pair'])) {
@@ -480,11 +492,6 @@ final class WriteEngine
                 $updated[$field] = in_array($field, ['mae', 'mfe', 'fee'], true) ? Numbers::round($number) : $this->numText($number);
             }
         }
-        foreach (['result', 'r', 'durationMin'] as $field) {
-            if (array_key_exists($field, $allowed)) {
-                $updated[$field] = $allowed[$field] === null ? null : Numbers::round((float) $allowed[$field], $field === 'durationMin' ? 0 : 2);
-            }
-        }
         foreach (['grade'] as $field) {
             if (array_key_exists($field, $allowed)) {
                 $grade = strtoupper(trim((string) $allowed[$field]));
@@ -493,6 +500,13 @@ final class WriteEngine
                 }
                 $updated[$field] = $grade;
             }
+        }
+        if (array_key_exists('emotion', $allowed)) {
+            $emotion = trim((string) $allowed['emotion']);
+            if (!in_array($emotion, self::EMOTIONS, true)) {
+                throw new WriteException('invalid_emotion', 'Nieprawidłowa emocja. Dozwolone: ' . implode(', ', self::EMOTIONS) . '.');
+            }
+            $updated['emotion'] = $emotion;
         }
         if (array_key_exists('checklist', $allowed) || array_key_exists('checkTotal', $allowed)) {
             $total = (int) ($allowed['checkTotal'] ?? $updated['checkTotal'] ?? 7);
@@ -522,6 +536,15 @@ final class WriteEngine
         }
         if (array_key_exists('account', $allowed)) {
             $updated['account'] = $this->accountName($state, $allowed['account'], false);
+        }
+        if (!array_key_exists('mentor', $allowed)
+            && array_intersect(array_keys($allowed), ['grade', 'checklist', 'checkTotal', 'errors']) !== []) {
+            $updated['mentor'] = $this->mentorForGrade(
+                (string) ($updated['grade'] ?? 'C'),
+                (array) ($updated['errors'] ?? []),
+                (int) ($updated['checklist'] ?? 0),
+                (int) ($updated['checkTotal'] ?? 7)
+            );
         }
 
         if (!$exchange) {
@@ -568,10 +591,11 @@ final class WriteEngine
         $duration = $openedAt === null ? 0 : max(1, (int) round(($closedAt->getTimestamp() - $openedAt->getTimestamp()) / 60));
 
         $updated = $trade;
-        $updated['exit'] = $exitPrice === null ? (string) ($trade['exit'] ?? 'otwarta') : $this->numText($exitPrice);
+        $updated['exit'] = $exitPrice === null ? null : $this->numText($exitPrice);
         $updated['result'] = $result;
         $updated['r'] = $risk > 0 ? Numbers::round($result / $risk) : 0;
         $updated['durationMin'] = $duration;
+        $updated['closedAt'] = $closedAt->format('Y-m-d\TH:i:s\Z');
         $updated['mentor'] = $result > 0
             ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
             : ($result < 0
@@ -1956,11 +1980,12 @@ final class WriteEngine
 
             return $text . 'T12:00:00.000Z';
         }
-        try {
-            return (new \DateTimeImmutable($text, new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s.000\Z');
-        } catch (\Throwable) {
+        $date = Dates::parseUtc($text);
+        if ($date === null) {
             throw new WriteException('invalid_date', 'Nieprawidłowa data transakcji.');
         }
+
+        return $date->format('Y-m-d\TH:i:s.000\Z');
     }
 
     private function isoNow(): string
@@ -2221,7 +2246,7 @@ final class WriteEngine
     /**
      * @param list<string> $errors
      */
-    private function mentorForGrade(string $grade, array $errors): string
+    private function mentorForGrade(string $grade, array $errors, int $checklist, int $checkTotal): string
     {
         $error = '';
         foreach ($errors as $item) {
@@ -2231,12 +2256,16 @@ final class WriteEngine
             }
         }
 
+        if ($checkTotal > 0 && $checklist < $checkTotal) {
+            return 'Checklista niepełna (' . $checklist . '/' . $checkTotal . '). Uzupełnij brakujące punkty przed kolejnym wejściem.';
+        }
+
         return match ($grade) {
             'A' => 'Wejście zgodne z planem i checklistą. Powtórz ten proces.',
-            'B' => 'Setup poprawny, ale checklista niepełna. Domknij brakujące punkty przed kolejnym wejściem.',
+            'B' => 'Checklista kompletna (' . $checklist . '/' . $checkTotal . '), ale ocena B. Sprawdź jakość wykonania.',
             default => $error !== ''
-                ? 'Największy błąd: ' . $error . '. Popraw go w kolejnym wejściu.'
-                : 'Wejście poza checklistą. Wróć do planu przed kolejną transakcją.',
+                ? 'Checklista kompletna (' . $checklist . '/' . $checkTotal . '). Największy błąd: ' . $error . '. Popraw go w kolejnym wejściu.'
+                : 'Checklista kompletna (' . $checklist . '/' . $checkTotal . '), ale ocena C. Wróć do planu przed kolejną transakcją.',
         };
     }
 

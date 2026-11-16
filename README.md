@@ -66,7 +66,7 @@ npm run test:demo-state  # daty fixture demo: 15 scenariuszy
 npm run test:roles       # rola: login + cron recheck: 18 scenariuszy
 npm run test:wearables   # urządzenia zdrowotne API + UI: 42 scenariusze
 npm run test:mcp          # MCP 3.2: OAuth, 79 narzędzi w jednym zakresie, create→delete→restore (MySQL + PHP)
-npm run test:mcp:tools    # MCP: health scope + dashboard Oura, widoczność wyłączonych kont, break-even, idempotencja payloadu, kosz i 6 workflow
+npm run test:mcp:tools    # MCP: 79/79 wywołań narzędzi, odizolowane fixture'y, daty/paginacja, zapisy, analityka i workflow
 npm run test:mcp:write    # MCP: rejestr operacji, routing zgody, schematy i formuły bez bazy
 npm run test:mcp:login    # mock Discord: rola, brak roli, duplikat konta
 npm run test:mcp:ui       # panel propozycji: diff, kod do rozmowy, approve, reject, reload
@@ -76,6 +76,8 @@ npm run test:docs        # linki i spójność dokumentacji
 
 CI dodatkowo uruchamia `tests/mcp-migration-upgrade.test.php`, który odtwarza upgrade
 istniejącego schematu MCP sprzed migracji fingerprintów i sprawdza ponowne wykonanie migracji.
+`tests/deploy-mcp-guard.test.mjs` w CI sprawdza, że workflow wdraża wyłącznie SHA
+z `main` z udanym CI dla dokładnego commita.
 
 Konfiguracja lokalna może też pochodzić ze zmiennych środowiskowych `APP_URL`, `DB_*`, `DISCORD_*`, `SESSION_SECRET`, `ALLOW_DEMO_LOGIN`. Plik `config.json` jest ignorowany przez Git.
 

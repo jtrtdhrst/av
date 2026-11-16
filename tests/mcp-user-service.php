@@ -3,7 +3,9 @@ declare(strict_types=1);
 
 $root = dirname(__DIR__);
 require_once $root . '/vendor/autoload.php';
-[$config, $db] = require $root . '/app/bootstrap.php';
+require_once __DIR__ . '/mcp-test-environment.php';
+$config = mcpLoadIsolatedCiConfig($root);
+[, $db] = require $root . '/app/bootstrap.php';
 
 $ids = ['mcp-e2e-account', 'mcp-e2e-account-2', 'mcp-e2e-same-name-old', 'mcp-e2e-same-name-new'];
 $db->execute('DELETE FROM users WHERE discord_id IN (?, ?, ?, ?)', $ids);

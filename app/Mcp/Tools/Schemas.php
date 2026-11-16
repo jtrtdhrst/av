@@ -72,6 +72,7 @@ final class Schemas
             'from' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
             'to' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
             'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20],
+            'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100000, 'default' => 0],
         ]);
     }
 

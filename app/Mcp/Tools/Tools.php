@@ -166,7 +166,7 @@ final class Tools
         }
     }
 
-    public function getEvents(RequestContext $context, string $category = 'all', ?string $from = null, ?string $to = null, int $limit = 20): array
+    public function getEvents(RequestContext $context, string $category = 'all', ?string $from = null, ?string $to = null, int $limit = 20, int $offset = 0): array
     {
         try {
             return $this->events->list([
@@ -174,6 +174,7 @@ final class Tools
                 'from' => $from,
                 'to' => $to,
                 'limit' => $limit,
+                'offset' => $offset,
             ]);
         } catch (\InvalidArgumentException $err) {
             throw new ToolCallException($err->getMessage());
@@ -263,6 +264,9 @@ final class Tools
     {
         $fromTs = $this->dayStart($from, 'from');
         $toTs = $this->dayEnd($to, 'to');
+        if ($from !== null && $from !== '' && $to !== null && $to !== '' && $from > $to) {
+            throw new ToolCallException('Pole from nie może być późniejsze niż to.');
+        }
         $items = [];
         foreach ((array) ($this->state($context)['checkins'] ?? []) as $checkin) {
             if (!is_array($checkin)) {
@@ -1288,6 +1292,6 @@ final class Tools
             throw new ToolCallException($field . ' musi mieć format YYYY-MM-DD.');
         }
 
-        return Dates::startOfLocalDay($value)->modify('+1 day')->getTimestamp();
+        return Dates::startOfNextLocalDay($value)->getTimestamp();
     }
 }

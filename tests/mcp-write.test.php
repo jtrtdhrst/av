@@ -174,6 +174,17 @@ check(
     $trade['result']['source'] === 'Ręcznie' && $trade['result']['exit'] === 'otwarta'
     && $trade['result']['sl'] === '95' && $trade['result']['result'] === null
 );
+$offsetTrade = $apply($withAccount(), 'trade.create', [
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1,
+    'date' => '2026-03-29T01:30:00+01:00', 'account' => 'WEEX',
+]);
+check('Transakcja: jawny offset konwertowany do UTC', $offsetTrade['result']['date'] === '2026-03-29T00:30:00.000Z');
+check('Transakcja: nieistniejąca data odrzucona', $errorOf($withAccount(), 'trade.create', [
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'date' => '2026-02-30T12:00:00Z',
+]) === 'invalid_date');
+check('Transakcja: względne wyrażenie daty odrzucone', $errorOf($withAccount(), 'trade.create', [
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'date' => 'tomorrow',
+]) === 'invalid_date');
 $freeTrade = $apply($withAccount(), 'trade.create', [
     'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'fee' => 0, 'date' => '2026-01-02',
 ]);
@@ -185,6 +196,52 @@ check('Transakcja: konto spoza listy', $errorOf($withAccount(), 'trade.create', 
     'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'account' => 'Nie ma',
 ]) === 'unknown_account');
 $tradeId = $trade['result']['id'];
+$mentorUpdate = $apply($trade['state'], 'trade.update', [
+    'tradeId' => $tradeId,
+    'changes' => ['grade' => 'A', 'checklist' => 5, 'checkTotal' => 7, 'emotion' => 'Skupienie'],
+]);
+check(
+    'Transakcja: mentor po zmianie oceny i checklisty jest zgodny z liczbą punktów',
+    str_contains((string) $mentorUpdate['result']['mentor'], 'Checklista niepełna (5/7)')
+    && $mentorUpdate['result']['emotion'] === 'Skupienie'
+);
+check('Transakcja: nieprawidłowa emocja przy update odrzucona', $errorOf($trade['state'], 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['emotion' => 'Nieznana'],
+]) === 'invalid_emotion');
+foreach ([
+    'result' => null,
+    'r' => null,
+    'exit' => '100',
+    'durationMin' => 1,
+] as $field => $value) {
+    check(
+        'Transakcja: pola zamknięcia zmieniane wyłącznie przez close_trade (' . $field . ')',
+        $errorOf($trade['state'], 'trade.update', ['tradeId' => $tradeId, 'changes' => [$field => $value]]) === 'field_not_editable'
+    );
+}
+$closedAtResultOnly = $apply($trade['state'], 'trade.close', ['tradeId' => $tradeId, 'result' => 0]);
+check(
+    'Transakcja: close_trade wynikiem zapisuje datę i nie zostawia statusu otwartej',
+    $closedAtResultOnly['result']['result'] === 0
+    && $closedAtResultOnly['result']['exit'] === null
+    && preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', (string) $closedAtResultOnly['result']['closedAt']) === 1
+);
+check(
+    'Transakcja: break-even nie może być zamknięty drugi raz',
+    $errorOf($closedAtResultOnly['state'], 'trade.close', ['tradeId' => $tradeId, 'result' => 10]) === 'already_closed'
+);
+check(
+    'Transakcja: wykonanie zamkniętej pozycji jest niezmienne',
+    $errorOf($closedAtResultOnly['state'], 'trade.update', ['tradeId' => $tradeId, 'changes' => ['entry' => 101]]) === 'closed_trade_execution_readonly'
+);
+foreach (['session' => 'Asia', 'plan' => false] as $field => $value) {
+    check(
+        'Transakcja: kontekst zamkniętej pozycji niezmienny (' . $field . ')',
+        $errorOf($closedAtResultOnly['state'], 'trade.update', [
+            'tradeId' => $tradeId, 'changes' => [$field => $value],
+        ]) === 'closed_trade_execution_readonly'
+    );
+}
 $deleted = $apply($trade['state'], 'trade.delete', ['tradeId' => $tradeId]);
 check(
     'Transakcja: delete do kosza',

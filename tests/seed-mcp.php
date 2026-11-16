@@ -3,7 +3,9 @@ declare(strict_types=1);
 
 $root = dirname(__DIR__);
 require_once $root . '/vendor/autoload.php';
-[$config, $db] = require $root . '/app/bootstrap.php';
+require_once __DIR__ . '/mcp-test-environment.php';
+$config = mcpLoadIsolatedCiConfig($root);
+[, $db] = require $root . '/app/bootstrap.php';
 
 $db->execute("DELETE FROM rate_limits WHERE bucket LIKE 'mcp-%'");
 $db->execute("DELETE FROM macro_events WHERE external_id = 'mcp-e2e-macro'");

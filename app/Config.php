@@ -212,6 +212,9 @@ final class Config
             'refreshTokenTtl' => $parseInt($env('MCP_REFRESH_TOKEN_TTL'), 2592000),
             'authCodeTtl' => $parseInt($env('MCP_AUTH_CODE_TTL'), 300),
             'bodyLimit' => $parseInt($env('MCP_BODY_LIMIT'), 65536),
+            'buildSha' => preg_match('/^[a-f0-9]{40}$/i', (string) $env('MCP_BUILD_SHA', '')) === 1
+                ? strtolower((string) $env('MCP_BUILD_SHA', ''))
+                : '',
             'allowedRedirectHosts' => array_values(array_filter(array_map(
                 static fn (string $value): string => strtolower(trim($value)),
                 explode(',', (string) $env(
