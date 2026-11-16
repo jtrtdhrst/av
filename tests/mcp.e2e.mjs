@@ -517,7 +517,7 @@ async function mainWrites() {
   const scopeBlocked = await call(tokReadOnly.access_token, 'create_checkin', {
     mood: 'Spokój', energy: 3, idempotencyKey: 'idem-e2e-scope-' + crypto.randomBytes(8).toString('hex'),
   });
-  assert.match(toolError(scopeBlocked), /zakres|scope/i, scopeBlocked.text);
+  assert.match(toolError(scopeBlocked), /zakres|scope/i, 'scope: ' + scopeBlocked.text);
 
   console.log('MCP E2E writes PASS');
 }
