@@ -703,7 +703,7 @@ final class WriteTools
                 $preview['before'],
                 ['op' => $op, 'args' => $args],
                 $idempotencyKey,
-                ['op' => $op, 'args' => $this->canonical($args), 'revision' => $revision],
+                null,
                 $preview['after']
             );
 
