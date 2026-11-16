@@ -11,6 +11,7 @@
 #
 # Optional:
 #   LH_SSH_PORT (40022), DRY_RUN (false), MCP_WRITES_ENABLED (false),
+#   MCP_PILOT_DISCORD_IDS (opcjonalna allowlista Discord ID dla zapisu),
 #   DISCORD_BOT_TOKEN (not required by MCP), ADMIN_DISCORD_IDS.
 
 set -euo pipefail
@@ -36,9 +37,12 @@ ALLOW_DEMO_LOGIN="${ALLOW_DEMO_LOGIN:-false}"
 MAX_STATE_BYTES="${MAX_STATE_BYTES:-12582912}"
 
 [ "$MCP_APP_URL" = "https://mcp.alphavault.pl" ] || fail "MCP_APP_URL must be exactly https://mcp.alphavault.pl."
-if [ "$DRY_RUN" != "true" ] && [ "$MCP_WRITES_ENABLED" != "false" ] && [ -z "$MCP_PILOT_DISCORD_IDS" ]; then
-  fail "MCP_WRITES_ENABLED=true wymaga MCP_PILOT_DISCORD_IDS (pilot)."
-fi
+# Zapis jest dostępny dla każdego użytkownika z zakresem alphavault.write.
+# MCP_PILOT_DISCORD_IDS jest opcjonalną allowlistą zawężającą zapis w trakcie pilotażu.
+case "$MCP_WRITES_ENABLED" in
+  true|false) ;;
+  *) fail "MCP_WRITES_ENABLED musi być true albo false." ;;
+esac
 
 if [ ! -f vendor/autoload.php ]; then
   command -v composer >/dev/null 2>&1 || fail "Brak vendor/ i Composer. Uruchom composer install przed deployem."
@@ -157,7 +161,11 @@ health_check() {
   body="$(curl -fsS --max-time 25 "$MCP_APP_URL/health" 2>/dev/null || true)"
   printf '%s' "$body" | grep -q '"ok":true' || fail "MCP health check failed: $body"
   printf '%s' "$body" | grep -q '"enabled":true' || fail "MCP is not enabled: $body"
-  printf '%s' "$body" | grep -q '"writesEnabled":false' || fail "MCP writes must be disabled in phase 1: $body"
+  if [ "$MCP_WRITES_ENABLED" = "true" ]; then
+    printf '%s' "$body" | grep -q '"writesEnabled":true' || fail "MCP writes expected enabled: $body"
+  else
+    printf '%s' "$body" | grep -q '"writesEnabled":false' || fail "MCP writes expected disabled: $body"
+  fi
   local prm
   prm="$(curl -fsS --max-time 25 "$MCP_APP_URL/.well-known/oauth-protected-resource" 2>/dev/null || true)"
   printf '%s' "$prm" | grep -q '"resource":"https://mcp.alphavault.pl/mcp"' || fail "Protected Resource Metadata invalid: $prm"

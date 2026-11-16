@@ -125,6 +125,10 @@ jobs:
         env:
           ALPHA_VAULT_CONFIG: tests/config.test.json
         run: php tests/mcp-tools.test.php
+      - name: MCP write engine tests
+        env:
+          ALPHA_VAULT_CONFIG: tests/config.test.json
+        run: php tests/mcp-write.test.php
 
       - name: MCP prop parity
         run: node tests/prop-parity.mjs

@@ -48,11 +48,15 @@ const READ_TOOLS = [
   'list_pending_proposals', 'list_setups', 'list_trades',
 ];
 const WRITE_TOOLS = [
-  'approve_proposal', 'create_checkin_proposal', 'create_day_plan_proposal', 'create_prop_challenge_proposal',
-  'create_risk_rules_proposal', 'create_setup_proposal', 'create_trade_proposal', 'propose_close_trade',
-  'propose_create_trade', 'propose_save_account', 'propose_save_capital_flow', 'propose_save_checkin',
-  'propose_save_day_plan', 'propose_save_prop_challenge', 'propose_save_setup', 'propose_trade_review',
-  'reject_proposal', 'update_prop_challenge_proposal', 'update_setup_proposal', 'update_trade_proposal',
+  'add_trade_screenshot', 'approve_day_plan', 'approve_proposal', 'close_trade',
+  'create_account', 'create_account_transaction', 'create_checkin', 'create_day_plan',
+  'create_prop_challenge', 'create_setup', 'create_trade', 'create_trade_review',
+  'delete_account', 'delete_account_transaction', 'delete_checkin', 'delete_day_plan',
+  'delete_prop_challenge', 'delete_setup', 'delete_trade', 'delete_trade_review',
+  'delete_trade_screenshot', 'propose_change', 'reject_proposal', 'restore_deleted_record',
+  'update_account', 'update_account_transaction', 'update_checkin', 'update_day_plan',
+  'update_prop_challenge', 'update_risk_rules', 'update_setup', 'update_trade',
+  'update_trade_review',
 ];
 
 function runPhp(script, args = []) {
@@ -186,7 +190,12 @@ async function call(tokenValue, name, args = {}) {
 }
 
 function toolError(r) {
+  if (r.json?.error) return String(r.json.error.message || '');
   return r.json?.result?.isError ? String(r.json.result.content?.[0]?.text || '') : '';
+}
+
+function stateOf(userId) {
+  return JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['state', String(userId)]));
 }
 
 async function main() {
@@ -307,7 +316,7 @@ async function main() {
   assert.equal(badPeriod.json.error?.code, -32602, badPeriod.text);
   const badDate = await call(tokA.access_token, 'list_trades', { from: '2026-13-40' });
   assert.ok(toolError(badDate).length > 0, badDate.text);
-  const badTool = await call(tokA.access_token, 'propose_create_trade', { pair: 'BTC/USDT', dir: 'long', entry: 1, size: 1, idempotencyKey: 'idem-bad-tool' });
+  const badTool = await call(tokA.access_token, 'delete_trade', { tradeId: 'x' });
   assert.ok(badTool.res.status === 403 || badTool.json?.error?.code === -32602, badTool.text);
 
   const authB = await authorize(client, b.session);
@@ -366,215 +375,157 @@ async function main() {
 async function mainWrites() {
   const sessions = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
   const a = sessions['mcp-e2e-a'];
+  const b = sessions['mcp-e2e-b'];
   const client = await register('MCP E2E Writer');
+  const todayKey = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
+  const issueCode = (proposalId) => JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['code', proposalId, String(a.userId)]));
+
   const health = await req('/health');
-  assert.equal(health.json.mcp.tools, 66);
+  assert.equal(health.json.mcp.tools, 79, 'rejestr MCP: 46 odczytu + 33 zapisu');
   assert.equal(health.json.mcp.writesEnabled, true);
+  const prm = await req('/.well-known/oauth-protected-resource');
+  assert.ok(prm.json.scopes_supported.includes('alphavault.read'));
+  assert.ok(prm.json.scopes_supported.includes('alphavault.write'));
 
   const auth = await authorize(client, a.session, 'alphavault.read alphavault.write', true);
   const tok = await token(client, auth);
   const claims = jwtPayload(tok.access_token);
   assert.deepEqual(claims.scope.split(' ').sort(), ['alphavault.read', 'alphavault.write']);
 
-  const b = sessions['mcp-e2e-b'];
-  const clientB = await register('MCP E2E Pilot B');
-  const authB = await authorize(clientB, b.session, 'alphavault.read alphavault.write', true);
-  const tokB = await token(clientB, authB);
-  const blocked = await call(tokB.access_token, 'propose_save_checkin', {
-    mood: 'Spokój', energy: 3, idempotencyKey: 'idem-e2e-pilot-' + crypto.randomBytes(4).toString('hex'),
-  });
-  assert.match(toolError(blocked), /pilota/i, blocked.text);
-
   const list = await rpc(tok.access_token, 'tools/list', {});
+  assert.equal(list.res.status, 200, list.text);
   const tools = list.json.result.tools;
-  assert.equal(tools.length, 66);
+  assert.equal(tools.length, 79);
+  assert.deepEqual(tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name).sort(), READ_TOOLS);
   for (const name of WRITE_TOOLS) {
     const tool = tools.find((t) => t.name === name);
     assert.ok(tool, name);
     assert.equal(tool.annotations?.readOnlyHint, false, name + ' readOnlyHint');
     assert.ok(tool._meta.securitySchemes[0].scopes.includes('alphavault.write'), name + ' scope');
+    assert.equal(tool.inputSchema.additionalProperties, false, name + ' additionalProperties');
+    assert.ok(tool.inputSchema.required.includes('idempotencyKey'), name + ' idempotencyKey');
+    assert.ok(tool.outputSchema, name + ' outputSchema');
   }
+  assert.equal(tools.length - READ_TOOLS.length, WRITE_TOOLS.length);
+  assert.equal(new Set(WRITE_TOOLS).size, WRITE_TOOLS.length);
 
   const before = JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['state', String(a.userId)]));
-  const beforeCount = before.state.trades.length;
-  const issueCode = (proposalId) => JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['code', proposalId, String(a.userId)]));
-  const approveViaMcp = (proposalId, diffHash, idempotencyKey) => {
-    const issued = issueCode(proposalId);
-    return call(tok.access_token, 'approve_proposal', {
-      proposalId, expectedDiffHash: diffHash, confirmationCode: issued.code, idempotencyKey,
-    });
-  };
-
   const pair = 'MCP2/' + crypto.randomBytes(3).toString('hex').toUpperCase();
-  const key = 'idem-e2e-' + crypto.randomBytes(8).toString('hex');
-  const proposal = await call(tok.access_token, 'propose_create_trade', {
-    pair, dir: 'long', entry: 100, size: 2, sl: 95, tp: 120, setup: 'Pullback w trendzie',
-    emotion: 'Spokój', note: 'E2E agenta', account: 'WEEX', idempotencyKey: key,
+  const created = await call(tok.access_token, 'create_trade', {
+    pair, dir: 'long', entry: 100, size: 2, sl: 95, tp: 120, fee: 1,
+    setup: 'Pullback w trendzie', grade: 'B', checklist: 5, checkTotal: 7,
+    note: 'E2E agenta', account: 'WEEX', idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
-  assert.equal(proposal.res.status, 200, proposal.text);
-  const proposalId = proposal.json.result.structuredContent.proposalId;
-  assert.ok(proposalId, proposal.text);
-  assert.equal(proposal.json.result.structuredContent.status, 'pending');
-  const afterProposal = JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['state', String(a.userId)]));
-  assert.equal(afterProposal.state.trades.length, beforeCount, 'stan zmienił się przed zgodą');
+  const createdBody = created.json.result.structuredContent;
+  assert.equal(createdBody.applied, 'direct', created.text);
+  assert.equal(createdBody.revision, before.revision + 1, 'zapis musi podnieść revision');
+  assert.equal(createdBody.operation, 'trade.create');
+  assert.ok(createdBody.changes.includes('pair'), created.text);
+  const tradeId = createdBody.record.id;
+  assert.equal(createdBody.record.source, 'Ręcznie');
+  assert.equal(createdBody.record.result, null);
 
-  const duplicate = await call(tok.access_token, 'propose_create_trade', {
-    pair, dir: 'long', entry: 100, size: 2, sl: 95, tp: 120, setup: 'Pullback w trendzie',
-    emotion: 'Spokój', note: 'E2E agenta', account: 'WEEX', idempotencyKey: key,
+  const updated = await call(tok.access_token, 'update_trade', {
+    tradeId, changes: { note: 'Poprawiona notatka', grade: 'A' },
+    idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
-  assert.equal(duplicate.json.result.structuredContent.proposalId, proposalId);
+  assert.equal(updated.json.result.structuredContent.applied, 'direct');
+  assert.ok(updated.json.result.structuredContent.changes.includes('note'), updated.text);
 
-  const conflict = await call(tok.access_token, 'propose_create_trade', {
-    pair, dir: 'short', entry: 100, size: 1, setup: 'Bez setupu', idempotencyKey: key,
+  const closed = await call(tok.access_token, 'close_trade', {
+    tradeId, exitPrice: 110, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
-  assert.match(toolError(conflict), /idempotencyKey|inną treścią/i, conflict.text);
+  assert.equal(closed.json.result.structuredContent.record.result, 20);
+  assert.equal(closed.json.result.structuredContent.record.r, 2);
 
-  const diffHash = proposal.json.result.structuredContent.diffHash;
-  assert.match(String(diffHash), /^[a-f0-9]{64}$/, 'brak diffHash');
-  const pendingList = await call(tok.access_token, 'list_pending_proposals', {});
-  assert.ok(pendingList.json.result.structuredContent.items.some((p) => p.proposalId === proposalId), pendingList.text);
-  const proposalStatus = await call(tok.access_token, 'get_proposal_status', { proposalId });
-  assert.equal(proposalStatus.json.result.structuredContent.status, 'pending');
-  assert.equal(proposalStatus.json.result.structuredContent.diffHash, diffHash);
+  const stale = await call(tok.access_token, 'update_trade', {
+    tradeId, changes: { note: 'stary odczyt' }, expectedRevision: 1,
+    idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
+  });
+  assert.match(toolError(stale), /wersj/i, stale.text);
+
+  const deleteProposal = await call(tok.access_token, 'delete_trade', {
+    tradeId, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
+  });
+  assert.ok(deleteProposal.json?.result, 'delete_trade: ' + deleteProposal.text);
+  const deleteBody = deleteProposal.json.result.structuredContent;
+  assert.equal(deleteBody.applied, 'proposal', deleteProposal.text);
+  assert.equal(deleteBody.status, 'pending');
+  assert.match(String(deleteBody.diffHash), /^[a-f0-9]{64}$/);
+  assert.ok(deleteBody.preview, 'propozycja musi mieć preview');
+  const stillThere = await call(tok.access_token, 'get_trade', { id: tradeId });
+  assert.equal(stillThere.json.result.structuredContent.found, true, 'propozycja nie może usunąć przed zgodą');
 
   const noCode = await call(tok.access_token, 'approve_proposal', {
-    proposalId, expectedDiffHash: diffHash, confirmationCode: 'ZZZZ-ZZZZ',
-    idempotencyKey: 'idem-e2e-approve-bad-' + crypto.randomBytes(4).toString('hex'),
+    proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
+    confirmationCode: 'ZZZZ-ZZZZ', idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
   assert.match(toolError(noCode), /kod|potwierdzen/i, noCode.text);
 
-  const approveKey = 'idem-e2e-approve-' + crypto.randomBytes(4).toString('hex');
-  const issuedCode = issueCode(proposalId);
+  const issuedCode = issueCode(deleteBody.proposalId);
+  const approveKey = 'idem-e2e-approve-' + crypto.randomBytes(8).toString('hex');
   const approved = await call(tok.access_token, 'approve_proposal', {
-    proposalId, expectedDiffHash: diffHash, confirmationCode: issuedCode.code, idempotencyKey: approveKey,
+    proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
+    confirmationCode: issuedCode.code, idempotencyKey: approveKey,
   });
   assert.equal(approved.json.result.structuredContent.status, 'approved', approved.text);
   const approvedReplay = await call(tok.access_token, 'approve_proposal', {
-    proposalId, expectedDiffHash: diffHash, confirmationCode: issuedCode.code, idempotencyKey: approveKey,
+    proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
+    confirmationCode: issuedCode.code, idempotencyKey: approveKey,
   });
   assert.equal(approvedReplay.json.result.structuredContent.duplicate, true, approvedReplay.text);
-  const approvedAgain = await call(tok.access_token, 'approve_proposal', {
-    proposalId, expectedDiffHash: diffHash, confirmationCode: issuedCode.code,
-    idempotencyKey: 'idem-e2e-approve-2-' + crypto.randomBytes(4).toString('hex'),
-  });
-  assert.match(toolError(approvedAgain), /oczekując|nie jest już/i, approvedAgain.text);
-  const afterApprove = JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['state', String(a.userId)]));
-  assert.equal(afterApprove.state.trades.length, beforeCount + 1);
-  const created = afterApprove.state.trades.find((t) => t.pair === pair);
-  assert.ok(created && created.source === 'Ręcznie' && created.result === null, JSON.stringify(created));
+  const gone = await call(tok.access_token, 'get_trade', { id: tradeId });
+  assert.equal(gone.json.result.structuredContent.found, false);
 
-  const close = await call(tok.access_token, 'propose_close_trade', {
-    tradeId: created.id, exitPrice: 110, idempotencyKey: 'idem-e2e-close-' + crypto.randomBytes(4).toString('hex'),
-  });
-  const closeContent = close.json.result.structuredContent;
-  const closeApproved = await approveViaMcp(closeContent.proposalId, closeContent.diffHash, 'idem-e2e-close-approve-' + crypto.randomBytes(4).toString('hex'));
-  assert.equal(closeApproved.json.result.structuredContent.status, 'approved', closeApproved.text);
-  const closedTrade = await call(tok.access_token, 'get_trade', { id: created.id });
-  assert.equal(closedTrade.json.result.structuredContent.trade.result, 20);
-  assert.equal(closedTrade.json.result.structuredContent.trade.r, 2);
-  const secondClose = await call(tok.access_token, 'propose_close_trade', {
-    tradeId: created.id, exitPrice: 111, idempotencyKey: 'idem-e2e-close2-' + crypto.randomBytes(4).toString('hex'),
-  });
-  assert.match(toolError(secondClose), /zamkni/i, secondClose.text);
+  const afterDelete = JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['state', String(a.userId)]));
+  const trashed = (afterDelete.state.trash || []).find((row) => row.kind === 'trade' && row.record?.id === tradeId);
+  assert.ok(trashed, 'usunięcie musi trafić do kosza');
 
-  const exchangeReview = await call(tok.access_token, 'propose_trade_review', {
-    tradeId: 'ex1', entry: 111, idempotencyKey: 'idem-e2e-ex-' + crypto.randomBytes(4).toString('hex'),
+  const restoreProposal = await call(tok.access_token, 'restore_deleted_record', {
+    trashId: trashed.id, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
-  assert.ok(exchangeReview.json?.error?.code === -32602 || /giełd/i.test(toolError(exchangeReview)), exchangeReview.text);
+  const restoreBody = restoreProposal.json.result.structuredContent;
+  assert.equal(restoreBody.applied, 'proposal');
+  const restoreCode = issueCode(restoreBody.proposalId);
+  const restored = await call(tok.access_token, 'approve_proposal', {
+    proposalId: restoreBody.proposalId, expectedDiffHash: restoreBody.diffHash,
+    confirmationCode: restoreCode.code, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
+  });
+  assert.equal(restored.json.result.structuredContent.status, 'approved', restored.text);
+  const back = await call(tok.access_token, 'get_trade', { id: tradeId });
+  assert.equal(back.json.result.structuredContent.found, true, 'przywracanie z kosza nie odtworzyło transakcji');
 
-  const exchangeClose = await call(tok.access_token, 'propose_close_trade', {
-    tradeId: 'ex1', exitPrice: 130, idempotencyKey: 'idem-e2e-ex-close-' + crypto.randomBytes(4).toString('hex'),
-  });
-  assert.match(toolError(exchangeClose), /giełd/i, exchangeClose.text);
-
-  const planKey = 'idem-e2e-plan-' + crypto.randomBytes(4).toString('hex');
-  const plan = await call(tok.access_token, 'propose_save_day_plan', {
-    market: 'BTC', bias: 'long', why: 'E2E plan', riskPercent: 2, maxTrades: 3, idempotencyKey: planKey,
-  });
-  const planContent = plan.json.result.structuredContent;
-  await approveViaMcp(planContent.proposalId, planContent.diffHash, 'idem-e2e-plan-approve-' + crypto.randomBytes(4).toString('hex'));
-  const dayPlan = await call(tok.access_token, 'get_day_plan');
-  assert.equal(dayPlan.json.result.structuredContent.plan.market, 'BTC');
-  assert.equal(dayPlan.json.result.structuredContent.plan.approvedAt, null);
-
-  const checkin = await call(tok.access_token, 'propose_save_checkin', {
-    mood: 'Spokój', energy: 4, note: 'E2E', idempotencyKey: 'idem-e2e-checkin-' + crypto.randomBytes(4).toString('hex'),
-  });
-  const checkinContent = checkin.json.result.structuredContent;
-  await approveViaMcp(checkinContent.proposalId, checkinContent.diffHash, 'idem-e2e-checkin-approve-' + crypto.randomBytes(4).toString('hex'));
-  const history = await call(tok.access_token, 'get_checkin_history');
-  assert.equal(history.json.result.structuredContent.items[0].score, 70);
-
-  const setup = await call(tok.access_token, 'propose_save_setup', {
-    name: 'E2E Setup ' + crypto.randomBytes(3).toString('hex'),
-    rules: ['Zasada A', 'Zasada B'], tf: 'H1', grade: 'A',
-    idempotencyKey: 'idem-e2e-setup-' + crypto.randomBytes(4).toString('hex'),
-  });
-  const setupContent = setup.json.result.structuredContent;
-  await approveViaMcp(setupContent.proposalId, setupContent.diffHash, 'idem-e2e-setup-approve-' + crypto.randomBytes(4).toString('hex'));
-  const setups = await call(tok.access_token, 'list_setups');
-  assert.equal(setups.json.result.structuredContent.total, 6);
-
-  const prop = await call(tok.access_token, 'propose_save_prop_challenge', {
-    name: 'E2E Challenge', templateId: 'ftmo-1step', account: 'WEEX', accountSize: 10000,
-    startBalance: 10000, startDate: new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' }),
-    idempotencyKey: 'idem-e2e-prop-' + crypto.randomBytes(4).toString('hex'),
-  });
-  const propContent = prop.json.result.structuredContent;
-  await approveViaMcp(propContent.proposalId, propContent.diffHash, 'idem-e2e-prop-approve-' + crypto.randomBytes(4).toString('hex'));
-  const challenges = await call(tok.access_token, 'get_prop_challenges');
-  assert.equal(challenges.json.result.structuredContent.total, 4);
-
-  const accountName = 'E2E Account ' + crypto.randomBytes(2).toString('hex');
-  const account = await call(tok.access_token, 'propose_save_account', {
-    name: accountName,
-    exchange: 'OKX', type: 'Futures', currency: 'USDT', include: true, primary: false,
-    idempotencyKey: 'idem-e2e-account-' + crypto.randomBytes(4).toString('hex'),
-  });
-  const accountContent = account.json.result.structuredContent;
-  assert.equal(accountContent.status, 'pending', account.text);
-  const accountApproved = await approveViaMcp(
-    accountContent.proposalId,
-    accountContent.diffHash,
-    'idem-e2e-account-approve-' + crypto.randomBytes(4).toString('hex')
+  const replayKey = 'idem-e2e-repeat-' + crypto.randomBytes(8).toString('hex');
+  const checkinArgs = { date: todayKey, mood: 'Spokój', energy: 3, note: 'E2E replay', idempotencyKey: replayKey };
+  const firstCheckin = await call(tok.access_token, 'create_checkin', checkinArgs);
+  const secondCheckin = await call(tok.access_token, 'create_checkin', checkinArgs);
+  assert.equal(secondCheckin.json.result.structuredContent.duplicate, true, secondCheckin.text);
+  assert.equal(
+    secondCheckin.json.result.structuredContent.revision,
+    firstCheckin.json.result.structuredContent.revision,
+    'replay nie może podnieść revision'
   );
-  assert.equal(accountApproved.json.result.structuredContent.status, 'approved', accountApproved.text);
-  const accounts = await call(tok.access_token, 'get_accounts');
-  const newAccount = accounts.json.result.structuredContent.items.find((x) => x.name === accountName);
-  assert.ok(newAccount && newAccount.balance === 0 && newAccount.start === 0, JSON.stringify(newAccount));
 
-  const flow = await call(tok.access_token, 'propose_save_capital_flow', {
-    type: 'deposit', amount: 100, account: newAccount.name, currency: 'PLN', fiat: 400, fx: 1,
-    note: 'E2E flow', idempotencyKey: 'idem-e2e-flow-' + crypto.randomBytes(4).toString('hex'),
+  const clientB = await register('MCP E2E Pilot B');
+  const authB = await authorize(clientB, b.session, 'alphavault.read alphavault.write', true);
+  const tokB = await token(clientB, authB);
+  const blocked = await call(tokB.access_token, 'create_trade', {
+    pair: 'PILOT/USDT', dir: 'long', entry: 1, size: 1,
+    idempotencyKey: 'idem-e2e-pilot-' + crypto.randomBytes(8).toString('hex'),
   });
-  const flowContent = flow.json.result.structuredContent;
-  const flowApproved = await approveViaMcp(
-    flowContent.proposalId,
-    flowContent.diffHash,
-    'idem-e2e-flow-approve-' + crypto.randomBytes(4).toString('hex')
-  );
-  assert.equal(flowApproved.json.result.structuredContent.status, 'approved', flowApproved.text);
-  const capital = await call(tok.access_token, 'get_capital_summary');
-  assert.ok(capital.json.result.structuredContent.flows.some((f) => f.amount === 100), capital.text);
-  const accountsAfterFlow = await call(tok.access_token, 'get_accounts');
-  const accountAfterFlow = accountsAfterFlow.json.result.structuredContent.items.find((x) => x.name === newAccount.name);
-  assert.equal(accountAfterFlow.balance, 0, 'MCP nie może zmienić salda konta');
+  assert.match(toolError(blocked), /pilota/i, blocked.text);
 
-  const reject = await call(tok.access_token, 'propose_save_checkin', {
-    mood: 'Skupienie', energy: 3, idempotencyKey: 'idem-e2e-reject-' + crypto.randomBytes(4).toString('hex'),
+  const clientReadOnly = await register('MCP E2E Read Only');
+  const authReadOnly = await authorize(clientReadOnly, a.session, 'alphavault.read');
+  const tokReadOnly = await token(clientReadOnly, authReadOnly);
+  const revisionBeforeScope = stateOf(a.userId).revision;
+  const scopeBlocked = await call(tokReadOnly.access_token, 'create_checkin', {
+    mood: 'Spokój', energy: 3, idempotencyKey: 'idem-e2e-scope-' + crypto.randomBytes(8).toString('hex'),
   });
-  const rejectId = reject.json.result.structuredContent.proposalId;
-  const rejected = await call(tok.access_token, 'reject_proposal', {
-    proposalId: rejectId, idempotencyKey: 'idem-e2e-reject-decision-' + crypto.randomBytes(4).toString('hex'),
-  });
-  assert.equal(rejected.json.result.structuredContent.status, 'rejected', rejected.text);
-  const rejectedStatus = await call(tok.access_token, 'get_proposal_status', { proposalId: rejectId });
-  assert.equal(rejectedStatus.json.result.structuredContent.status, 'rejected');
-
-  const unknownTrade = await call(tok.access_token, 'get_trade', { id: 'does-not-exist' });
-  const unknownContext = await call(tok.access_token, 'get_trade_context', { tradeId: 'does-not-exist' });
-  assert.equal(unknownTrade.json.result.structuredContent.found, false);
-  assert.equal(unknownContext.json.result.structuredContent.found, false);
+  const blockedByStatus = scopeBlocked.res.status !== 200;
+  const blockedByError = Boolean(scopeBlocked.json?.result?.isError) || Boolean(scopeBlocked.json?.error);
+  assert.ok(blockedByStatus || blockedByError, 'scope: status=' + scopeBlocked.res.status + ' body=' + scopeBlocked.text);
+  assert.equal(stateOf(a.userId).revision, revisionBeforeScope, 'zapis bez scope nie może zmienić stanu');
 
   console.log('MCP E2E writes PASS');
 }

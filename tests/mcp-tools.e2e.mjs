@@ -549,204 +549,456 @@ async function main() {
   assert.equal(statusForeign.status, null);
 
   // =================================================================
-  // 11. Propozycje: cykl życia każdego nowego typu
+  // 11. Zapis: 33 narzędzia, bezpośrednie i przez propozycję
   // =================================================================
-  const stateBefore = stateOf(a.userId).state;
   const issueCode = (proposalId) => JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['code', proposalId, String(a.userId)]));
   const approveWith = async (proposal, key) => {
     const issued = issueCode(proposal.proposalId);
-    return call(at, 'approve_proposal', {
+    const approved = await call(at, 'approve_proposal', {
       proposalId: proposal.proposalId,
       expectedDiffHash: proposal.diffHash,
       confirmationCode: issued.code,
       idempotencyKey: key,
     });
+    assert.equal(approved.status, 'approved', JSON.stringify(approved).slice(0, 300));
+    return approved;
   };
   const approve = (proposal) => approveWith(proposal, idem('approve'));
+  const stateA = () => stateOf(a.userId).state;
+  const pending = async (name, args, fields = []) => {
+    const proposal = await call(at, name, args);
+    assert.equal(proposal.applied, 'proposal', `${name}: brak propozycji ${JSON.stringify(proposal).slice(0, 250)}`);
+    assert.equal(proposal.status, 'pending', `${name}: ${JSON.stringify(proposal).slice(0, 250)}`);
+    assert.match(String(proposal.diffHash), /^[a-f0-9]{64}$/, `${name}: diffHash`);
+    assert.ok(proposal.note, `${name}: brak instrukcji zatwierdzenia`);
+    for (const field of fields) assert.ok(proposal.changes.includes(field), `${name}: brak ${field} w diffie`);
+    return proposal;
+  };
 
-  const tradeProposal = await call(at, 'create_trade_proposal', {
-    pair: 'E2E/USDT', dir: 'long', entry: 100, size: 2, exit: 110, sl: 95, tp: 120, fee: 1,
-    setup: 'Retest wybicia', grade: 'B', checklist: 5, checkTotal: 7, note: 'E2E wpis',
-    date: YESTERDAY, time: '12:30', account: 'WEEX', idempotencyKey: idem('trade-create'),
+  // --- 11.1. Transakcja: create → read → update → close ---
+  const tradesBefore = stateA().trades.length;
+  const tradeResult = await call(at, 'create_trade', {
+    pair: 'E2E/USDT', dir: 'long', entry: 100, size: 2, sl: 95, tp: 120, fee: 1,
+    setup: 'Retest wybicia', grade: 'B', checklist: 5, checkTotal: 7,
+    note: 'E2E wpis', account: 'WEEX', date: YESTERDAY,
+    idempotencyKey: idem('trade-create'),
   });
-  assert.equal(tradeProposal.status, 'pending');
-  assert.match(tradeProposal.diffHash, /^[a-f0-9]{64}$/);
-  assert.ok(tradeProposal.changes.includes('pair'));
-  assert.ok(tradeProposal.expiresAt);
-  assert.equal(stateOf(a.userId).state.trades.length, stateBefore.trades.length, 'propozycja zmieniła stan');
+  assert.equal(tradeResult.applied, 'direct');
+  assert.equal(tradeResult.operation, 'trade.create');
+  assert.ok(tradeResult.record.id.startsWith('manual_'), tradeResult.record.id);
+  assert.equal(tradeResult.record.source, 'Ręcznie');
+  assert.equal(tradeResult.record.result, null);
+  assert.equal(stateA().trades.length, tradesBefore + 1, 'zapis bezpośredni musi zmienić stan');
+  const tradeId = tradeResult.record.id;
 
-  const tradeApproveKey = idem('approve-trade');
-  const tradeApproved = await approveWith(tradeProposal, tradeApproveKey);
-  assert.equal(tradeApproved.status, 'approved');
-  const replay = await call(at, 'approve_proposal', {
-    proposalId: tradeProposal.proposalId,
-    expectedDiffHash: tradeProposal.diffHash,
-    confirmationCode: 'ZZZZ-ZZZZ',
-    idempotencyKey: tradeApproveKey,
-  });
-  assert.equal(replay.duplicate, true, 'idempotentny replay nie zwrócił duplicate');
-  const afterTrade = stateOf(a.userId).state;
-  assert.equal(afterTrade.trades.length, stateBefore.trades.length + 1);
-  const newTrade = afterTrade.trades.find((row) => row.pair === 'E2E/USDT');
-  assert.ok(newTrade, 'brak nowej transakcji');
-  assert.equal(newTrade.result, 20);
-  assert.equal(newTrade.r, 2);
-  assert.equal(newTrade.source, 'Ręcznie');
-  assert.equal(newTrade.fee, 1);
+  const readTrade = await call(at, 'get_trade', { id: tradeId });
+  assert.equal(readTrade.found, true);
+  assert.equal(readTrade.trade.pair, 'E2E/USDT');
+  assert.equal(readTrade.trade.grade, 'B');
 
-  const tradeStatus = await call(at, 'get_proposal_status', { proposalId: tradeProposal.proposalId });
-  assert.equal(tradeStatus.status, 'approved');
-  assert.equal(tradeStatus.before, null, 'nowa transakcja nie ma stanu przed');
-  assert.ok(tradeStatus.after);
-
-  const updateProposal = await call(at, 'update_trade_proposal', {
-    tradeId: newTrade.id,
+  const tradeUpdate = await call(at, 'update_trade', {
+    tradeId, expectedRevision: tradeResult.revision,
     changes: { note: 'Poprawiona notatka', grade: 'A', setup: 'Pullback w trendzie' },
     idempotencyKey: idem('trade-update'),
   });
-  for (const field of ['grade', 'note', 'setup']) {
-    assert.ok(updateProposal.changes.includes(field), `${field} nie ma w diffie: ${updateProposal.changes}`);
-  }
-  assert.equal(stateOf(a.userId).state.trades.find((row) => row.id === newTrade.id).note, 'E2E wpis', 'propozycja zmieniła stan przed zgodą');
-  await approve(updateProposal);
-  const updatedTrade = stateOf(a.userId).state.trades.find((row) => row.id === newTrade.id);
-  assert.equal(updatedTrade.note, 'Poprawiona notatka');
-  assert.equal(updatedTrade.grade, 'A');
-  assert.equal(updatedTrade.setup, 'Pullback w trendzie');
+  for (const field of ['grade', 'note', 'setup']) assert.ok(tradeUpdate.changes.includes(field), `${field} w diffie`);
+  assert.equal(stateA().trades.find((row) => row.id === tradeId).note, 'Poprawiona notatka');
 
-  await expectToolError(at, 'update_trade_proposal', {
+  await expectToolError(at, 'update_trade', {
     tradeId: 'ex1', changes: { entry: 1 }, idempotencyKey: idem('trade-update-ex'),
   }, /giełd/i);
-  await expectToolError(at, 'update_trade_proposal', {
+  await expectToolError(at, 'update_trade', {
     tradeId: 'nie-ma-takiej', changes: { note: 'x' }, idempotencyKey: idem('trade-update-missing'),
   }, /nie istnieje/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { nieznanePole: 1 }, idempotencyKey: idem('trade-update-field'),
+  }, /edytowalne/i);
 
-  const setupName = 'E2E Setup ' + crypto.randomBytes(3).toString('hex');
-  const setupProposal = await call(at, 'create_setup_proposal', {
-    name: setupName, entryRules: ['Zasada A', 'Zasada B'], description: 'Opis E2E',
-    timeframes: 'H1', confirmation: 'Zamknięcie H1', invalidation: 'Powrót pod poziom',
-    stopLoss: 'Pod knotem', minRR: 2.5, exitRules: ['TP na oporze'], examples: ['BTC retest'],
-    grade: 'A', idempotencyKey: idem('setup-create'),
+  const closed = await call(at, 'close_trade', {
+    tradeId, exitPrice: 110, comment: 'Zamknięcie wg planu', idempotencyKey: idem('trade-close'),
   });
-  assert.equal(setupProposal.status, 'pending');
-  await approve(setupProposal);
-  const createdSetup = stateOf(a.userId).state.setups.find((row) => row.name === setupName);
-  assert.ok(createdSetup);
-  assert.equal(createdSetup.minRR, 2.5);
-  assert.equal(createdSetup.exitRules.length, 1);
+  assert.equal(closed.applied, 'direct');
+  assert.equal(closed.record.result, 20);
+  assert.equal(closed.record.r, 2);
+  await expectToolError(at, 'close_trade', {
+    tradeId, exitPrice: 111, idempotencyKey: idem('trade-close-repeat'),
+  }, /zamkni/i);
 
-  const setupUpdate = await call(at, 'update_setup_proposal', {
-    setupId: createdSetup.id,
-    changes: { rules: ['Zasada A', 'Zasada B', 'Zasada C'], minRR: 3 },
+  // --- 11.2. Recenzja transakcji ---
+  const reviewResult = await call(at, 'create_trade_review', {
+    tradeId, grade: 'A', setup: 'Pullback w trendzie', emotion: 'Spokój',
+    errors: ['Wejście przed potwierdzeniem'], checklist: 6, note: 'Recenzja E2E',
+    recommendations: ['Czekaj na zamknięcie świecy'],
+    idempotencyKey: idem('review-create'),
+  });
+  assert.equal(reviewResult.applied, 'direct');
+  assert.equal(reviewResult.record.tradeId, tradeId);
+  const readReview = await call(at, 'get_trade_review', { tradeId });
+  assert.equal(readReview.reviewAvailable, true);
+  assert.equal(readReview.review.grade, 'A');
+  assert.deepEqual(stateA().tradeReviews[tradeId].recommendations, ['Czekaj na zamknięcie świecy']);
+  await expectToolError(at, 'create_trade_review', {
+    tradeId, grade: 'B', idempotencyKey: idem('review-create-dup'),
+  }, /już istnieje/i);
+
+  const reviewUpdate = await call(at, 'update_trade_review', {
+    tradeId, changes: { grade: 'B', note: 'Po namyśle', recommendations: ['Skracaj stratę'] },
+    idempotencyKey: idem('review-update'),
+  });
+  assert.ok(reviewUpdate.changes.includes('grade'));
+  assert.equal(stateA().tradeReviews[tradeId].grade, 'B');
+  assert.deepEqual(stateA().tradeReviews[tradeId].recommendations, ['Skracaj stratę']);
+  await expectToolError(at, 'update_trade_review', {
+    tradeId, changes: { id: 'x' }, idempotencyKey: idem('review-update-bad'),
+  }, /niedozwolone/i);
+
+  // --- 11.3. Screeny transakcji ---
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const shot = await call(at, 'add_trade_screenshot', {
+    tradeId, dataUrl: png, position: 'before', idempotencyKey: idem('shot-add'),
+  });
+  assert.equal(shot.applied, 'direct');
+  assert.ok(shot.record.bytes > 0);
+  const shots = await call(at, 'get_trade_screenshots', { tradeId });
+  assert.equal(shots.found, true);
+  assert.equal(shots.screenshots.available, true);
+  assert.equal(shots.screenshots.count, 1);
+  await expectToolError(at, 'add_trade_screenshot', {
+    tradeId, dataUrl: 'nie-obraz', idempotencyKey: idem('shot-add-bad'),
+  }, /data URL/i);
+
+  // --- 11.4. Playbook ---
+  const setupName = 'E2E Setup ' + crypto.randomBytes(3).toString('hex');
+  const setupCreate = await call(at, 'create_setup', {
+    name: setupName, rules: ['Zasada A', 'Zasada B'], tf: 'H1', grade: 'A',
+    description: 'Opis E2E', confirmation: 'Zamknięcie H1', invalidation: 'Powrót pod poziom',
+    stopLoss: 'Pod knotem', minRR: '2.5', exitRules: ['TP na oporze'], examples: ['BTC retest'],
+    idempotencyKey: idem('setup-create'),
+  });
+  assert.equal(setupCreate.applied, 'direct');
+  const createdSetup = stateA().setups.find((row) => row.name === setupName);
+  assert.ok(createdSetup, 'brak setupu po zapisie');
+  assert.equal(createdSetup.rules.length, 2);
+  assert.ok((await call(at, 'list_setups', {})).items.some((row) => row.id === createdSetup.id));
+  await expectToolError(at, 'create_setup', {
+    name: setupName, rules: ['Zasada A', 'Zasada B'], idempotencyKey: idem('setup-create-dup'),
+  }, /już istnieje/i);
+
+  const setupUpdate = await call(at, 'update_setup', {
+    setupId: createdSetup.id, changes: { rules: ['Zasada A', 'Zasada B', 'Zasada C'], minRR: '3' },
     idempotencyKey: idem('setup-update'),
   });
   assert.ok(setupUpdate.changes.includes('rules'));
-  await approve(setupUpdate);
-  const updatedSetup = stateOf(a.userId).state.setups.find((row) => row.id === createdSetup.id);
+  const updatedSetup = stateA().setups.find((row) => row.id === createdSetup.id);
   assert.equal(updatedSetup.rules.length, 3);
-  assert.equal(updatedSetup.minRR, 3);
+  assert.equal(updatedSetup.minRR, '3');
+  await expectToolError(at, 'update_setup', {
+    setupId: createdSetup.id, changes: { nieznane: 1 }, idempotencyKey: idem('setup-update-bad'),
+  }, /niedozwolone/i);
 
-  const planProposal = await call(at, 'create_day_plan_proposal', {
-    date: TODAY, markets: ['BTC', 'ETH'], bias: 'long', reason: 'E2E plan',
-    levels: [{ type: 'Wsparcie', price: '68000', note: 'retest' }],
-    scenarioA: { condition: 'retest 68k', action: 'long' },
-    scenarioB: { condition: 'zamknięcie pod 67.5k', action: 'stop' },
-    riskPercent: 0.5, maxTrades: 2, until: '20:00', rulesNotToDo: ['Bez altcoinów', 'Bez wejść po 20:00'],
+  // --- 11.5. Plan dnia: szkic, zmiana, zatwierdzenie, usunięcie ---
+  const planDate = dayKey(-20);
+  const planCreate = await call(at, 'create_day_plan', {
+    date: planDate, markets: ['BTC', 'ETH'], bias: 'long', why: 'E2E plan',
+    levels: [{ value: '68000', note: 'retest' }, '67500'],
+    ifMain: 'retest 68k', thenMain: 'long', ifAlt: 'zamknięcie pod 67.5k', thenAlt: 'stop',
+    risk: '0.5%', maxTrades: 2, until: '20:00', notDo: 'Bez altcoinów',
     idempotencyKey: idem('plan-create'),
   });
-  assert.equal(planProposal.status, 'pending');
-  await approve(planProposal);
-  const plan = stateOf(a.userId).state.plans[TODAY];
-  assert.deepEqual(plan.markets, ['BTC', 'ETH']);
-  assert.equal(plan.market, 'BTC');
-  assert.equal(plan.risk, '0.5%');
-  assert.equal(plan.maxTrades, '2');
-  assert.equal(plan.ifMain, 'retest 68k');
-  assert.equal(plan.notDo, "Bez altcoinów\nBez wejść po 20:00");
-  assert.equal(plan.approvedAt, null, 'MCP nie zatwierdza planu');
+  assert.equal(planCreate.applied, 'direct');
+  const draftPlan = (await call(at, 'get_day_plan', { date: planDate })).plan;
+  assert.deepEqual(draftPlan.markets, ['BTC', 'ETH']);
+  assert.equal(draftPlan.market, 'BTC', 'market musi wynikać z markets');
+  assert.equal(draftPlan.risk, '0.5%');
+  assert.equal(draftPlan.notDo, 'Bez altcoinów');
+  assert.equal(draftPlan.levels[0].value, '68000');
+  assert.equal(draftPlan.approvedAt ?? null, null, 'szkic nie jest zatwierdzony');
 
-  const checkinProposal = await call(at, 'create_checkin_proposal', {
-    mood: 'Skupienie', energy: 5, note: 'E2E check-in', date: YESTERDAY, idempotencyKey: idem('checkin-create'),
+  const planUpdate = await call(at, 'update_day_plan', {
+    date: planDate, changes: { risk: '0.25%', maxTrades: 1 }, idempotencyKey: idem('plan-update'),
   });
-  assert.equal(checkinProposal.status, 'pending');
-  await approve(checkinProposal);
-  const yesterdayCheckin = stateOf(a.userId).state.checkins.find((row) => row.date === YESTERDAY);
-  assert.equal(yesterdayCheckin.mood, 'Skupienie');
-  assert.equal(yesterdayCheckin.energy, 5);
-  assert.equal(yesterdayCheckin.score, 77);
+  assert.ok(planUpdate.changes.includes('risk'));
+  const updatedPlan = (await call(at, 'get_day_plan', { date: planDate })).plan;
+  assert.equal(updatedPlan.risk, '0.25%');
+  assert.equal(updatedPlan.maxTrades, 1);
+  assert.deepEqual(updatedPlan.markets, ['BTC', 'ETH'], 'update nie może wyczyścić rynków');
+  await expectToolError(at, 'update_day_plan', {
+    date: planDate, changes: { nieznane: 1 }, idempotencyKey: idem('plan-update-bad'),
+  }, /niedozwolone/i);
 
-  const riskProposal = await call(at, 'create_risk_rules_proposal', {
+  const approvePlan = await pending('approve_day_plan', {
+    date: planDate, idempotencyKey: idem('plan-approve'),
+  }, ['approvedAt']);
+  await approve(approvePlan);
+  const approvedPlan = (await call(at, 'get_day_plan', { date: planDate })).plan;
+  assert.equal(typeof approvedPlan.approvedAt, 'number');
+
+  // --- 11.6. Check-in ---
+  const checkinDate = dayKey(-24);
+  const checkin = await call(at, 'create_checkin', {
+    date: checkinDate, mood: 'Skupienie', energy: 5, note: 'E2E check-in',
+    idempotencyKey: idem('checkin-create'),
+  });
+  assert.equal(checkin.applied, 'direct');
+  assert.equal(checkin.record.score, 77);
+  const checkinHistory = await call(at, 'get_checkin_history', { limit: 60 });
+  assert.equal(checkinHistory.items.find((row) => row.date === checkinDate).score, 77);
+
+  const checkinUpdate = await call(at, 'update_checkin', {
+    date: checkinDate, changes: { mood: 'Spokój', energy: 3 }, idempotencyKey: idem('checkin-update'),
+  });
+  assert.ok(checkinUpdate.changes.includes('energy'));
+  const checkinAfterUpdate = (await call(at, 'get_checkin_history', { limit: 80 })).items
+    .find((row) => row.date === checkinDate);
+  assert.equal(checkinAfterUpdate.mood, 'Spokój', JSON.stringify({ date: checkinDate, update: checkinUpdate }));
+  assert.equal(checkinAfterUpdate.score, 60);
+
+  // --- 11.7. Usunięcia przez propozycję ---
+  const deleteScreenshot = await pending('delete_trade_screenshot', {
+    tradeId, position: 'before', idempotencyKey: idem('shot-delete'),
+  });
+  await approve(deleteScreenshot);
+  assert.equal((await call(at, 'get_trade_screenshots', { tradeId })).screenshots.count, 0);
+
+  const deleteReview = await pending('delete_trade_review', {
+    tradeId, idempotencyKey: idem('review-delete'),
+  });
+  await approve(deleteReview);
+  assert.equal((await call(at, 'get_trade_review', { tradeId })).reviewAvailable, false);
+
+  const deleteSetup = await pending('delete_setup', {
+    setupId: createdSetup.id, idempotencyKey: idem('setup-delete'),
+  });
+  await approve(deleteSetup);
+  assert.equal(stateA().setups.some((row) => row.id === createdSetup.id), false);
+
+  const deleteCheckin = await pending('delete_checkin', {
+    date: checkinDate, idempotencyKey: idem('checkin-delete'),
+  });
+  await approve(deleteCheckin);
+  assert.equal(
+    (await call(at, 'get_checkin_history', { limit: 60 })).items.some((row) => row.date === checkinDate),
+    false
+  );
+
+  const deletePlan = await pending('delete_day_plan', {
+    date: planDate, idempotencyKey: idem('plan-delete'),
+  });
+  assert.notEqual(
+    (await call(at, 'get_day_plan', { date: planDate })).plan,
+    null,
+    'propozycja nie może usunąć planu przed zgodą'
+  );
+  await approve(deletePlan);
+  assert.equal((await call(at, 'get_day_plan', { date: planDate })).plan, null);
+
+  const deleteTrade = await pending('delete_trade', {
+    tradeId, idempotencyKey: idem('trade-delete'),
+  });
+  assert.equal((await call(at, 'get_trade', { id: tradeId })).found, true, 'propozycja nie może usunąć przed zgodą');
+  await approve(deleteTrade);
+  assert.equal((await call(at, 'get_trade', { id: tradeId })).found, false);
+  const tradeTrash = stateA().trash.find((row) => row.kind === 'trade' && row.record.id === tradeId);
+  assert.ok(tradeTrash, 'usunięcie musi trafić do kosza');
+
+  const restore = await pending('restore_deleted_record', {
+    trashId: tradeTrash.id, idempotencyKey: idem('restore'),
+  }, ['restored']);
+  await approve(restore);
+  const restoredTrade = await call(at, 'get_trade', { id: tradeId });
+  assert.equal(restoredTrade.found, true, 'przywracanie nie odtworzyło transakcji');
+  assert.match(String(restoredTrade.trade.note), /Poprawiona notatka/);
+
+  // --- 11.8. Konta, wpłaty i wypłaty ---
+  const accountName = 'E2E Account ' + crypto.randomBytes(2).toString('hex');
+  const accountCreate = await pending('create_account', {
+    name: accountName, exchange: 'OKX', type: 'Futures', currency: 'USDT',
+    start: 1000, balance: 1000, primary: false, idempotencyKey: idem('account-create'),
+  }, ['name', 'start']);
+  await approve(accountCreate);
+  const account = (await call(at, 'get_accounts', {})).items.find((row) => row.name === accountName);
+  assert.ok(account, 'brak konta po zatwierdzeniu');
+  assert.equal(account.start, 1000);
+  assert.equal(account.balance, 1000);
+
+  const accountUpdate = await pending('update_account', {
+    accountId: account.id, changes: { name: accountName + ' v2', goal: 'E2E cel' },
+    idempotencyKey: idem('account-update'),
+  }, ['name']);
+  await approve(accountUpdate);
+  const renamedAccount = (await call(at, 'get_accounts', {})).items.find((row) => row.id === account.id);
+  assert.equal(renamedAccount.name, accountName + ' v2');
+  assert.equal(renamedAccount.goal, 'E2E cel');
+
+  const flowCreate = await pending('create_account_transaction', {
+    amount: 250, type: 'Wpłata', account: accountName + ' v2', currency: 'USDT', date: YESTERDAY,
+    op: 'E2E wpłata', idempotencyKey: idem('flow-create'),
+  }, ['amount']);
+  await approve(flowCreate);
+  const flow = (await call(at, 'get_account_transactions', { limit: 100 })).items
+    .find((row) => row.operation === 'E2E wpłata' && row.account === accountName + ' v2');
+  assert.ok(flow, 'brak wpisu kapitałowego po zatwierdzeniu');
+  const flowId = flow.id;
+  assert.equal(flow.type, 'deposit');
+  assert.equal(flow.amount, 250);
+
+  const flowUpdate = await pending('update_account_transaction', {
+    flowId, changes: { amount: 300, op: 'E2E korekta' }, idempotencyKey: idem('flow-update'),
+  }, ['amount']);
+  await approve(flowUpdate);
+  const updatedFlow = (await call(at, 'get_account_transactions', { limit: 100 })).items
+    .find((row) => row.id === flowId);
+  assert.equal(updatedFlow.amount, 300);
+
+  const flowDelete = await pending('delete_account_transaction', {
+    flowId, idempotencyKey: idem('flow-delete'),
+  });
+  await approve(flowDelete);
+  assert.equal(
+    (await call(at, 'get_account_transactions', { limit: 100 })).items.some((row) => row.id === flowId),
+    false
+  );
+
+  const accountDelete = await pending('delete_account', {
+    accountId: account.id, idempotencyKey: idem('account-delete'),
+  });
+  await approve(accountDelete);
+  assert.equal((await call(at, 'get_accounts', {})).items.some((row) => row.id === account.id), false);
+
+  // --- 11.9. Reguły ryzyka: tylko zaostrzanie ---
+  const riskProposal = await pending('update_risk_rules', {
     changes: { maxRisk: 0.5, maxLosses: 1 }, reason: 'Zaostrzenie zasad po serii strat',
     idempotencyKey: idem('risk-rules'),
-  });
-  assert.ok(riskProposal.changes.includes('maxRisk'));
+  }, ['maxRisk', 'maxLosses']);
   await approve(riskProposal);
-  const tightened = stateOf(a.userId).state.settings;
+  const tightened = stateA().settings;
   assert.equal(tightened.maxRisk, 0.5);
   assert.equal(tightened.maxLosses, 1);
   assert.equal(tightened.safetyEnabled, true);
 
-  await expectToolError(at, 'create_risk_rules_proposal', {
+  await expectToolError(at, 'update_risk_rules', {
     changes: { maxRisk: 5 }, reason: 'Chcę większe ryzyko', idempotencyKey: idem('risk-rules-weak'),
   }, /zmniejszać/i);
-  await expectToolError(at, 'create_risk_rules_proposal', {
+  await expectToolError(at, 'update_risk_rules', {
     changes: { safetyEnabled: false }, reason: 'Wyłączam wyłącznik', idempotencyKey: idem('risk-rules-off'),
-  }, /wyłącznik/i);
-  await expectToolError(at, 'create_risk_rules_proposal', {
+  }, /zabezpiecze/i);
+  await expectToolError(at, 'update_risk_rules', {
     changes: { maxRisk: 0.4 }, reason: 'krótko', idempotencyKey: idem('risk-rules-short'),
-  });
+  }, /reason/i);
 
-  const propProposal = await call(at, 'create_prop_challenge_proposal', {
-    templateId: 'ftmo-1step', name: 'E2E Prop', account: 'WEEX', accountSize: 10000,
+  // --- 11.10. Prop challenge ---
+  const propName = 'E2E Prop ' + crypto.randomBytes(2).toString('hex');
+  const propCreate = await pending('create_prop_challenge', {
+    name: propName, templateId: 'ftmo-1step', account: 'WEEX', accountSize: 10000,
     startBalance: 10000, startDate: TODAY, endDate: dayKey(30), idempotencyKey: idem('prop-create'),
-  });
-  assert.equal(propProposal.status, 'pending');
-  await approve(propProposal);
-  const createdChallenge = stateOf(a.userId).state.prop.challenges.find((row) => row.name === 'E2E Prop');
-  assert.ok(createdChallenge);
-  assert.equal(createdChallenge.accountSize, 10000);
+  }, ['name', 'accountSize']);
+  await approve(propCreate);
+  const challenge = (await call(at, 'get_prop_challenges', {})).items.find((row) => row.name === propName);
+  assert.ok(challenge, 'brak challenge po zatwierdzeniu');
+  assert.equal(challenge.accountSize, 10000);
 
-  const propUpdate = await call(at, 'update_prop_challenge_proposal', {
-    challengeId: createdChallenge.id, changes: { name: 'E2E Prop v2', maxLossPct: 8 },
+  const propUpdate = await pending('update_prop_challenge', {
+    challengeId: challenge.id, changes: { name: propName + ' v2', maxLossPct: 8 },
     idempotencyKey: idem('prop-update'),
-  });
-  assert.ok(propUpdate.changes.includes('name'));
+  }, ['name']);
   await approve(propUpdate);
-  const updatedChallenge = stateOf(a.userId).state.prop.challenges.find((row) => row.id === createdChallenge.id);
-  assert.equal(updatedChallenge.name, 'E2E Prop v2');
+  const updatedChallenge = (await call(at, 'get_prop_challenges', {})).items.find((row) => row.id === challenge.id);
+  assert.equal(updatedChallenge.name, propName + ' v2');
   assert.equal(updatedChallenge.maxLossPct, 8);
-  await expectToolError(at, 'update_prop_challenge_proposal', {
-    challengeId: createdChallenge.id, changes: { nieznane: 1 }, idempotencyKey: idem('prop-update-bad'),
-  }, /unexpected additional properties|Nieznane pole/i);
+  await expectToolError(at, 'update_prop_challenge', {
+    challengeId: challenge.id, changes: { nieznane: 1 }, idempotencyKey: idem('prop-update-bad'),
+  }, /niedozwolone/i);
 
-  const rejectedProposal = await call(at, 'create_day_plan_proposal', {
-    date: YESTERDAY, markets: ['ETH'], bias: 'short', reason: 'Plan do odrzucenia',
-    idempotencyKey: idem('plan-reject'),
+  const propDelete = await pending('delete_prop_challenge', {
+    challengeId: challenge.id, idempotencyKey: idem('prop-delete'),
+  });
+  await approve(propDelete);
+  assert.equal((await call(at, 'get_prop_challenges', {})).items.some((row) => row.id === challenge.id), false);
+
+  // --- 11.11. propose_change: dowolna operacja zapisu ---
+  const generic = await pending('propose_change', {
+    operation: 'trade.update',
+    args: { tradeId, changes: { note: 'Notatka przez propose_change' } },
+    idempotencyKey: idem('propose-generic'),
+  }, ['note']);
+  await approve(generic);
+  assert.equal((await call(at, 'get_trade', { id: tradeId })).trade.note, 'Notatka przez propose_change');
+  await expectToolError(at, 'propose_change', {
+    operation: 'trade.nuke', args: {}, idempotencyKey: idem('propose-bad'),
+  });
+
+  // --- 11.12. Zgoda człowieka: kod jednorazowy i odrzucenie ---
+  const gateDate = dayKey(-21);
+  await call(at, 'create_checkin', {
+    date: gateDate, mood: 'Spokój', energy: 3, idempotencyKey: idem('gate-checkin'),
+  });
+  const gateProposal = await pending('delete_checkin', {
+    date: gateDate, idempotencyKey: idem('gate-delete'),
+  });
+  await expectToolError(at, 'approve_proposal', {
+    proposalId: gateProposal.proposalId, expectedDiffHash: 'a'.repeat(64),
+    confirmationCode: 'ZZZZ-ZZZZ', idempotencyKey: idem('gate-hash'),
+  }, /diff/i);
+  await expectToolError(at, 'approve_proposal', {
+    proposalId: gateProposal.proposalId, expectedDiffHash: gateProposal.diffHash,
+    confirmationCode: 'ZZZZ-ZZZZ', idempotencyKey: idem('gate-nocode'),
+  }, /kod|potwierdze/i);
+  assert.equal(
+    (await call(at, 'get_checkin_history', { limit: 80 })).items.some((row) => row.date === gateDate),
+    true,
+    'bez kodu nie może być zapisu'
+  );
+  const gateCode = issueCode(gateProposal.proposalId);
+  await expectToolError(at, 'approve_proposal', {
+    proposalId: gateProposal.proposalId, expectedDiffHash: gateProposal.diffHash,
+    confirmationCode: 'AAAA-AAAA', idempotencyKey: idem('gate-badcode'),
+  }, /nieprawid/i);
+  const gateApproved = await call(at, 'approve_proposal', {
+    proposalId: gateProposal.proposalId, expectedDiffHash: gateProposal.diffHash,
+    confirmationCode: gateCode.code, idempotencyKey: idem('gate-approve'),
+  });
+  assert.equal(gateApproved.status, 'approved');
+  assert.equal(
+    (await call(at, 'get_checkin_history', { limit: 80 })).items.some((row) => row.date === gateDate),
+    false
+  );
+
+  const rejectDate = dayKey(-22);
+  await call(at, 'create_day_plan', {
+    date: rejectDate, markets: ['SOL'], bias: 'short', why: 'Plan do odrzucenia',
+    idempotencyKey: idem('reject-plan'),
+  });
+  const rejectProposal = await pending('delete_day_plan', {
+    date: rejectDate, idempotencyKey: idem('reject-delete'),
   });
   const rejected = await call(at, 'reject_proposal', {
-    proposalId: rejectedProposal.proposalId, idempotencyKey: idem('plan-reject-decision'),
+    proposalId: rejectProposal.proposalId, idempotencyKey: idem('reject-decision'),
   });
   assert.equal(rejected.status, 'rejected');
-  assert.equal((await call(at, 'get_proposal_status', { proposalId: rejectedProposal.proposalId })).status, 'rejected');
+  assert.equal((await call(at, 'get_proposal_status', { proposalId: rejectProposal.proposalId })).status, 'rejected');
+  assert.notEqual(
+    (await call(at, 'get_day_plan', { date: rejectDate })).plan,
+    null,
+    'odrzucona propozycja nie może zmienić stanu'
+  );
 
-  const expiring = await call(at, 'create_day_plan_proposal', {
-    date: TODAY, markets: ['SOL'], bias: 'long', reason: 'Plan wygasający',
-    idempotencyKey: idem('plan-expire'),
-  });
-  runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['expire', expiring.proposalId]);
-  assert.equal((await call(at, 'get_proposal_status', { proposalId: expiring.proposalId })).status, 'expired');
+  // --- 11.13. Idempotencja i konflikt wersji ---
+  const replayKey = idem('replay-direct');
+  const replayArgs = { date: dayKey(-23), mood: 'Nuda', energy: 3, idempotencyKey: replayKey };
+  const replayFirst = await call(at, 'create_checkin', replayArgs);
+  const replaySecond = await call(at, 'create_checkin', replayArgs);
+  assert.equal(replaySecond.duplicate, true, 'replay musi zwrócić duplicate');
+  assert.equal(replaySecond.revision, replayFirst.revision, 'replay nie może podnieść revision');
+  assert.equal(
+    stateA().checkins.filter((row) => row.date === dayKey(-23)).length,
+    1,
+    'replay nie może dodać drugiego wpisu'
+  );
 
-  const sameKey = idem('idem-repeat');
-  const first = await call(at, 'create_setup_proposal', {
-    name: 'E2E Repeat', entryRules: ['Zasada A1', 'Zasada B1'], idempotencyKey: sameKey,
-  });
-  const second = await call(at, 'create_setup_proposal', {
-    name: 'E2E Repeat', entryRules: ['Zasada A1', 'Zasada B1'], idempotencyKey: sameKey,
-  });
-  assert.equal(second.proposalId, first.proposalId, 'idempotencja nie zwróciła tej samej propozycji');
-  await expectToolError(at, 'create_setup_proposal', {
-    name: 'E2E Repeat', entryRules: ['Zasada A1', 'Zasada B2'], idempotencyKey: sameKey,
-  }, /idempotencyKey|inną treścią/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { note: 'stary odczyt' }, expectedRevision: 0,
+    idempotencyKey: idem('revision-conflict'),
+  }, /wersj/i);
 
   // =================================================================
   // 12. Workflow E2E
@@ -756,15 +1008,17 @@ async function main() {
   const wf1Setup = await call(at, 'get_setup_performance', { setupId: wf1Context.setup.name });
   const wf1Plan = await call(at, 'get_day_plan_compliance', { date: YESTERDAY });
   const wf1Review = await call(at, 'get_trade_review', { tradeId: 'fx_aligned_short' });
-  const wf1Proposal = await call(at, 'update_trade_proposal', {
-    tradeId: 'fx_aligned_short', changes: { note: 'WF1: analiza po sesji' }, idempotencyKey: idem('wf1'),
+  const wf1Proposal = await call(at, 'delete_trade', {
+    tradeId: 'fx_aligned_short', idempotencyKey: idem('wf1'),
   });
   assert.equal(wf1Context.compliance.aligned, true);
   assert.ok(wf1Setup.metrics.hasData);
   assert.equal(wf1Plan.summary.alignedTrades >= 1, true);
   assert.equal(wf1Review.reviewAvailable, true);
+  assert.equal(wf1Proposal.applied, 'proposal');
   assert.equal(wf1Proposal.status, 'pending');
   await call(at, 'reject_proposal', { proposalId: wf1Proposal.proposalId, idempotencyKey: idem('wf1-reject') });
+  assert.equal((await call(at, 'get_trade', { id: 'fx_aligned_short' })).found, true);
 
   // WF2 — przygotowanie sesji.
   const wf2Plan = await call(at, 'get_day_plan_context', { date: TODAY });
@@ -772,17 +1026,18 @@ async function main() {
   const wf2Macro = await call(at, 'get_macro_event_details', { eventId: macroList.items[0].id });
   const wf2Rules = await call(at, 'get_risk_rules', {});
   const wf2Protection = await call(at, 'get_protection_status', {});
-  const wf2Proposal = await call(at, 'create_day_plan_proposal', {
-    date: TODAY, markets: ['BTC'], bias: 'long', reason: 'WF2 szkic sesji',
-    riskPercent: 0.5, maxTrades: 2, idempotencyKey: idem('wf2'),
+  const wf2Proposal = await call(at, 'delete_day_plan', {
+    date: TODAY, idempotencyKey: idem('wf2'),
   });
   assert.ok(wf2Plan.trades.length >= 1);
   assert.ok(wf2Ready.readiness.score !== null);
   assert.equal(wf2Macro.found, true);
   assert.ok(wf2Rules.maxRiskPercentPerTrade > 0);
   assert.equal(wf2Protection.triggered, true);
+  assert.equal(wf2Proposal.applied, 'proposal');
   assert.equal(wf2Proposal.status, 'pending');
   await call(at, 'reject_proposal', { proposalId: wf2Proposal.proposalId, idempotencyKey: idem('wf2-reject') });
+  assert.notEqual((await call(at, 'get_day_plan', { date: TODAY })).plan, null);
 
   // WF3 — psychologia.
   const wf3Corr = await call(at, 'get_checkin_trading_correlation', { minSample: 3 });

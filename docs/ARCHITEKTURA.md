@@ -84,19 +84,22 @@ app/Mcp/
                              EventsService, MacroService, CapitalService, ConnectionsService,
                              PropChallengeService, TradeContextService
   Proposals/                 ProposalService (mcp_proposals, FOR UPDATE, revision), ProposalBuilder
-  Tools/                     Tools (handlery), Schemas (input/output), Prompts
+  Tools/                     Tools (odczyt), WriteTools (33 narzędzia zapisu), Schemas/WriteSchemas, Prompts
+  Write/                     WriteEngine (walidacja, formuły, CAS, kosz, audyt, idempotencja)
 ```
 
 Przepływ zapisu:
 
 ```text
-agent → propose_* → walidacja → mcp_proposals pending
-panel AlphaVault → POST /api/mcp/proposals/decide
-→ SELECT ... FOR UPDATE → sprawdzenie base_revision → user_states.revision+1 → audit
+agent → create_*/update_*/close_trade → WriteEngine → SELECT ... FOR UPDATE → revision+1 → mcp_audit
+agent → delete_*/account/flow/risk/prop/plan.approve/restore → preview → mcp_proposals (write_op, pending)
+panel AlphaVault albo kod jednorazowy → approve_proposal / POST /api/mcp/proposals/decide
+→ WriteEngine::apply → revision+1 → mcp_audit
 ```
 
-Zasady: brak bezpośredniego zapisu z MCP, brak narzędzia approve, dane giełdowe niezmienne,
-`MCP_WRITES_ENABLED=false` ukrywa narzędzia zapisujące i scope `alphavault.write`.
+Zasady: 12 operacji niskiego ryzyka zapisuje się bezpośrednio, 18 wysokiego ryzyka wymaga zgody
+człowieka, usunięcia są miękkie (`state.trash[]`), dane giełdowe niezmienne,
+`MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu i scope `alphavault.write`.
 Szczegóły: [MCP.md](MCP.md).
 
 ## Deployment

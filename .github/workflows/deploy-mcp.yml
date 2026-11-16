@@ -18,12 +18,12 @@ on:
         default: true
         type: boolean
       writes_enabled:
-        description: "Włącz narzędzia zapisu MCP (wymaga pilot_discord_ids)"
+        description: "Włącz narzędzia zapisu MCP (wymaga scope alphavault.write; pilot_discord_ids opcjonalne)"
         required: false
-        default: false
+        default: true
         type: boolean
       pilot_discord_ids:
-        description: "Allowlista Discord ID dla zapisu (CSV); wymagana przy writes_enabled=true"
+        description: "Opcjonalna allowlista Discord ID dla zapisu (CSV); puste = wszyscy z scope alphavault.write"
         required: false
         default: ""
         type: string
@@ -119,11 +119,13 @@ jobs:
           PILOT_IDS: ${{ inputs.pilot_discord_ids }}
         run: |
           set -euo pipefail
-          if [ "$WRITES_ENABLED" = "true" ] && [ -z "$PILOT_IDS" ]; then
-            echo "::error::writes_enabled=true wymaga pilot_discord_ids."
-            exit 1
+          if [ -n "$PILOT_IDS" ]; then
+            if ! printf '%s' "$PILOT_IDS" | grep -Eq '^[0-9]+(,[0-9]+)*$'; then
+              echo "::error::pilot_discord_ids musi być listą numerycznych Discord ID rozdzielonych przecinkami."
+              exit 1
+            fi
           fi
-          echo "MCP write settings validated."
+          echo "MCP write settings validated (writes_enabled=$WRITES_ENABLED, pilot=$( [ -n "$PILOT_IDS" ] && echo allowlist || echo all-scoped-users ))."
 
       - name: Verify deploy script guards
         run: |
