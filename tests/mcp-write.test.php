@@ -222,7 +222,7 @@ foreach ([
 $closedAtResultOnly = $apply($trade['state'], 'trade.close', ['tradeId' => $tradeId, 'result' => 0]);
 check(
     'Transakcja: close_trade wynikiem zapisuje datę i nie zostawia statusu otwartej',
-    $closedAtResultOnly['result']['result'] === 0
+    $closedAtResultOnly['result']['result'] === 0.0
     && $closedAtResultOnly['result']['exit'] === null
     && preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', (string) $closedAtResultOnly['result']['closedAt']) === 1
 );
