@@ -175,6 +175,12 @@ function patchState(userId, patch) {
   return JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['patch', String(userId), PATCH_FILE]));
 }
 
+function seedWearables(userId, date, { sleepMinutes, hrvMs, restingHr, providerScore }) {
+  return JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), [
+    'seed-wearables', String(userId), date, String(sleepMinutes), String(hrvMs), String(restingHr), String(providerScore),
+  ]));
+}
+
 const idem = (prefix) => `${prefix}-${crypto.randomBytes(8).toString('hex')}`;
 
 async function main() {
@@ -365,6 +371,21 @@ async function main() {
   assert.ok(correlation.correlations.energyVsDailyNet === null || typeof correlation.correlations.energyVsDailyNet.r === 'number');
   await expectToolError(at, 'get_checkin_trading_correlation', { minSample: 0 });
 
+  seedWearables(a.userId, TODAY, { sleepMinutes: 420, hrvMs: 80, restingHr: 55, providerScore: 80 });
+  const wearableDashboard = await call(at, 'get_dashboard');
+  assert.equal(wearableDashboard.readiness.healthAccess, 'granted');
+  assert.equal(wearableDashboard.readiness.hasDeviceData, true);
+  assert.deepEqual(wearableDashboard.readiness.providers, ['oura']);
+  assert.equal(wearableDashboard.readiness.sleepScore, 88);
+  assert.equal(wearableDashboard.readiness.hrvScore, 100);
+  assert.equal(wearableDashboard.readiness.heartRateScore, 100);
+  assert.equal(wearableDashboard.readiness.bodyBatteryScore, null);
+  assert.equal(wearableDashboard.readiness.recoveryScore, 80);
+  assert.ok(wearableDashboard.readiness.physiologyScore !== null);
+  assert.match(wearableDashboard.readiness.description, /Sen 7 h 00 min/);
+  const wearableReadiness = await call(at, 'get_readiness_context', { date: TODAY });
+  assert.equal(wearableDashboard.readiness.score, wearableReadiness.readiness.score);
+
   // =================================================================
   // 6. Prop challenge
   // =================================================================
@@ -534,6 +555,7 @@ async function main() {
   const authB = await authorize(clientB, b.session, 'alphavault.read');
   const tokB = await token(clientB, authB);
   const atB = tokB.access_token;
+  seedWearables(b.userId, TODAY, { sleepMinutes: 333, hrvMs: 99, restingHr: 44, providerScore: 88 });
   patchState(b.userId, {
     trades: [], plans: {}, setups: [], prop: { challenges: [], selectedId: null }, tradeReviews: {},
     settings: { devices: { garmin: true } },
@@ -551,10 +573,15 @@ async function main() {
   assert.equal(dashboardB.readiness.score, 67, 'bez health wynik opiera się tylko na check-inie');
   assert.equal(dashboardB.readiness.garmin, false);
   assert.equal(dashboardB.readiness.hasDeviceData, false);
+  assert.deepEqual(dashboardB.readiness.providers, []);
+  assert.equal(dashboardB.readiness.bodyBatteryScore, null);
+  assert.equal(dashboardB.readiness.recoveryScore, null);
+  assert.equal(dashboardB.readiness.physiologyScore, null);
   for (const key of ['sleepScore', 'hrvScore', 'heartRateScore']) {
     assert.equal(dashboardB.readiness[key], null, `${key} nie może ujawniać danych pochodnych`);
   }
   assert.doesNotMatch(dashboardB.readiness.description, /7 h|120 ms|45/);
+  assert.doesNotMatch(JSON.stringify(dashboardB.readiness), /5 h 33|99 ms|spoczynkowe 44|urządzenia 88/);
   const readinessB = await call(atB, 'get_readiness_context', { date: TODAY });
   assert.equal(readinessB.healthAccess, 'scope_missing');
   assert.equal(readinessB.health, null);

@@ -66,7 +66,7 @@ npm run test:demo-state  # daty fixture demo: 15 scenariuszy
 npm run test:roles       # rola: login + cron recheck: 18 scenariuszy
 npm run test:wearables   # urządzenia zdrowotne API + UI: 42 scenariusze
 npm run test:mcp          # MCP 3.2: OAuth, 79 narzędzi w jednym zakresie, create→delete→restore (MySQL + PHP)
-npm run test:mcp:tools    # MCP: health scope, widoczność wyłączonych kont, break-even, idempotencja payloadu, kosz i 6 workflow
+npm run test:mcp:tools    # MCP: health scope + dashboard Oura, widoczność wyłączonych kont, break-even, idempotencja payloadu, kosz i 6 workflow
 npm run test:mcp:write    # MCP: rejestr operacji, routing zgody, schematy i formuły bez bazy
 npm run test:mcp:login    # mock Discord: rola, brak roli, duplikat konta
 npm run test:mcp:ui       # panel propozycji: diff, kod do rozmowy, approve, reject, reload

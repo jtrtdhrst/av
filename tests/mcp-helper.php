@@ -67,6 +67,37 @@ try {
         echo json_encode(['ok' => true, 'revision' => 1]);
         exit(0);
     }
+    if ($command === 'seed-wearables') {
+        $userId = (int) ($argv[2] ?? 0);
+        $date = (string) ($argv[3] ?? '');
+        $sleepMinutes = (int) ($argv[4] ?? 0);
+        $hrvMs = (float) ($argv[5] ?? 0);
+        $restingHr = (int) ($argv[6] ?? 0);
+        $providerScore = (int) ($argv[7] ?? 0);
+        $previousDate = (new DateTimeImmutable($date))->modify('-1 day')->format('Y-m-d');
+        $db->execute(
+            "INSERT INTO wearable_connections (user_id, provider, status, device_name, consent_at)
+             VALUES (?, 'oura', 'connected', 'MCP E2E Oura', UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE status = 'connected', device_name = VALUES(device_name), consent_at = UTC_TIMESTAMP()",
+            [$userId]
+        );
+        foreach ([
+            [$previousDate, 480, 60.0, 60, null],
+            [$date, $sleepMinutes, $hrvMs, $restingHr, $providerScore],
+        ] as [$metricDate, $sleep, $hrv, $heartRate, $score]) {
+            $db->execute(
+                'INSERT INTO wearable_daily_metrics
+                    (user_id, provider, metric_date, sleep_minutes, hrv_ms, resting_hr, provider_score, synced_at)
+                 VALUES (?, \'oura\', ?, ?, ?, ?, ?, UTC_TIMESTAMP())
+                 ON DUPLICATE KEY UPDATE sleep_minutes = VALUES(sleep_minutes),
+                    hrv_ms = VALUES(hrv_ms), resting_hr = VALUES(resting_hr),
+                    provider_score = VALUES(provider_score), synced_at = UTC_TIMESTAMP()',
+                [$userId, $metricDate, $sleep, $hrv, $heartRate, $score]
+            );
+        }
+        echo json_encode(['ok' => true]);
+        exit(0);
+    }
     if ($command === 'expire') {
         $proposalId = (string) ($argv[2] ?? '');
         $db->execute(

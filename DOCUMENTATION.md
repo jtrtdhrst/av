@@ -860,6 +860,7 @@ wymaga osobnego checkboxa na ekranie zgody. Deploy MCP nie dotyka `alphavault.pl
 | Prop parity | `tests/prop-parity.mjs` + `tests/prop-parity.php` | PHP ↔ JS: te same fixtures i metryki | PASS |
 | MCP migracja upgrade | `tests/mcp-migration-upgrade.test.php` | odtworzenie schematu sprzed 20261116, dodanie kolumn/fingerprintów, kolacje case-sensitive i ponowienie migracji | CI po zmianie |
 | MCP propozycje | `tests/mcp.test.php` | gotowość z brakującymi metrykami, case-sensitive klucze propozycji/decyzji, kod jednorazowy, idempotencja decyzji powiązana z akcją i payloadem, break-even, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | CI po zmianie |
+| MCP dashboard health | `tests/mcp-tools.e2e.mjs` | metryki aktywnego Oura widoczne wyłącznie dla tokenu z `alphavault.health`; bez scope'u brak metryk, także przy aktywnym połączeniu | CI po zmianie |
 | MCP analityka | `tests/mcp-tools.test.php` | Metrics, analityka, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38, odznaki, screeny | CI po zmianie |
 | MCP zapis | `tests/mcp-write.test.php` | 30 operacji, routing 18/12, 33 schematy, formuły check-inu i planu, kosz, reguły ryzyka | PASS |
 | MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, pilot | PASS |

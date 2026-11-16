@@ -15,6 +15,7 @@ putenv('MCP_WRITES_ENABLED=true');
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use AlphaVault\Db;
+use AlphaVault\Mcp\Analytics\ReadinessService;
 use AlphaVault\Mcp\Proposals\ProposalBuilder;
 use AlphaVault\Mcp\Proposals\ProposalException;
 use AlphaVault\Mcp\Proposals\ProposalService;
@@ -102,18 +103,36 @@ try {
     $dashboard = new DashboardService(
         $tradeService,
         new StatsService($tradeService),
-        new EventsService($config, $db)
+        new EventsService($config, $db),
+        new ReadinessService()
     );
     $emptyHealth = $dashboard->readiness([
-        'settings' => ['devices' => ['garmin' => true]],
-        'health' => [],
         'checkins' => [],
-    ], 'granted');
+    ], 'granted', [
+        'today' => null,
+        'baseline' => ['days' => 0],
+        'series' => [],
+        'readiness' => ['score' => null, 'components' => ['physiology' => null]],
+        'devices' => [['provider' => 'oura', 'connected' => true]],
+    ]);
     $partialHealth = $dashboard->readiness([
-        'settings' => ['devices' => ['garmin' => true]],
-        'health' => ['sleepH' => 7.5],
         'checkins' => [],
-    ], 'granted');
+    ], 'granted', [
+        'today' => [
+            'date' => Dates::todayKey(),
+            'sleepMinutes' => 450,
+            'hrvMs' => null,
+            'restingHr' => null,
+            'bodyBattery' => null,
+            'providerScore' => null,
+            'providers' => ['oura'],
+            'components' => ['sleep' => 94],
+        ],
+        'baseline' => ['days' => 0, 'sleepMinutes' => null, 'hrvMs' => null, 'restingHr' => null],
+        'series' => [],
+        'readiness' => ['score' => 94, 'components' => ['physiology' => 94]],
+        'devices' => [['provider' => 'oura', 'connected' => true]],
+    ]);
     check('0. gotowość: brak metryk urządzenia daje puste pola', $emptyHealth['score'] === null
         && $emptyHealth['sleepScore'] === null && $emptyHealth['hrvScore'] === null
         && $emptyHealth['heartRateScore'] === null && $emptyHealth['hasDeviceData'] === false

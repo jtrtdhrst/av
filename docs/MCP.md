@@ -334,7 +334,9 @@ zielonym runie i health checku `https://mcp.alphavault.pl/health`.
   dashboard i kontekst gotowości liczą wynik wyłącznie z check-inu; pola i składowe zdrowotne
   pozostają `null`, także dla starszych metryk zapisanych w `state.health`. Brak check-inu daje
   `readiness.score: null`, bez syntetycznego wyniku. Brak pojedynczej metryki urządzenia pozostawia
-  jej składową `null`; wynik używa wyłącznie dostępnych sygnałów.
+  jej składową `null`; wynik używa wyłącznie dostępnych sygnałów. `get_dashboard` używa tego samego
+  podsumowania aktywnych urządzeń Apple/Oura/Garmin/Whoop co `get_readiness_context`; nie zwraca
+  snapshotu ani serii danych.
 - `account.include` ogranicza analitykę, nie widoczność transakcji w `list_trades`, `get_trade`
   ani kontekstach dziennika.
 - Wynik transakcji `0` jest klasyfikowany jako break-even, osobno od zysku (`> 0`) i straty (`< 0`).
