@@ -34,7 +34,12 @@ if (!in_array(basename($migration), $applied, true)) {
 }
 
 $statement = $pdo->prepare(
-    'SELECT table_name, column_name, collation_name, data_type, is_nullable, character_maximum_length
+    'SELECT table_name AS table_name,
+            column_name AS column_name,
+            collation_name AS collation_name,
+            data_type AS data_type,
+            is_nullable AS is_nullable,
+            character_maximum_length AS character_maximum_length
        FROM information_schema.columns
       WHERE table_schema = DATABASE()
         AND (
