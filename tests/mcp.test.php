@@ -19,7 +19,11 @@ use AlphaVault\Mcp\Proposals\ProposalBuilder;
 use AlphaVault\Mcp\Proposals\ProposalException;
 use AlphaVault\Mcp\Proposals\ProposalService;
 use AlphaVault\Mcp\Support\Dates;
+use AlphaVault\Mcp\Support\DashboardService;
+use AlphaVault\Mcp\Support\EventsService;
 use AlphaVault\Mcp\Support\PropChallengeService;
+use AlphaVault\Mcp\Support\StatsService;
+use AlphaVault\Mcp\Support\TradeService;
 
 [$config, $db] = require __DIR__ . '/../app/bootstrap.php';
 
@@ -74,6 +78,7 @@ try {
         'trades' => [
             ['id' => 'ex1', 'pair' => 'BTC/USDT', 'dir' => 'l', 'entry' => '100', 'size' => '1', 'sl' => '90', 'tp' => '120', 'exit' => '110', 'result' => 10, 'r' => 1, 'date' => gmdate('c'), 'source' => 'OKX', 'grade' => 'A', 'setup' => 'Breakout', 'checklist' => 7, 'checkTotal' => 7, 'account' => 'Main'],
             ['id' => 'man1', 'pair' => 'ETH/USDT', 'dir' => 'l', 'entry' => '2000', 'size' => '0.1', 'sl' => '1900', 'tp' => '2200', 'exit' => 'otwarta', 'result' => null, 'r' => null, 'date' => gmdate('c'), 'source' => 'Ręcznie', 'grade' => 'B', 'setup' => 'Pullback', 'account' => 'Main'],
+            ['id' => 'man2', 'pair' => 'SOL/USDT', 'dir' => 'l', 'entry' => '2000', 'size' => '0.1', 'sl' => '1900', 'tp' => '2200', 'exit' => 'otwarta', 'result' => null, 'r' => null, 'date' => gmdate('c'), 'source' => 'Ręcznie', 'grade' => 'B', 'setup' => 'Pullback', 'account' => 'Main'],
         ],
         'checkins' => [],
         'accounts' => [['name' => 'Main', 'balance' => 1000, 'start' => 1000, 'include' => true, 'currency' => 'USDT', 'type' => 'Futures', 'exchange' => 'OKX']],
@@ -93,6 +98,29 @@ try {
 
     $service = new ProposalService($db, $config);
     $builder = new ProposalBuilder($db, $service);
+    $tradeService = new TradeService();
+    $dashboard = new DashboardService(
+        $tradeService,
+        new StatsService($tradeService),
+        new EventsService($config, $db)
+    );
+    $emptyHealth = $dashboard->readiness([
+        'settings' => ['devices' => ['garmin' => true]],
+        'health' => [],
+        'checkins' => [],
+    ], 'granted');
+    $partialHealth = $dashboard->readiness([
+        'settings' => ['devices' => ['garmin' => true]],
+        'health' => ['sleepH' => 7.5],
+        'checkins' => [],
+    ], 'granted');
+    check('0. gotowość: brak metryk urządzenia daje puste pola', $emptyHealth['score'] === null
+        && $emptyHealth['sleepScore'] === null && $emptyHealth['hrvScore'] === null
+        && $emptyHealth['heartRateScore'] === null && $emptyHealth['hasDeviceData'] === false
+        && $emptyHealth['description'] === null);
+    check('0b. gotowość: brakujące składowe pozostają null', $partialHealth['sleepScore'] !== null
+        && $partialHealth['hrvScore'] === null && $partialHealth['heartRateScore'] === null
+        && $partialHealth['hasDeviceData'] === true && !str_contains((string) $partialHealth['description'], 'HRV'));
 
     // 1. Propozycja transakcji nie zmienia stanu przed zatwierdzeniem.
     $proposal = $builder->createTrade($userA, [
@@ -102,7 +130,7 @@ try {
     ], 'test-client');
     $beforeRow = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
     $beforeState = json_decode((string) $beforeRow['state'], true);
-    check('1. propozycja utworzona, stan bez zmian', ($proposal['status'] ?? '') === 'pending' && count($beforeState['trades']) === 2, $proposal['proposalId'] ?? '');
+    check('1. propozycja utworzona, stan bez zmian', ($proposal['status'] ?? '') === 'pending' && count($beforeState['trades']) === 3, $proposal['proposalId'] ?? '');
 
     // 2. Idempotencja.
     $duplicate = $builder->createTrade($userA, [
@@ -155,7 +183,30 @@ try {
             $closed = $trade;
         }
     }
-    check('6. zamknięcie liczy wynik i R', $closed !== null && (float) $closed['result'] === 10.0 && (float) $closed['r'] === 1.0 && (string) $closed['exit'] === '2100', json_encode($closed));
+    check('6. zamknięcie propozycji z zyskiem', $closed !== null
+        && (float) $closed['result'] === 10.0
+        && (float) $closed['r'] === 1.0
+        && (string) $closed['exit'] === '2100'
+        && str_contains((string) $closed['mentor'], 'z zyskiem'), json_encode($closed));
+
+    $breakEvenProposal = $builder->closeTrade($userA, [
+        'tradeId' => 'man2', 'exitPrice' => 2000, 'idempotencyKey' => 'idem-close-be-1',
+    ], 'test-client');
+    $service->approve($userA, $breakEvenProposal['proposalId'], $userA);
+    $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $saved = json_decode((string) $row['state'], true);
+    $breakEvenTrade = null;
+    foreach ($saved['trades'] as $trade) {
+        if ((string) ($trade['id'] ?? '') === 'man2') {
+            $breakEvenTrade = $trade;
+        }
+    }
+    check('6b. break-even w propozycji ma neutralny komentarz', $breakEvenTrade !== null
+        && (float) $breakEvenTrade['result'] === 0.0
+        && (float) $breakEvenTrade['r'] === 0.0
+        && (string) $breakEvenTrade['exit'] === '2000'
+        && str_contains((string) $breakEvenTrade['mentor'], 'zero (break-even)')
+        && !str_contains((string) $breakEvenTrade['mentor'], 'zyskiem'), json_encode($breakEvenTrade));
 
     // 7. Zamknięcie transakcji giełdowej odrzucone.
     $exchangeClose = expectError(fn () => $builder->closeTrade($userA, ['tradeId' => 'ex1', 'exitPrice' => 130, 'idempotencyKey' => 'idem-close-ex'], 'test-client'));
@@ -230,6 +281,21 @@ try {
     ], new \DateTimeImmutable('2026-11-12 12:00:00', Dates::tz()));
     check('16. silnik prop: pusty i trailing', $empty['n'] === 0 && $empty['status'] === 'active' && $trailing['maxDrawdownAmount'] === 1200.0 && $trailing['peak'] === 10500.0, json_encode([$empty['status'], $trailing['maxDrawdownAmount'], $trailing['peak']]));
 
+    // 16b. Klucze propozycji i decyzji są case-sensitive.
+    $caseProposalKey = 'Case-Proposal-' . bin2hex(random_bytes(4));
+    $caseProposalA = $builder->saveCheckin($userA, [
+        'mood' => 'Nuda', 'energy' => 2, 'idempotencyKey' => $caseProposalKey,
+    ], 'test-client');
+    $caseProposalB = $builder->saveCheckin($userA, [
+        'mood' => 'Spokój', 'energy' => 4, 'idempotencyKey' => strtolower($caseProposalKey),
+    ], 'test-client');
+    $caseDecisionKey = 'Case-Decision-' . bin2hex(random_bytes(4));
+    $caseRejectA = $service->rejectWithKey($userA, $caseProposalA['proposalId'], $caseDecisionKey, 'test-client');
+    $caseRejectB = $service->rejectWithKey($userA, $caseProposalB['proposalId'], strtolower($caseDecisionKey), 'test-client');
+    check('16b. klucze propozycji i decyzji różnią wielkość liter', $caseProposalA['proposalId'] !== $caseProposalB['proposalId']
+        && ($caseRejectA['status'] ?? '') === 'rejected'
+        && ($caseRejectB['status'] ?? '') === 'rejected');
+
     // 17. Zatwierdzenie przez MCP wymaga kodu z panelu.
     $codeProposal = $builder->saveCheckin($userA, ['mood' => 'Spokój', 'energy' => 3, 'idempotencyKey' => 'idem-code-checkin-1'], 'test-client');
     $missingCode = expectError(fn () => $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], 'ABCD-EFGH', 'idem-decision-1', 'test-client'));
@@ -248,31 +314,77 @@ try {
     // 20. Poprawne zatwierdzenie i idempotentne powtórzenie.
     $approvedByMcp = $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], $issued['code'], 'idem-decision-1', 'test-client');
     $replayed = $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], $issued['code'], 'idem-decision-1', 'test-client');
+    $db->execute('UPDATE mcp_proposals SET decision_hash = NULL WHERE id = ?', [$codeProposal['proposalId']]);
+    $legacyReplay = $service->approveWithCode(
+        $userA,
+        $codeProposal['proposalId'],
+        $codeProposal['diffHash'],
+        $issued['code'],
+        'idem-decision-1',
+        'test-client'
+    );
+    $migratedLegacyDecision = $db->queryOne(
+        'SELECT decision_hash FROM mcp_proposals WHERE id = ?',
+        [$codeProposal['proposalId']]
+    );
+    $changedApproval = expectError(fn () => $service->approveWithCode(
+        $userA,
+        $codeProposal['proposalId'],
+        str_repeat('b', 64),
+        $issued['code'],
+        'idem-decision-1',
+        'test-client'
+    ));
     $reusedCode = expectError(fn () => $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], $issued['code'], 'idem-decision-2', 'test-client'));
     $row = $db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ?', [$userA]);
     $savedState = json_decode((string) $row['state'], true);
     $todayCheckin = $savedState['checkins'][0] ?? null;
     check('20. zatwierdzenie kodem i idempotencja decyzji', ($approvedByMcp['status'] ?? '') === 'approved'
         && ($replayed['duplicate'] ?? false) === true
+        && ($legacyReplay['duplicate'] ?? false) === true
+        && (string) ($migratedLegacyDecision['decision_hash'] ?? '') !== ''
+        && $changedApproval === 'idempotency_conflict'
         && $reusedCode === 'proposal_closed'
         && (int) $todayCheckin['energy'] === 3, json_encode([$approvedByMcp, $replayed, $reusedCode]));
 
     // 20b. Zatwierdzenie w rozmowie (confirmed) bez kodu.
     $chatProposal = $builder->saveCheckin($userA, ['mood' => 'Nuda', 'energy' => 3, 'idempotencyKey' => 'idem-chat-checkin-1'], 'test-client');
     $chatApproved = $service->approveWithCode($userA, $chatProposal['proposalId'], $chatProposal['diffHash'], null, 'idem-chat-decision-1', 'test-client');
+    $db->execute('UPDATE mcp_proposals SET decision_hash = NULL WHERE id = ?', [$chatProposal['proposalId']]);
+    $legacyChatReplay = $service->approveWithCode(
+        $userA,
+        $chatProposal['proposalId'],
+        $chatProposal['diffHash'],
+        null,
+        'idem-chat-decision-1',
+        'test-client'
+    );
     $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
     $chatState = json_decode((string) $row['state'], true);
     $chatCheckin = $chatState['checkins'][0] ?? null;
     check('20b. confirmed bez kodu zatwierdza', ($chatApproved['status'] ?? '') === 'approved'
+        && ($legacyChatReplay['duplicate'] ?? false) === true
         && ($chatCheckin['mood'] ?? '') === 'Nuda', json_encode([$chatApproved, $chatCheckin]));
 
     // 21. Odrzucenie przez MCP i powtórzenie.
     $rejectTarget = $builder->saveCheckin($userA, ['mood' => 'Skupienie', 'energy' => 4, 'idempotencyKey' => 'idem-reject-mcp-1'], 'test-client');
     $rejected = $service->rejectWithKey($userA, $rejectTarget['proposalId'], 'idem-reject-decision-1', 'test-client');
     $rejectedReplay = $service->rejectWithKey($userA, $rejectTarget['proposalId'], 'idem-reject-decision-1', 'test-client');
+    $db->execute('UPDATE mcp_proposals SET decision_hash = NULL WHERE id = ?', [$rejectTarget['proposalId']]);
+    $legacyRejectedReplay = $service->rejectWithKey($userA, $rejectTarget['proposalId'], 'idem-reject-decision-1', 'test-client');
+    $changedAction = expectError(fn () => $service->approveWithCode(
+        $userA,
+        $rejectTarget['proposalId'],
+        $rejectTarget['diffHash'],
+        null,
+        'idem-reject-decision-1',
+        'test-client'
+    ));
     $statusAfterReject = $service->status($userA, $rejectTarget['proposalId']);
     check('21. odrzucenie przez MCP', ($rejected['status'] ?? '') === 'rejected'
         && ($rejectedReplay['duplicate'] ?? false) === true
+        && ($legacyRejectedReplay['duplicate'] ?? false) === true
+        && $changedAction === 'idempotency_conflict'
         && ($statusAfterReject['status'] ?? '') === 'rejected', json_encode([$rejected, $statusAfterReject]));
 
     // 22. Konto: utworzenie bez zmiany salda.

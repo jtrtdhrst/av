@@ -534,7 +534,30 @@ async function main() {
   const authB = await authorize(clientB, b.session, 'alphavault.read');
   const tokB = await token(clientB, authB);
   const atB = tokB.access_token;
-  patchState(b.userId, { trades: [], plans: {}, checkins: [], setups: [], prop: { challenges: [], selectedId: null }, tradeReviews: {} });
+  patchState(b.userId, {
+    trades: [], plans: {}, setups: [], prop: { challenges: [], selectedId: null }, tradeReviews: {},
+    settings: { devices: { garmin: true } },
+    health: { sleepH: 7.25, hrv: 120, hrvBase: 60, hr: 45, hrBase: 60 },
+    checkins: [],
+  });
+  const noCheckinDashboard = await call(atB, 'get_dashboard');
+  assert.equal(noCheckinDashboard.readiness.score, null, 'bez check-inu nie może powstać wynik domyślny');
+  assert.equal(noCheckinDashboard.readiness.checkScore, null);
+  assert.equal(noCheckinDashboard.readiness.title, null);
+  assert.equal(noCheckinDashboard.readiness.description, null);
+  patchState(b.userId, { checkins: [{ date: TODAY, mood: 'Skupienie', energy: 4, score: 67 }] });
+  const dashboardB = await call(atB, 'get_dashboard');
+  assert.equal(dashboardB.readiness.healthAccess, 'scope_missing');
+  assert.equal(dashboardB.readiness.score, 67, 'bez health wynik opiera się tylko na check-inie');
+  assert.equal(dashboardB.readiness.garmin, false);
+  assert.equal(dashboardB.readiness.hasDeviceData, false);
+  for (const key of ['sleepScore', 'hrvScore', 'heartRateScore']) {
+    assert.equal(dashboardB.readiness[key], null, `${key} nie może ujawniać danych pochodnych`);
+  }
+  assert.doesNotMatch(dashboardB.readiness.description, /7 h|120 ms|45/);
+  const readinessB = await call(atB, 'get_readiness_context', { date: TODAY });
+  assert.equal(readinessB.healthAccess, 'scope_missing');
+  assert.equal(readinessB.health, null);
   assert.equal((await call(atB, 'get_trade_journal_context', { tradeId: 'fx_aligned_short' })).found, false);
   assert.equal((await call(atB, 'get_trade_review', { tradeId: 'fx_aligned_short' })).found, false);
   assert.equal((await call(atB, 'get_trade_screenshots', { tradeId: 'fx_aligned_short' })).found, false);
@@ -813,13 +836,41 @@ async function main() {
   const accountName = 'E2E Account ' + crypto.randomBytes(2).toString('hex');
   const accountCreate = await pending('create_account', {
     name: accountName, exchange: 'OKX', type: 'Futures', currency: 'USDT',
-    start: 1000, balance: 1000, primary: false, idempotencyKey: idem('account-create'),
+    start: 1000, balance: 1000, primary: false, include: false, idempotencyKey: idem('account-create'),
   }, ['name', 'start']);
   await approve(accountCreate);
   const account = (await call(at, 'get_accounts', {})).items.find((row) => row.name === accountName);
   assert.ok(account, 'brak konta po zatwierdzeniu');
   assert.equal(account.start, 1000);
   assert.equal(account.balance, 1000);
+  assert.equal(account.include, false);
+
+  const excludedTrade = await call(at, 'create_trade', {
+    pair: 'E2E/EXCLUDED', dir: 'long', entry: 100, size: 1, sl: 99, tp: 103,
+    account: accountName, date: YESTERDAY, idempotencyKey: idem('excluded-trade'),
+  });
+  assert.equal(excludedTrade.applied, 'direct');
+  const excludedTradeId = excludedTrade.record.id;
+  assert.equal((await call(at, 'get_trade', { id: excludedTradeId })).found, true);
+  const excludedList = await call(at, 'list_trades', { status: 'open', pair: 'E2E/EXCLUDED', limit: 10 });
+  assert.equal(excludedList.total, 1, 'konto poza statystykami nie ukrywa transakcji z listy');
+  assert.equal(excludedList.items[0].id, excludedTradeId);
+  assert.equal((await call(at, 'get_trade_context', { tradeId: excludedTradeId })).found, true);
+  assert.equal((await call(at, 'get_trade_journal_context', { tradeId: excludedTradeId })).found, true);
+
+  const excludedUpdate = await call(at, 'update_trade', {
+    tradeId: excludedTradeId, expectedRevision: excludedTrade.revision,
+    changes: { note: 'konto poza statystykami' }, idempotencyKey: idem('excluded-trade-update'),
+  });
+  assert.equal(excludedUpdate.applied, 'direct');
+  const breakEven = await call(at, 'close_trade', {
+    tradeId: excludedTradeId, exitPrice: 100, idempotencyKey: idem('excluded-trade-close'),
+  });
+  assert.equal(breakEven.record.result, 0);
+  assert.match(breakEven.record.mentor, /zero \(break-even\)/);
+  assert.doesNotMatch(breakEven.record.mentor, /zyskiem|minusie/i);
+  assert.equal((await call(at, 'get_trade', { id: excludedTradeId })).trade.result, 0);
+  assert.equal((await call(at, 'list_trades', { status: 'closed', pair: 'E2E/EXCLUDED', limit: 10 })).total, 1);
 
   const accountUpdate = await pending('update_account', {
     accountId: account.id, changes: { name: accountName + ' v2', goal: 'E2E cel' },
@@ -987,11 +1038,29 @@ async function main() {
   const replaySecond = await call(at, 'create_checkin', replayArgs);
   assert.equal(replaySecond.duplicate, true, 'replay musi zwrócić duplicate');
   assert.equal(replaySecond.revision, replayFirst.revision, 'replay nie może podnieść revision');
+  const replayRevision = stateA().revision;
+  await expectToolError(at, 'create_checkin', {
+    ...replayArgs, mood: 'Strach',
+  }, /idempotency_conflict/);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { note: 'inna operacja' }, idempotencyKey: replayKey,
+  }, /idempotency_conflict/);
+  assert.equal(stateA().revision, replayRevision, 'konflikt klucza nie może zmienić stanu');
   assert.equal(
     stateA().checkins.filter((row) => row.date === dayKey(-23)).length,
     1,
     'replay nie może dodać drugiego wpisu'
   );
+  const caseSensitiveKey = `Case-Idem-${crypto.randomBytes(6).toString('hex')}`;
+  const upperKeyWrite = await call(at, 'create_checkin', {
+    date: dayKey(-24), mood: 'Nuda', energy: 2, idempotencyKey: caseSensitiveKey,
+  });
+  const lowerKeyWrite = await call(at, 'create_checkin', {
+    date: dayKey(-25), mood: 'Spokój', energy: 4, idempotencyKey: caseSensitiveKey.toLowerCase(),
+  });
+  assert.equal(upperKeyWrite.applied, 'direct');
+  assert.equal(lowerKeyWrite.applied, 'direct', 'klucze różniące się wielkością liter są odrębne');
+  assert.equal(stateA().checkins.filter((row) => [dayKey(-24), dayKey(-25)].includes(row.date)).length, 2);
 
   await expectToolError(at, 'update_trade', {
     tradeId, changes: { note: 'stary odczyt' }, expectedRevision: 0,

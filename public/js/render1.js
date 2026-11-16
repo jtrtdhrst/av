@@ -211,13 +211,23 @@
     }
     const last = arr[0];
     const revenge = arr.some((t) => (t.errors || []).includes('Wejście po stracie'));
-    const title = revenge ? 'To wygląda na odgrywanie się' : last.result >= 0 ? 'Dobra robota, trzymaj proces' : 'Strata mieści się w planie?';
+    const title = revenge
+      ? 'To wygląda na odgrywanie się'
+      : last.result > 0
+        ? 'Dobra robota, trzymaj proces'
+        : last.result === 0
+          ? 'Wynik na zero — trzymaj proces'
+          : 'Strata mieści się w planie?';
     const text = revenge
       ? 'Widać wejście po stracie i większą pozycję. Rynek nie wie o stracie. Zamknij platformę na 30 minut.'
-      : last.result >= 0
+      : last.result > 0
         ? 'Ostatnia transakcja: ' + AV.esc(last.pair) + ' ' + AV.money(last.result, 2, '') + '. Oceniasz decyzję, nie wynik — trzymaj checklistę.'
-        : 'Ostatnia transakcja: ' + AV.esc(last.pair) + ' ' + AV.money(last.result, 2, '') + '. Sprawdź, czy SL był ustawiony przed wejściem, i nie odrabiaj straty.';
-    AV.setHTML(box, '<div class="sech" style="margin:0"><span class="tag ' + (revenge || last.result < 0 ? 'alert' : 'praise') + '">Mentor · ' + (revenge ? 'alarm' : 'uwaga') + '</span><span class="link" data-go="mentor">Wszystkie uwagi ' + AV.ic('arrow', 'width:14px;height:14px') + '</span></div>' +
+        : last.result === 0
+          ? 'Ostatnia transakcja: ' + AV.esc(last.pair) + ' zamknięta na zero. Oceń jakość decyzji i zgodność z planem.'
+          : 'Ostatnia transakcja: ' + AV.esc(last.pair) + ' ' + AV.money(last.result, 2, '') + '. Sprawdź, czy SL był ustawiony przed wejściem, i nie odrabiaj straty.';
+    const mentorTagClass = revenge || last.result < 0 ? 'alert' : last.result === 0 ? 'info' : 'praise';
+    const mentorTag = revenge ? 'alarm' : last.result === 0 ? 'break-even' : 'uwaga';
+    AV.setHTML(box, '<div class="sech" style="margin:0"><span class="tag ' + mentorTagClass + '">Mentor · ' + mentorTag + '</span><span class="link" data-go="mentor">Wszystkie uwagi ' + AV.ic('arrow', 'width:14px;height:14px') + '</span></div>' +
       '<h3>' + title + '</h3><p>' + text + '</p><div class="step"><b>Krok:</b> ' + (revenge ? '30 minut przerwy od wykresu.' : 'zapisz emocję i ocenę w dzienniku.') + '</div>');
   };
 

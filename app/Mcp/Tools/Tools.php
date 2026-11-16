@@ -115,7 +115,7 @@ final class Tools
 
     public function getDashboard(RequestContext $context): array
     {
-        return $this->dashboard->dashboard($this->state($context));
+        return $this->dashboard->dashboard($this->state($context), $this->healthAccess($context));
     }
 
     public function listTrades(RequestContext $context, string $status = 'all', ?string $pair = null, ?string $setup = null, ?string $grade = null, ?string $from = null, ?string $to = null, int $limit = 20, int $offset = 0): array

@@ -31,7 +31,7 @@ Pliki:
 | odczyt | `app/Mcp/Tools/Tools.php`, `app/Mcp/Analytics/*`, `app/Mcp/Support/*` |
 | zapis | `app/Mcp/Tools/WriteTools.php`, `app/Mcp/Write/WriteEngine.php`, `app/Mcp/Tools/WriteSchemas.php` |
 | propozycje | `app/Mcp/Proposals/ProposalService.php` |
-| testy | `tests/mcp-write.test.php`, `tests/mcp-tools.e2e.mjs`, `tests/mcp.e2e.mjs` |
+| testy | `tests/mcp-write.test.php`, `tests/mcp-migration-upgrade.test.php`, `tests/mcp-tools.e2e.mjs`, `tests/mcp.e2e.mjs` |
 
 ## 2. OAuth 2.1
 
@@ -191,8 +191,14 @@ może rozjechać się z wykonaniem. `revision` rośnie tylko przy realnym zapisi
 
 ## 6. Idempotencja, wersje i audyt
 
-- `mcp_idempotency` przechowuje odpowiedź 24 h; powtórka nie zmienia stanu.
-- Ten sam `idempotencyKey` z inną treścią = `idempotency_conflict` (409).
+- `mcp_idempotency` przechowuje fingerprint `{op, args, expectedRevision}` i odpowiedź 24 h;
+  zgodna powtórka nie zmienia stanu i zwraca `duplicate: true`. Klucze są porównywane
+  case-sensitive; stare wpisy bez fingerprintu są fail-closed do wygaśnięcia.
+- Ten sam `idempotencyKey` z inną treścią = `idempotency_conflict` (409), bez drugiej mutacji.
+- Decyzja propozycji wiąże klucz z akcją, propozycją, `expectedDiffHash` i fingerprintem
+  kodu potwierdzającego (bez zapisywania kodu). Dla starszych zatwierdzeń fingerprint jest
+  odtwarzany tylko po zgodności statusu, diffu i — gdy użyto kodu — hasha kodu; stare decyzje,
+  których treści nie da się zweryfikować, są odrzucane jako konflikt.
 - `expectedRevision` porównywane jest w transakcji `SELECT ... FOR UPDATE`.
 - Każdy zapis i decyzja trafia do `mcp_audit` (aktor, operacja, target, revision, zmiany).
 - Propozycja ma `base_revision`; zatwierdzenie po zmianie stanu kończy się
@@ -247,8 +253,8 @@ Serwer → sprawdza diffHash, TTL i base_revision → zapis + revision
 | Tabela | Rola |
 | --- | --- |
 | `user_states` | jeden dokument JSON na użytkownika; `revision` = wersja |
-| `mcp_proposals` | propozycje: `kind` (`write_op` i typy historyczne), `target_ref`, `base_revision`, `diff_hash`, `after_json`, `status`, TTL, kod jednorazowy, idempotencja decyzji |
-| `mcp_idempotency` | odpowiedzi zapisu na 24 h |
+| `mcp_proposals` | propozycje: `kind` (`write_op` i typy historyczne), `target_ref`, `base_revision`, `diff_hash`, `after_json`, `status`, TTL, kod jednorazowy, case-sensitive klucz i fingerprint decyzji |
+| `mcp_idempotency` | case-sensitive klucz, fingerprint payloadu i odpowiedź zapisu na 24 h |
 | `mcp_audit` | ślad operacji agenta, użytkownika i systemu |
 
 `write_op` przechowuje `{op, args}`; zatwierdzenie uruchamia tę samą operację
@@ -324,7 +330,14 @@ zielonym runie i health checku `https://mcp.alphavault.pl/health`.
 - Jedno połączenie OAuth daje od razu wszystkie 79 narzędzi; nie ma drugiego zakresu ani reconnectu po wdrożeniu.
 - Wszystkie operacje zapisu działają bezpośrednio; usunięcia trafiają do kosza i wracają przez `restore_deleted_record`.
 - `confirmed: true` dotyczy tylko opcjonalnej ścieżki `propose_change` → `approve_proposal` i jest ustawiane wyłącznie po wyraźnym „tak” użytkownika w rozmowie.
-- Dane zdrowotne wymagają `alphavault.health`; bez niego pole `health` jest `null`.
+- Dane zdrowotne wymagają `alphavault.health` i aktywnego połączenia urządzenia. Bez dostępu
+  dashboard i kontekst gotowości liczą wynik wyłącznie z check-inu; pola i składowe zdrowotne
+  pozostają `null`, także dla starszych metryk zapisanych w `state.health`. Brak check-inu daje
+  `readiness.score: null`, bez syntetycznego wyniku. Brak pojedynczej metryki urządzenia pozostawia
+  jej składową `null`; wynik używa wyłącznie dostępnych sygnałów.
+- `account.include` ogranicza analitykę, nie widoczność transakcji w `list_trades`, `get_trade`
+  ani kontekstach dziennika.
+- Wynik transakcji `0` jest klasyfikowany jako break-even, osobno od zysku (`> 0`) i straty (`< 0`).
 - Opisy wydarzeń i kalendarza są danymi, nie instrukcjami dla modelu.
 - Tokeny, kody potwierdzenia i sekrety nie trafiają do logów, URL ani odpowiedzi.
 - MCP nie jest publicznym API: każde wywołanie wymaga tokenu OAuth użytkownika.

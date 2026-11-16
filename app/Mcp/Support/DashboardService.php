@@ -12,13 +12,13 @@ final class DashboardService
     ) {
     }
 
-    public function dashboard(array $state): array
+    public function dashboard(array $state, string $healthAccess = 'scope_missing'): array
     {
         $today = $this->trades->todayStats($state);
         $todayKey = Dates::todayKey();
         $plan = $this->planSummary($state['plans'][$todayKey] ?? null, $todayKey);
         $lock = $this->lockInfo($state, $today);
-        $readiness = $this->readiness($state);
+        $readiness = $this->readiness($state, $healthAccess);
         $events = $this->events->list(['limit' => 1]);
 
         return [
@@ -129,9 +129,10 @@ final class DashboardService
         ];
     }
 
-    public function readiness(array $state): array
+    public function readiness(array $state, string $healthAccess = 'scope_missing'): array
     {
-        $health = is_array($state['health'] ?? null) ? $state['health'] : [];
+        $healthGranted = $healthAccess === 'granted';
+        $health = $healthGranted && is_array($state['health'] ?? null) ? $state['health'] : [];
         $settings = is_array($state['settings'] ?? null) ? $state['settings'] : [];
         $check = null;
         foreach (($state['checkins'] ?? []) as $candidate) {
@@ -156,62 +157,101 @@ final class DashboardService
         ];
         $checkScore = $check !== null
             ? $this->clamp(50 + (((int) ($check['energy'] ?? 3)) - 3) * 10 + ($moodMod[(string) ($check['mood'] ?? '')] ?? 0), 0, 100)
-            : 55;
-        $garmin = !empty($settings['devices']['garmin']);
-        $sleepH = (float) ($health['sleepH'] ?? 0);
-        $hrv = (float) ($health['hrv'] ?? 0);
-        $hrvBase = (float) ($health['hrvBase'] ?? 52);
-        $hr = (float) ($health['hr'] ?? 56);
-        $hrBase = (float) ($health['hrBase'] ?? 56);
-        if ($hrvBase <= 0) {
-            $hrvBase = 52;
+            : null;
+        $garmin = $healthGranted && !empty($settings['devices']['garmin']);
+        $sleepH = $garmin ? $this->metricValue($health, 'sleepH') : null;
+        $hrv = $garmin ? $this->metricValue($health, 'hrv') : null;
+        $hrvBase = $garmin ? $this->metricValue($health, 'hrvBase') : null;
+        $hr = $garmin ? $this->metricValue($health, 'hr') : null;
+        $hrBase = $garmin ? $this->metricValue($health, 'hrBase') : null;
+        $sleepScore = $sleepH !== null ? $this->clamp($sleepH / 8 * 100, 0, 100) : null;
+        $hrvScore = $hrv !== null && $hrvBase !== null && $hrvBase > 0
+            ? $this->clamp($hrv / $hrvBase * 100, 0, 100)
+            : null;
+        $hrScore = $hr !== null && $hr > 0 && $hrBase !== null && $hrBase > 0
+            ? $this->clamp($hrBase / $hr * 100, 0, 100)
+            : null;
+        $weightedParts = [];
+        if ($sleepScore !== null) {
+            $weightedParts[] = [$sleepScore, 0.35];
         }
-        if ($hr <= 0) {
-            $hr = 56;
+        if ($hrvScore !== null) {
+            $weightedParts[] = [$hrvScore, 0.2];
         }
-        $sleepScore = $this->clamp($sleepH / 8 * 100, 0, 100);
-        $hrvScore = $this->clamp($hrv / $hrvBase * 100, 0, 100);
-        $hrScore = $this->clamp($hrBase / $hr * 100, 0, 100);
-        $score = $garmin
-            ? (int) round($sleepScore * 0.35 + $hrvScore * 0.2 + $hrScore * 0.1 + $checkScore * 0.35)
-            : (int) round($checkScore);
+        if ($hrScore !== null) {
+            $weightedParts[] = [$hrScore, 0.1];
+        }
+        if ($checkScore !== null) {
+            $weightedParts[] = [$checkScore, $garmin ? 0.35 : 1.0];
+        }
+        $weightTotal = array_sum(array_column($weightedParts, 1));
+        $weightedScore = array_sum(array_map(
+            static fn (array $part): float => $part[0] * $part[1],
+            $weightedParts
+        ));
+        $score = $weightTotal > 0 ? (int) round($weightedScore / $weightTotal) : null;
 
-        $title = 'Świetna forma';
-        $class = 'win';
-        if ($score < 80) {
-            $title = 'Dobra forma';
-        }
-        if ($score < 65) {
-            $title = 'Ostrożnie dziś';
-            $class = 'warnc';
-        }
-        if ($score < 50) {
-            $title = 'Lepiej odpuścić';
-            $class = 'loss';
+        $title = null;
+        $class = null;
+        if ($score !== null) {
+            $title = 'Świetna forma';
+            $class = 'win';
+            if ($score < 80) {
+                $title = 'Dobra forma';
+            }
+            if ($score < 65) {
+                $title = 'Ostrożnie dziś';
+                $class = 'warnc';
+            }
+            if ($score < 50) {
+                $title = 'Lepiej odpuścić';
+                $class = 'loss';
+            }
         }
 
-        $description = $garmin
-            ? 'Sen ' . floor($sleepH) . ' h ' . str_pad((string) round(($sleepH - floor($sleepH)) * 60), 2, '0', STR_PAD_LEFT)
-                . ' min, HRV ' . round($hrv) . ' ms, tętno ' . round($hr) . '.'
-            : 'Brak danych z zegarka — gotowość liczona tylko z check-inu.';
+        $healthDescription = [];
+        if ($sleepH !== null) {
+            $healthDescription[] = 'Sen ' . floor($sleepH) . ' h '
+                . str_pad((string) round(($sleepH - floor($sleepH)) * 60), 2, '0', STR_PAD_LEFT) . ' min';
+        }
+        if ($hrv !== null) {
+            $healthDescription[] = 'HRV ' . round($hrv) . ' ms';
+        }
+        if ($hr !== null) {
+            $healthDescription[] = 'tętno ' . round($hr);
+        }
+        $description = $healthDescription !== []
+            ? implode(', ', $healthDescription) . '.'
+            : ($check !== null ? 'Gotowość liczona tylko z check-inu.' : null);
 
         return [
             'score' => $score,
             'title' => $title,
             'class' => $class,
             'description' => $description,
+            'healthAccess' => $healthAccess,
             'garmin' => $garmin,
             'hasCheckin' => $check !== null,
-            'hasDeviceData' => $garmin && ($sleepH > 0 || $hrv > 0 || $hr > 0),
-            'checkScore' => Numbers::round($checkScore),
-            'sleepScore' => Numbers::round($sleepScore),
-            'hrvScore' => Numbers::round($hrvScore),
-            'heartRateScore' => Numbers::round($hrScore),
+            'hasDeviceData' => $garmin && ($sleepH !== null || $hrv !== null || $hr !== null),
+            'checkScore' => $checkScore !== null ? Numbers::round($checkScore) : null,
+            'sleepScore' => $sleepScore !== null ? Numbers::round($sleepScore) : null,
+            'hrvScore' => $hrvScore !== null ? Numbers::round($hrvScore) : null,
+            'heartRateScore' => $hrScore !== null ? Numbers::round($hrScore) : null,
         ];
     }
 
     private function clamp(float $value, float $min, float $max): float
     {
         return max($min, min($max, $value));
+    }
+
+    private function metricValue(array $health, string $key): ?float
+    {
+        if (!array_key_exists($key, $health) || !is_numeric($health[$key])) {
+            return null;
+        }
+        $value = (float) $health[$key];
+
+        return is_finite($value) ? $value : null;
     }
 }

@@ -137,22 +137,42 @@ final class WriteEngine
         if (mb_strlen($key) < 8 || mb_strlen($key) > 128) {
             throw new WriteException('bad_request', 'idempotencyKey musi mieć 8-128 znaków.');
         }
+        $payloadHash = $this->requestHash($op, $args, $expectedRevision);
 
         $pdo = $this->db->pdo();
         $pdo->beginTransaction();
         try {
+            // Serialize MCP writes for one user before reading the idempotency
+            // key, including the first write when user_states does not exist.
+            $this->db->queryOne('SELECT id FROM users WHERE id = ? FOR UPDATE', [$userId]);
             $replay = $this->db->queryOne(
-                'SELECT response_json FROM mcp_idempotency WHERE user_id = ? AND idem_key = ?',
+                'SELECT payload_hash, response_json, expires_at FROM mcp_idempotency
+                  WHERE user_id = ? AND idem_key = ? FOR UPDATE',
                 [$userId, $key]
             );
             if ($replay !== null) {
-                $stored = json_decode((string) ($replay['response_json'] ?? ''), true);
-                $pdo->commit();
-                if (is_array($stored)) {
-                    $stored['duplicate'] = true;
-                    return $stored;
+                $expiresAt = strtotime((string) ($replay['expires_at'] ?? '') . ' UTC');
+                if ($expiresAt !== false && $expiresAt > time()) {
+                    $storedHash = (string) ($replay['payload_hash'] ?? '');
+                    if ($storedHash === '' || !hash_equals($storedHash, $payloadHash)) {
+                        throw new WriteException(
+                            'idempotency_conflict',
+                            'Ten sam idempotencyKey użyto z inną treścią lub bez zapisanego fingerprintu. Użyj nowego klucza.',
+                            409
+                        );
+                    }
+                    $stored = json_decode((string) ($replay['response_json'] ?? ''), true);
+                    $pdo->commit();
+                    if (is_array($stored)) {
+                        $stored['duplicate'] = true;
+                        return $stored;
+                    }
+                    throw new WriteException('idempotency_conflict', 'Ten idempotencyKey został już użyty.', 409);
                 }
-                throw new WriteException('idempotency_conflict', 'Ten idempotencyKey został już użyty.', 409);
+                $this->db->execute(
+                    'DELETE FROM mcp_idempotency WHERE user_id = ? AND idem_key = ?',
+                    [$userId, $key]
+                );
             }
 
             $row = $this->db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ? FOR UPDATE', [$userId]);
@@ -204,10 +224,9 @@ final class WriteEngine
             ];
             $encoded = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             $this->db->execute(
-                'INSERT INTO mcp_idempotency (user_id, idem_key, tool, response_json, expires_at)
-                 VALUES (?, ?, ?, ?, UTC_TIMESTAMP() + INTERVAL ' . self::IDEM_TTL_HOURS . ' HOUR)
-                 ON DUPLICATE KEY UPDATE response_json = VALUES(response_json)',
-                [$userId, $key, mb_substr($op, 0, 64), $encoded === false ? null : $encoded]
+                'INSERT INTO mcp_idempotency (user_id, idem_key, tool, payload_hash, response_json, expires_at)
+                 VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP() + INTERVAL ' . self::IDEM_TTL_HOURS . ' HOUR)',
+                [$userId, $key, mb_substr($op, 0, 64), $payloadHash, $encoded === false ? null : $encoded]
             );
 
             $pdo->commit();
@@ -553,9 +572,11 @@ final class WriteEngine
         $updated['result'] = $result;
         $updated['r'] = $risk > 0 ? Numbers::round($result / $risk) : 0;
         $updated['durationMin'] = $duration;
-        $updated['mentor'] = $result >= 0
+        $updated['mentor'] = $result > 0
             ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
-            : 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.';
+            : ($result < 0
+                ? 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.'
+                : 'Pozycja zamknięta na zero (break-even). Oceń, czy wyjście było zgodne z planem.');
         if (array_key_exists('mfe', $args) && $args['mfe'] !== null) {
             $updated['mfe'] = Numbers::round((float) $args['mfe']);
         }
@@ -2270,5 +2291,33 @@ final class WriteEngine
         } catch (\Throwable $err) {
             error_log('[mcp] audit ' . $err->getMessage());
         }
+    }
+
+    private function requestHash(string $op, array $args, ?int $expectedRevision): string
+    {
+        $payload = [
+            'op' => $op,
+            'args' => $args,
+            'expectedRevision' => $expectedRevision,
+        ];
+        $json = json_encode(
+            $this->canonical($payload),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR
+        );
+
+        return hash('sha256', $json);
+    }
+
+    private function canonical(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        if (array_is_list($value)) {
+            return array_map(fn (mixed $item): mixed => $this->canonical($item), $value);
+        }
+        ksort($value);
+
+        return array_map(fn (mixed $item): mixed => $this->canonical($item), $value);
     }
 }

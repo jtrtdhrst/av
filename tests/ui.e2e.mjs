@@ -816,6 +816,39 @@ try {
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
 
+  await page.evaluate(() => {
+    AV.ui.editId = null;
+    AV.showView('nowa');
+    AV.renderNewTradeForm();
+  });
+  await page.fill('#ntPair', 'E2E-BE/USDT');
+  await page.fill('#ntEntry', '100');
+  await page.fill('#ntSl', '99');
+  await page.fill('#ntTp', '103');
+  await page.fill('#ntSize', '1');
+  await page.click('#saveTrade');
+  await page.waitForTimeout(500);
+  const breakEvenId = await page.evaluate(() => AV.state.trades.find((t) => t.pair === 'E2E-BE/USDT')?.id);
+  if (breakEvenId) {
+    await page.evaluate((id) => AV.closeTradeModal(id), breakEvenId);
+    await page.fill('#ctExit', '100');
+    await page.click('#ctSave');
+  }
+  const breakEvenUi = await page.evaluate((id) => {
+    const trade = AV.state.trades.find((t) => t.id === id);
+    AV.renderDashMentor({ closed: trade ? [trade] : [] });
+    return {
+      result: trade?.result,
+      mentor: trade?.mentor,
+      dashTitle: document.querySelector('#dashMentor h3')?.textContent,
+    };
+  }, breakEvenId);
+  log('break-even: komentarz i dashboard nie nazywają wyniku zyskiem', !!breakEvenId
+    && breakEvenUi.result === 0
+    && breakEvenUi.mentor.includes('zero (break-even)')
+    && !breakEvenUi.mentor.includes('zyskiem')
+    && breakEvenUi.dashTitle.includes('Wynik na zero'), JSON.stringify(breakEvenUi));
+
   // odznaki: każda z 8 reguł niezależnie + dynamiczny licznik i poziom
   const badges = await page.evaluate(() => {
     const base = () => ({ accounts: [{ name: 'A', include: true }], trades: [], plans: {}, checkins: [] });
