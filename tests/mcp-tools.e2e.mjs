@@ -748,8 +748,13 @@ async function main() {
     date: checkinDate, changes: { mood: 'Spokój', energy: 3 }, idempotencyKey: idem('checkin-update'),
   });
   assert.ok(checkinUpdate.changes.includes('energy'));
+  const afterUpdateHistory = await call(at, 'get_checkin_history', { limit: 80 });
   const checkinAfterUpdate = stateA().checkins.find((row) => row.date === checkinDate);
-  assert.equal(checkinAfterUpdate.mood, 'Spokój');
+  assert.equal(
+    checkinAfterUpdate.mood,
+    'Spokój',
+    JSON.stringify({ date: checkinDate, update: checkinUpdate, history: afterUpdateHistory.items.slice(0, 4) })
+  );
   assert.equal(checkinAfterUpdate.score, 60);
 
   // --- 11.7. Usunięcia przez propozycję ---
