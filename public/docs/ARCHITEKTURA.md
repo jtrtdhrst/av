@@ -99,9 +99,10 @@ panel AlphaVault albo kod jednorazowy → approve_proposal / POST /api/mcp/propo
 → WriteEngine::apply → revision+1 → mcp_audit
 ```
 
-Zasady: jedno połączenie z `alphavault.read` daje 79 narzędzi; 12 operacji niskiego ryzyka zapisuje
-się bezpośrednio, 18 wysokiego ryzyka wymaga `confirmed: true` w rozmowie, usunięcia są miękkie
-(`state.trash[]`), dane giełdowe niezmienne. `MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu.
+Zasady: jedno połączenie z `alphavault.read` daje 79 narzędzi; wszystkie 30 operacji zapisu działa
+bezpośrednio (także usunięcia, konta, finanse, reguły ryzyka i prop), propozycja z diffem jest
+opcjonalna, usunięcia są miękkie (`state.trash[]`), dane giełdowe niezmienne.
+`MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu.
 Szczegóły: [MCP.md](https://github.com/miloszspyrka-code/av/blob/main/docs/MCP.md).
 
 ## Deployment

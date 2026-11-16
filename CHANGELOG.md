@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.2.0 - 2026-11-16
+
+### Zmienione
+- MCP: wszystkie 30 operacji zapisu działa **bezpośrednio** — także usunięcia, konta, wpłaty/wypłaty, reguły ryzyka, prop challenge, zatwierdzenie planu i przywracanie z kosza. `APPROVAL_REQUIRED` jest puste; propozycja z diffem (`propose_change` → `approve_proposal`) jest opcjonalna.
+- Usunięcia pozostają miękkie: rekord trafia do `state.trash[]` z `trashId` i wraca przez `restore_deleted_record`.
+- `trade.create`/`update_trade` akceptują `fee: 0`.
+- `emotion` i `mood` mają jawne `enum` w schematach (Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość).
+- `update_risk_rules` przyjmuje nazwy z `get_risk_rules`: `maxRiskPercentPerTrade`, `maxConsecutiveLossesPerDay`, `maxDailyLossPercent`, `blockDuration`, `safetySwitch` (`enabled`, `requireReasonForOverride`, `notifyOnTrigger`).
+- `Db` ustawia `time_zone = '+00:00'`; `created_at` i `expires_at` są liczone w UTC, więc `expiresAt` nie wypada przed `createdAt`.
+
+### Testy
+- `mcp-write.test.php`: 30/30 bezpośrednich, `fee: 0`, aliasy reguł ryzyka.
+- `mcp.e2e.mjs`: `delete_trade` → kosz → `restore_deleted_record` bez propozycji.
+- `mcp-tools.e2e.mjs`: usunięcia i finanse bezpośrednio; `propose_change`/`approve`/`reject` jako opcjonalna ścieżka.
+
 ## 4.1.0 - 2026-11-16
 
 ### Zmienione

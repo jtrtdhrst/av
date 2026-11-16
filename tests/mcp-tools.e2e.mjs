@@ -560,16 +560,23 @@ async function main() {
     assert.equal(approved.status, 'approved', JSON.stringify(approved).slice(0, 300));
     return approved;
   };
-  const approve = (proposal) => approveWith(proposal, idem('approve'));
+  const approve = async (proposal) => {
+    if (proposal && proposal.applied === 'proposal') {
+      return approveWith(proposal, idem('approve'));
+    }
+    return proposal;
+  };
   const stateA = () => stateOf(a.userId).state;
   const pending = async (name, args, fields = []) => {
-    const proposal = await call(at, name, args);
-    assert.equal(proposal.applied, 'proposal', `${name}: brak propozycji ${JSON.stringify(proposal).slice(0, 250)}`);
-    assert.equal(proposal.status, 'pending', `${name}: ${JSON.stringify(proposal).slice(0, 250)}`);
-    assert.match(String(proposal.diffHash), /^[a-f0-9]{64}$/, `${name}: diffHash`);
-    assert.ok(proposal.note, `${name}: brak instrukcji zatwierdzenia`);
-    for (const field of fields) assert.ok(proposal.changes.includes(field), `${name}: brak ${field} w diffie`);
-    return proposal;
+    const result = await call(at, name, args);
+    assert.ok(result.applied === 'direct' || result.applied === 'proposal', `${name}: ${JSON.stringify(result).slice(0, 250)}`);
+    for (const field of fields) assert.ok(result.changes.includes(field), `${name}: brak ${field} w zmianach`);
+    if (result.applied === 'proposal') {
+      assert.equal(result.status, 'pending', `${name}: ${JSON.stringify(result).slice(0, 250)}`);
+      assert.match(String(result.diffHash), /^[a-f0-9]{64}$/, `${name}: diffHash`);
+      assert.ok(result.note, `${name}: brak instrukcji zatwierdzenia`);
+    }
+    return result;
   };
 
   // --- 11.1. Transakcja: create → read → update → close ---
@@ -924,14 +931,16 @@ async function main() {
     operation: 'trade.nuke', args: {}, idempotencyKey: idem('propose-bad'),
   });
 
-  // --- 11.12. Zgoda człowieka w rozmowie i odrzucenie ---
+  // --- 11.12. Opcjonalna propozycja: zgoda w rozmowie i odrzucenie ---
   const gateDate = dayKey(-21);
   await call(at, 'create_checkin', {
     date: gateDate, mood: 'Spokój', energy: 3, idempotencyKey: idem('gate-checkin'),
   });
-  const gateProposal = await pending('delete_checkin', {
-    date: gateDate, idempotencyKey: idem('gate-delete'),
+  const gateProposal = await call(at, 'propose_change', {
+    operation: 'checkin.delete', args: { date: gateDate }, idempotencyKey: idem('gate-propose'),
   });
+  assert.equal(gateProposal.applied, 'proposal', JSON.stringify(gateProposal).slice(0, 250));
+  assert.equal(gateProposal.status, 'pending');
   await expectToolError(at, 'approve_proposal', {
     proposalId: gateProposal.proposalId, expectedDiffHash: 'a'.repeat(64),
     confirmed: true, idempotencyKey: idem('gate-hash'),
@@ -960,9 +969,10 @@ async function main() {
     date: rejectDate, markets: ['SOL'], bias: 'short', why: 'Plan do odrzucenia',
     idempotencyKey: idem('reject-plan'),
   });
-  const rejectProposal = await pending('delete_day_plan', {
-    date: rejectDate, idempotencyKey: idem('reject-delete'),
+  const rejectProposal = await call(at, 'propose_change', {
+    operation: 'plan.delete', args: { date: rejectDate }, idempotencyKey: idem('reject-propose'),
   });
+  assert.equal(rejectProposal.applied, 'proposal');
   const rejected = await call(at, 'reject_proposal', {
     proposalId: rejectProposal.proposalId, idempotencyKey: idem('reject-decision'),
   });
@@ -1000,8 +1010,8 @@ async function main() {
   const wf1Setup = await call(at, 'get_setup_performance', { setupId: wf1Context.setup.name });
   const wf1Plan = await call(at, 'get_day_plan_compliance', { date: YESTERDAY });
   const wf1Review = await call(at, 'get_trade_review', { tradeId: 'fx_aligned_short' });
-  const wf1Proposal = await call(at, 'delete_trade', {
-    tradeId: 'fx_aligned_short', idempotencyKey: idem('wf1'),
+  const wf1Proposal = await call(at, 'propose_change', {
+    operation: 'trade.delete', args: { tradeId: 'fx_aligned_short' }, idempotencyKey: idem('wf1'),
   });
   assert.equal(wf1Context.compliance.aligned, true);
   assert.ok(wf1Setup.metrics.hasData);
@@ -1018,8 +1028,8 @@ async function main() {
   const wf2Macro = await call(at, 'get_macro_event_details', { eventId: macroList.items[0].id });
   const wf2Rules = await call(at, 'get_risk_rules', {});
   const wf2Protection = await call(at, 'get_protection_status', {});
-  const wf2Proposal = await call(at, 'delete_day_plan', {
-    date: TODAY, idempotencyKey: idem('wf2'),
+  const wf2Proposal = await call(at, 'propose_change', {
+    operation: 'plan.delete', args: { date: TODAY }, idempotencyKey: idem('wf2'),
   });
   assert.ok(wf2Plan.trades.length >= 1);
   assert.ok(wf2Ready.readiness.score !== null);

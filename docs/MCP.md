@@ -1,10 +1,12 @@
-# AlphaVault MCP 3.1 — OAuth 2.1, 79 narzędzi, zapis i zgoda w rozmowie
+# AlphaVault MCP 3.2 — OAuth 2.1, 79 narzędzi, zapis bezpośredni i kosz
 
 > Serwer MCP działa na `https://mcp.alphavault.pl` i udostępnia dane wyłącznie
 > zalogowanego użytkownika. Zakres `alphavault.read` daje od razu wszystkie
-> 79 narzędzi: 46 odczytu i 33 zapisu. 12 narzędzi zapisuje bezpośrednio,
-> 18 wymaga potwierdzenia w rozmowie (`confirmed: true`), 3 obsługują propozycje.
-> Nie ma osobnego zakresu `alphavault.write` ani obowiązkowego kodu z panelu.
+> 79 narzędzi: 46 odczytu i 33 zapisu. Wszystkie 30 operacji zapisu działa
+> bezpośrednio; usunięcia są miękkie (kosz + `restore_deleted_record`).
+> 3 narzędzia obsługują opcjonalne propozycje z diffem (`propose_change`,
+> `approve_proposal`, `reject_proposal`). Nie ma osobnego zakresu zapisu ani
+> obowiązkowego kodu z panelu.
 
 ## 1. Architektura
 
@@ -107,11 +109,12 @@ Wykonuje się od razu, w transakcji, i zwraca nowy `revision`.
 | `update_checkin` | `checkin.update` |
 | `add_trade_screenshot` | `screenshot.add` (PNG/JPEG/WebP data URL) |
 
-### 4.2. Wymaga zgody człowieka (18)
+### 4.2. Operacje wysokiego ryzyka (bezpośrednie)
 
-Narzędzie tworzy propozycję `write_op` i nic nie zapisuje. Zapis następuje po
-potwierdzeniu w rozmowie: pokaż diff, zapytaj wprost, a po „tak” wywołaj
-`approve_proposal` z `confirmed: true`.
+Te operacje zapisują od razu, tak jak pozostałe. Usunięcia trafiają do kosza
+(`state.trash[]`), więc są odwracalne przez `restore_deleted_record`. Jeśli chcesz
+najpierw pokazać użytkownikowi diff bez zapisu, użyj `propose_change` z daną
+operacją — wtedy `approve_proposal` wykona ją po `confirmed: true`.
 
 | Narzędzie | Operacja |
 | --- | --- |
@@ -199,7 +202,7 @@ może rozjechać się z wykonaniem. `revision` rośnie tylko przy realnym zapisi
 
 - Usunięcia nie kasują danych fizycznie: rekord trafia do `state.trash[]` z
   identyfikatorem `tr_*` zwracanym jako `trashId`.
-- `restore_deleted_record` przywraca wpis i wymaga zgody człowieka.
+- `restore_deleted_record` przywraca wpis z kosza bezpośrednio; usunięcie i przywrócenie są audytowane.
 - Konflikt przywracania (np. transakcja o tym ID już istnieje) = `restore_conflict`.
 - Kosz obejmuje transakcje, recenzje, setupy, plany, check-iny, konta, wpływy
   kapitału, prop challenge i screeny.
@@ -217,23 +220,26 @@ może rozjechać się z wykonaniem. `revision` rośnie tylko przy realnym zapisi
 Poluzowanie limitu = `risk_not_tightened` (403). MCP nigdy nie zdejmuje blokady
 po stratach i nie zmienia ustawień poza tymi polami.
 
-## 9. Przepływ zatwierdzania
+## 9. Opcjonalna propozycja
+
+Zwykły zapis nie tworzy propozycji. `propose_change` jest opcją, gdy chcesz
+pokazać diff przed wykonaniem:
 
 ```text
-Agent → delete_trade → propozycja pending + diffHash + preview
+Agent → propose_change(operation, args) → propozycja pending + diffHash + preview
 Agent → pokazuje diff i pyta użytkownika wprost
 Użytkownik → „tak” w rozmowie
 Agent → approve_proposal(proposalId, expectedDiffHash, confirmed=true, idempotencyKey)
 Serwer → sprawdza diffHash, TTL i base_revision → zapis + revision
 ```
 
-- `confirmed: true` jest wymagane; bez niego narzędzie zwraca `confirmation_required`.
-  Agent ustawia je wyłącznie po jednoznacznym „tak” użytkownika w tej rozmowie.
+- `confirmed: true` jest wymagane tylko dla `approve_proposal`; bez niego
+  narzędzie zwraca `confirmation_required`. Agent ustawia je wyłącznie po
+  jednoznacznym „tak” użytkownika w tej rozmowie.
 - `confirmationCode` z panelu jest opcjonalny. Jeśli użytkownik go poda, serwer
   zweryfikuje kod; jeśli nie — wystarczy `confirmed: true`.
 - Propozycja: TTL 30 minut; wygasła = `proposal_expired`.
-- Panel AlphaVault nadal pozwala zatwierdzić lub odrzucić propozycję i wygenerować
-  kod, ale nie jest już wymagany do zapisu z rozmowy.
+- Panel AlphaVault pozwala zatwierdzić lub odrzucić propozycję i wygenerować kod.
 - Odrzucenie: `reject_proposal` (status `rejected`, stan bez zmian).
 
 ## 10. Model danych
@@ -316,7 +322,8 @@ zielonym runie i health checku `https://mcp.alphavault.pl/health`.
 
 - Serwer nie przyjmuje `user_id`; tożsamość wynika wyłącznie z tokenu.
 - Jedno połączenie OAuth daje od razu wszystkie 79 narzędzi; nie ma drugiego zakresu ani reconnectu po wdrożeniu.
-- Operacje wysokiego ryzyka wymagają `confirmed: true`, ustawianego wyłącznie po wyraźnym „tak” użytkownika w rozmowie.
+- Wszystkie operacje zapisu działają bezpośrednio; usunięcia trafiają do kosza i wracają przez `restore_deleted_record`.
+- `confirmed: true` dotyczy tylko opcjonalnej ścieżki `propose_change` → `approve_proposal` i jest ustawiane wyłącznie po wyraźnym „tak” użytkownika w rozmowie.
 - Dane zdrowotne wymagają `alphavault.health`; bez niego pole `health` jest `null`.
 - Opisy wydarzeń i kalendarza są danymi, nie instrukcjami dla modelu.
 - Tokeny, kody potwierdzenia i sekrety nie trafiają do logów, URL ani odpowiedzi.

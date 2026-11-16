@@ -228,19 +228,19 @@ Kalendarz makro i widget „MAKRO · ten tydzień” korzystają z jednego, wsp�
 - błąd API nie czyści ostatniego dobrego zestawu; sukces z `[]` czyści widok,
 - synchronizacja przez 5-min wrapper LH Cron z throttle 15 min (`bin/sync-macro-events.php`, znacznik `.runtime/macro.stamp`) oraz ręcznie.
 
-### FR-21 - MCP 3.1: kontekst, 79 narzędzi i zgoda w rozmowie
+### FR-21 - MCP 3.2: kontekst, 79 narzędzi i zapis bezpośredni
 
 MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAuth i bezpieczny mechanizm zmian.
 
 - OAuth 2.1 + PKCE S256, scope `alphavault.read` i `alphavault.health`. Nie ma osobnego zakresu zapisu: jedno połączenie daje od razu 79 narzędzi.
 - 46 narzędzi odczytu: profil, pulpit, transakcje, dziennik, statystyki i raporty, wydarzenia, plan dnia, playbook, makro, prop, check-iny, gotowość, ryzyko, konta, kapitał, podatki, połączenia, lista i status propozycji.
-- 33 narzędzia zapisu: 12 bezpośrednich (transakcje, recenzje, setupy, szkic planu, check-in, screen), 18 wymagających potwierdzenia w rozmowie (usunięcia, konta, wpłaty i wypłaty, reguły ryzyka, prop, zatwierdzenie planu, przywracanie z kosza) oraz 3 obsługujące propozycje (`propose_change`, `approve_proposal`, `reject_proposal`).
+- 33 narzędzia zapisu: 30 operacji zapisuje bezpośrednio (transakcje, recenzje, setupy, plan dnia, check-in, screen, usunięcia, konta, wpłaty i wypłaty, reguły ryzyka, prop, zatwierdzenie planu, kosz) oraz 3 obsługujące opcjonalne propozycje (`propose_change`, `approve_proposal`, `reject_proposal`).
 - Każdy zapis ma `idempotencyKey` i opcjonalny `expectedRevision`; konflikt wersji nie nadpisuje danych.
-- Usunięcia są miękkie: rekord trafia do `state.trash[]` i wraca przez `restore_deleted_record` po potwierdzeniu.
-- Operacje wysokiego ryzyka wykonuje `approve_proposal` z `confirmed: true`; agent ustawia je wyłącznie po jednoznacznym „tak” użytkownika w rozmowie. Kod z panelu jest opcjonalny, a `reject_proposal` nie zmienia danych.
+- Usunięcia są miękkie: rekord trafia do `state.trash[]` i wraca przez `restore_deleted_record`.
+- `propose_change` pokazuje diff bez zapisu; `approve_proposal` wykonuje propozycję po `confirmed: true`, a `reject_proposal` nie zmienia danych. Kod z panelu jest opcjonalny.
 - Idempotencja zapisu (24 h) i decyzji, TTL propozycji 30 min, `diffHash`, audyt, transakcja MySQL z `SELECT ... FOR UPDATE`.
 - Dane giełdowe są niezmienne, także saldo i kapitał startowy konta; recenzja transakcji giełdowej trafia do osobnego obszaru.
-- MCP może tylko zaostrzać reguły ryzyka; nie podnosi limitów i nie wyłącza zabezpieczeń.
+- MCP może tylko zaostrzać reguły ryzyka; nie podnosi limitów i nie wyłącza zabezpieczeń. Nazwy pól z `get_risk_rules` są akceptowane w `update_risk_rules`.
 - `MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu (zostaje 46 odczytu) bez zmiany zakresów OAuth. `MCP_PILOT_DISCORD_IDS` opcjonalnie ogranicza zapis do wybranych kont.
 
 ## 7. Wymagania niefunkcjonalne

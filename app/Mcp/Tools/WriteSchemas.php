@@ -65,6 +65,15 @@ final class WriteSchemas
         return ['type' => 'array', 'maxItems' => $maxItems, 'items' => ['type' => 'string', 'maxLength' => $maxLength]];
     }
 
+    private static function emotions(): array
+    {
+        return [
+            'type' => 'string',
+            'enum' => ['Spokój', 'Skupienie', 'Pewność', 'Nuda', 'Zmęczenie', 'Strach', 'FOMO', 'Złość', 'Chciwość'],
+            'description' => 'Emocja przed wejściem, dokładnie jedna z listy.',
+        ];
+    }
+
     private static function date(): array
     {
         return ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$', 'description' => 'Data w Europe/Warsaw, YYYY-MM-DD. Bez daty użyta jest dzisiejsza.'];
@@ -100,7 +109,7 @@ final class WriteSchemas
             'tp' => ['type' => 'number'],
             'fee' => ['type' => 'number', 'minimum' => 0],
             'setup' => self::text(100, 'Nazwa setupu z Playbooka albo Bez setupu.'),
-            'emotion' => ['type' => 'string', 'maxLength' => 20],
+            'emotion' => self::emotions(),
             'grade' => ['type' => 'string', 'enum' => ['A', 'B', 'C']],
             'checklist' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 20],
             'checkTotal' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 20],
@@ -116,7 +125,7 @@ final class WriteSchemas
     {
         return self::tool(['tradeId', 'changes', 'idempotencyKey'], self::baseWithRevision() + [
             'tradeId' => self::tradeId(),
-            'changes' => self::changes('Pola do zmiany. Transakcja importowana z giełdy dopuszcza tylko ocenę, emocje, notatkę, checklistę, setup i błędy.'),
+            'changes' => self::changes('Pola do zmiany. Transakcja importowana z giełdy dopuszcza tylko ocenę, emocje, notatkę, checklistę, setup i błędy. ' . 'Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.'),
         ]);
     }
 
@@ -146,7 +155,7 @@ final class WriteSchemas
             'tradeId' => self::tradeId(),
             'grade' => ['type' => 'string', 'enum' => ['A', 'B', 'C']],
             'setup' => self::text(100),
-            'emotion' => ['type' => 'string', 'maxLength' => 20],
+            'emotion' => self::emotions(),
             'errors' => self::strings(10, 80),
             'checklist' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 20],
             'note' => self::text(2000),
@@ -158,7 +167,7 @@ final class WriteSchemas
     {
         return self::tool(['tradeId', 'changes', 'idempotencyKey'], self::baseWithRevision() + [
             'tradeId' => self::tradeId(),
-            'changes' => self::changes('Pola recenzji: grade, setup, emotion, errors, checklist, note, recommendations.'),
+            'changes' => self::changes('Pola recenzji: grade, setup, emotion, errors, checklist, note, recommendations. ' . 'Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.'),
         ]);
     }
 
@@ -264,7 +273,7 @@ final class WriteSchemas
     {
         return self::tool(['idempotencyKey'], self::baseWithRevision() + [
             'date' => self::date(),
-            'mood' => ['type' => 'string', 'maxLength' => 20],
+            'mood' => self::emotions(),
             'energy' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 5],
             'note' => self::text(1000),
         ]);
@@ -274,7 +283,7 @@ final class WriteSchemas
     {
         return self::tool(['changes', 'idempotencyKey'], self::baseWithRevision() + [
             'date' => self::date(),
-            'changes' => self::changes('Pola check-inu: mood, energy, note.'),
+            'changes' => self::changes('Pola check-inu: mood, energy, note. ' . 'Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.'),
         ]);
     }
 

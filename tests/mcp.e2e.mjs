@@ -441,35 +441,14 @@ async function mainWrites() {
   });
   assert.match(toolError(stale), /wersj/i, stale.text);
 
-  const deleteProposal = await call(tok.access_token, 'delete_trade', {
+  const deleteResult = await call(tok.access_token, 'delete_trade', {
     tradeId, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
-  assert.ok(deleteProposal.json?.result, 'delete_trade: ' + deleteProposal.text);
-  const deleteBody = deleteProposal.json.result.structuredContent;
-  assert.equal(deleteBody.applied, 'proposal', deleteProposal.text);
-  assert.equal(deleteBody.status, 'pending');
-  assert.match(String(deleteBody.diffHash), /^[a-f0-9]{64}$/);
-  assert.ok(deleteBody.preview, 'propozycja musi mieć preview');
-  const stillThere = await call(tok.access_token, 'get_trade', { id: tradeId });
-  assert.equal(stillThere.json.result.structuredContent.found, true, 'propozycja nie może usunąć przed zgodą');
-
-  const noConfirm = await call(tok.access_token, 'approve_proposal', {
-    proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
-    idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
-  });
-  assert.match(toolError(noConfirm), /potwierdzen|confirmed/i, noConfirm.text);
-
-  const approveKey = 'idem-e2e-approve-' + crypto.randomBytes(8).toString('hex');
-  const approved = await call(tok.access_token, 'approve_proposal', {
-    proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
-    confirmed: true, idempotencyKey: approveKey,
-  });
-  assert.equal(approved.json.result.structuredContent.status, 'approved', approved.text);
-  const approvedReplay = await call(tok.access_token, 'approve_proposal', {
-    proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
-    confirmed: true, idempotencyKey: approveKey,
-  });
-  assert.equal(approvedReplay.json.result.structuredContent.duplicate, true, approvedReplay.text);
+  assert.ok(deleteResult.json?.result, 'delete_trade: ' + deleteResult.text);
+  const deleteBody = deleteResult.json.result.structuredContent;
+  assert.equal(deleteBody.applied, 'direct', deleteResult.text);
+  assert.equal(deleteBody.record.deleted, true);
+  assert.ok(deleteBody.record.trashId, 'delete_trade musi zwrócić trashId');
   const gone = await call(tok.access_token, 'get_trade', { id: tradeId });
   assert.equal(gone.json.result.structuredContent.found, false);
 
@@ -477,16 +456,11 @@ async function mainWrites() {
   const trashed = (afterDelete.state.trash || []).find((row) => row.kind === 'trade' && row.record?.id === tradeId);
   assert.ok(trashed, 'usunięcie musi trafić do kosza');
 
-  const restoreProposal = await call(tok.access_token, 'restore_deleted_record', {
+  const restoreResult = await call(tok.access_token, 'restore_deleted_record', {
     trashId: trashed.id, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
-  const restoreBody = restoreProposal.json.result.structuredContent;
-  assert.equal(restoreBody.applied, 'proposal');
-  const restored = await call(tok.access_token, 'approve_proposal', {
-    proposalId: restoreBody.proposalId, expectedDiffHash: restoreBody.diffHash,
-    confirmed: true, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
-  });
-  assert.equal(restored.json.result.structuredContent.status, 'approved', restored.text);
+  const restoreBody = restoreResult.json.result.structuredContent;
+  assert.equal(restoreBody.applied, 'direct');
   const back = await call(tok.access_token, 'get_trade', { id: tradeId });
   assert.equal(back.json.result.structuredContent.found, true, 'przywracanie z kosza nie odtworzyło transakcji');
 

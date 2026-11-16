@@ -42,26 +42,14 @@ final class WriteEngine
      * zobowiązania. Nie wykonują się bezpośrednio — zawsze przez propozycję,
      * którą zatwierdza człowiek.
      */
-    public const APPROVAL_REQUIRED = [
-        'trade.delete',
-        'review.delete',
-        'setup.delete',
-        'plan.delete',
-        'plan.approve',
-        'checkin.delete',
-        'account.create',
-        'account.update',
-        'account.delete',
-        'flow.create',
-        'flow.update',
-        'flow.delete',
-        'risk.update',
-        'prop.create',
-        'prop.update',
-        'prop.delete',
-        'screenshot.delete',
-        'restore.record',
-    ];
+    /**
+     * Operacje, które wymagają osobnej propozycji i zgody człowieka.
+     *
+     * Puste: wszystkie 30 operacji zapisuje bezpośrednio. Usunięcia są miękkie
+     * (kosz + restore), a `propose_change`/`approve_proposal` pozostają jako
+     * opcjonalna ścieżka pokazania diffu przed zapisem.
+     */
+    public const APPROVAL_REQUIRED = [];
 
     public const OPERATIONS = [
         'trade.create', 'trade.update', 'trade.close', 'trade.delete',
@@ -376,7 +364,7 @@ final class WriteEngine
 
         $date = $this->tradeDate((string) ($args['date'] ?? ''));
         $account = $this->accountName($state, $args['account'] ?? null, false);
-        $fee = $this->optionalPositive($args['fee'] ?? null, 'fee') ?? 0.0;
+        $fee = $this->optionalAmount($args['fee'] ?? null, 'fee') ?? 0.0;
         $trade = [
             'id' => 'manual_' . bin2hex(random_bytes(4)),
             'date' => $date,
@@ -1123,7 +1111,7 @@ final class WriteEngine
     private function riskUpdate(array $state, array $args): array
     {
         $settings = is_array($state['settings'] ?? null) ? $state['settings'] : [];
-        $changes = $this->changesArray($args, 'changes');
+        $changes = $this->riskAliases($this->changesArray($args, 'changes'));
         $reason = trim((string) ($args['reason'] ?? ''));
         if (mb_strlen($reason) < 10 || mb_strlen($reason) > 500) {
             throw new WriteException('reason_required', 'reason musi mieć 10-500 znaków i wyjaśniać powód zmiany.');
@@ -1208,6 +1196,43 @@ final class WriteEngine
             'settings:risk',
             ['settings' => array_intersect_key($updated, $changes), 'reason' => $reason]
         );
+    }
+
+    /**
+     * Mapuje nazwy pól z `get_risk_rules` na pola ustawień.
+     *
+     * @param array<string,mixed> $changes
+     * @return array<string,mixed>
+     */
+    private function riskAliases(array $changes): array
+    {
+        $aliases = [
+            'maxRiskPercentPerTrade' => 'maxRisk',
+            'maxConsecutiveLossesPerDay' => 'maxLosses',
+            'maxDailyLossPercent' => 'maxDailyLoss',
+            'blockDuration' => 'block',
+            'requireReasonForOverride' => 'requireReason',
+            'notifyOnTrigger' => 'pushLimit',
+        ];
+        $normalized = [];
+        foreach ($changes as $field => $value) {
+            $field = (string) $field;
+            if ($field === 'safetySwitch') {
+                if (is_array($value)) {
+                    foreach (['enabled' => 'safetyEnabled', 'requireReasonForOverride' => 'requireReason', 'notifyOnTrigger' => 'pushLimit', 'blockDuration' => 'block'] as $key => $target) {
+                        if (array_key_exists($key, $value)) {
+                            $normalized[$target] = $value[$key];
+                        }
+                    }
+                } else {
+                    $normalized['safetyEnabled'] = (bool) $value;
+                }
+                continue;
+            }
+            $normalized[$aliases[$field] ?? $field] = $value;
+        }
+
+        return $normalized;
     }
 
     // ------------------------------------------------------------------
@@ -1971,6 +1996,18 @@ final class WriteEngine
         }
 
         return $this->positive($value, $field);
+    }
+
+    /**
+     * Liczba opcjonalna, dopuszczająca zero (np. opłata 0).
+     */
+    private function optionalAmount(mixed $value, string $field): ?float
+    {
+        if ($value === null || $value === '' || $value === 'brak' || $value === '—') {
+            return null;
+        }
+
+        return $this->amount($value, $field);
     }
 
     private function amount(mixed $value, string $field): float

@@ -63,34 +63,17 @@ check(
     && !in_array('confirmationCode', WriteSchemas::inputApproveProposal()['required'], true)
 );
 
-// --- Rejestr operacji i routing zgody --------------------------------
+// --- Rejestr operacji i routing zapisu --------------------------------
 $operations = WriteEngine::OPERATIONS;
 check('Operacje: 30 unikalnych', count($operations) === 30 && count(array_unique($operations)) === 30, (string) count($operations));
-
-$expectedApproval = [
-    'trade.delete', 'review.delete', 'setup.delete', 'plan.delete', 'plan.approve',
-    'checkin.delete', 'account.create', 'account.update', 'account.delete',
-    'flow.create', 'flow.update', 'flow.delete', 'risk.update',
-    'prop.create', 'prop.update', 'prop.delete', 'screenshot.delete', 'restore.record',
-];
-$approval = WriteEngine::APPROVAL_REQUIRED;
-sort($approval);
-sort($expectedApproval);
-check('Operacje: 18 wymaga zgody człowieka', $approval === $expectedApproval, implode(', ', $approval));
-$directOps = array_values(array_diff($operations, $approval));
-check('Operacje: 12 bezpośrednich', count($directOps) === 12, implode(', ', $directOps));
+check('Operacje: wszystkie 30 bezpośrednie', WriteEngine::APPROVAL_REQUIRED === [], implode(', ', WriteEngine::APPROVAL_REQUIRED));
 $routingProblems = [];
-foreach ($approval as $op) {
-    if (!WriteEngine::requiresApproval($op)) {
-        $routingProblems[] = $op . ':brak-zgody';
-    }
-}
-foreach ($directOps as $op) {
+foreach ($operations as $op) {
     if (WriteEngine::requiresApproval($op)) {
         $routingProblems[] = $op . ':zbedna-zgoda';
     }
 }
-check('Operacje: routing zgodny z listą', $routingProblems === [], implode(', ', $routingProblems));
+check('Operacje: routing bez propozycji', $routingProblems === [], implode(', ', $routingProblems));
 check('Operacje: decyzje nie są operacjami zapisu', !in_array('approve_proposal', $operations, true) && !in_array('reject_proposal', $operations, true));
 
 // --- Silnik na czystym stanie (bez DB) -------------------------------
@@ -191,6 +174,10 @@ check(
     $trade['result']['source'] === 'Ręcznie' && $trade['result']['exit'] === 'otwarta'
     && $trade['result']['sl'] === '95' && $trade['result']['result'] === null
 );
+$freeTrade = $apply($withAccount(), 'trade.create', [
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'fee' => 0, 'date' => '2026-01-02',
+]);
+check('Transakcja: fee 0 dozwolone', (float) $freeTrade['result']['fee'] === 0.0, (string) ($freeTrade['result']['fee'] ?? 'brak'));
 check('Transakcja: setup spoza Playbooka', $errorOf($withAccount(), 'trade.create', [
     'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'setup' => 'Nie ma takiego',
 ]) === 'unknown_setup');
@@ -242,6 +229,14 @@ check(
     (float) $tightened['result']['settings']['maxRisk'] === 0.5
     && (int) $tightened['result']['settings']['maxLosses'] === 1
     && count($tightened['result']['settings']['rules']) === 3
+);
+$alias = $apply($base(), 'risk.update', [
+    'changes' => ['maxRiskPercentPerTrade' => 0.5, 'maxConsecutiveLossesPerDay' => 1],
+    'reason' => 'Aliasy nazw z get_risk_rules',
+]);
+check(
+    'Ryzyko: aliasy z get_risk_rules',
+    (float) $alias['result']['settings']['maxRisk'] === 0.5 && (int) $alias['result']['settings']['maxLosses'] === 1
 );
 check('Ryzyko: nie można poluzować', $errorOf($base(), 'risk.update', ['changes' => ['maxRisk' => 5], 'reason' => 'Chcę większe ryzyko']) === 'risk_not_tightened');
 check('Ryzyko: nie można wyłączyć zabezpieczeń', $errorOf($base(), 'risk.update', ['changes' => ['safetyEnabled' => false], 'reason' => 'Wyłączam zabezpieczenie']) === 'risk_not_tightened');
