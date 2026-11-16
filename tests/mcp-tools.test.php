@@ -19,6 +19,7 @@ use AlphaVault\Mcp\Analytics\SetupService;
 use AlphaVault\Mcp\Analytics\TaxService;
 use AlphaVault\Mcp\Support\Metrics;
 use AlphaVault\Mcp\Support\PropChallengeService;
+use AlphaVault\Mcp\Support\TradeService;
 
 $pass = 0;
 $fail = 0;
@@ -122,6 +123,10 @@ $summary = Metrics::summarize($state['trades']);
 check('Metrics: netto i próba', $summary['sampleSize'] === 4 && $summary['net'] === 40.0, json_encode($summary));
 check('Metrics: profit factor liczy się z brutto', abs($summary['profitFactor'] - 2.14) < 0.001, (string) $summary['profitFactor']);
 check('Metrics: expectancy R', abs($summary['expectancyR'] - 0.38) < 0.001, (string) $summary['expectancyR']);
+$breakEvenSummary = Metrics::summarize([$trade(['result' => 0.0, 'r' => 0.0])]);
+check('Metrics: break-even osobno od zysku i straty', $breakEvenSummary['sampleSize'] === 1
+    && $breakEvenSummary['wins'] === 0 && $breakEvenSummary['losses'] === 0
+    && $breakEvenSummary['breakeven'] === 1 && $breakEvenSummary['net'] === 0.0);
 
 // --- Day plan ---
 $plans = new DayPlanService();
@@ -213,6 +218,33 @@ check('Screeny: metadane bez base64', $meta['screenshots']['count'] === 1 && $me
 check('Screeny: wymiary PNG', $meta['screenshots']['items'][0]['dimensions'] === ['width' => 1, 'height' => 1]);
 $withImages = $screens->forTrade(['id' => 'x', 'screens' => ['before' => $png, 'after' => $png]], true, 1);
 check('Screeny: limit obrazów', count($withImages['screenshots']['images']) === 1);
+
+// --- Konto poza statystykami nie ukrywa transakcji z dziennika ---
+$tradeReader = new TradeService();
+$accountFilterState = [
+    'accounts' => [
+        ['name' => 'Wyłączone', 'include' => false],
+        ['name' => 'Wliczane', 'include' => true],
+    ],
+    'trades' => [
+        $trade(['id' => 'excluded-open', 'account' => 'Wyłączone', 'result' => null]),
+        $trade(['id' => 'excluded-zero', 'account' => 'Wyłączone', 'result' => 0.0]),
+        $trade(['id' => 'included-win', 'account' => 'Wliczane', 'result' => 5.0]),
+        $trade(['id' => 'legacy-account-win', 'account' => 'Konto archiwalne', 'result' => 2.0]),
+    ],
+];
+$allAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'all', 'limit' => 10]);
+$openAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'open', 'limit' => 10]);
+$closedAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'closed', 'limit' => 10]);
+$winAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'win', 'limit' => 10]);
+$lossAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'loss', 'limit' => 10]);
+check('Transakcje: konto wyłączone nadal widoczne w szczególe i liście', $tradeReader->find($accountFilterState, 'excluded-open') !== null
+    && $allAccountTrades['total'] === 4 && $openAccountTrades['total'] === 1
+    && $closedAccountTrades['total'] === 3 && $winAccountTrades['total'] === 2
+    && $lossAccountTrades['total'] === 0);
+check('Transakcje: filtr konta zgodny w statystykach i analityce', count($tradeReader->closedTrades($accountFilterState)) === 2
+    && count($tradeReader->openTrades($accountFilterState)) === 0
+    && count(Metrics::window($accountFilterState, null, null)['trades']) === 2);
 
 echo "\nWynik: {$pass} PASS, {$fail} FAIL\n";
 exit($fail === 0 ? 0 : 1);

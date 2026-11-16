@@ -22,6 +22,21 @@ final class Metrics
         }));
     }
 
+    public static function accountIncluded(array $state, string $account): bool
+    {
+        if ($account === '') {
+            return true;
+        }
+        foreach ((array) ($state['accounts'] ?? []) as $row) {
+            if (is_array($row) && (string) ($row['name'] ?? '') === $account) {
+                return !empty($row['include']);
+            }
+        }
+
+        // Preserve analytics for legacy account labels not in the account list.
+        return true;
+    }
+
     /**
      * @param list<array> $trades zamknięte transakcje
      */
@@ -187,19 +202,7 @@ final class Metrics
     {
         $closed = array_values(array_filter(
             self::closed((array) ($state['trades'] ?? [])),
-            static function (array $trade) use ($state): bool {
-                $account = (string) ($trade['account'] ?? '');
-                if ($account === '') {
-                    return true;
-                }
-                foreach ((array) ($state['accounts'] ?? []) as $row) {
-                    if (is_array($row) && (string) ($row['name'] ?? '') === $account) {
-                        return !empty($row['include']);
-                    }
-                }
-
-                return true;
-            }
+            static fn (array $trade): bool => self::accountIncluded($state, (string) ($trade['account'] ?? ''))
         ));
         $window = self::range($closed, $from, $to);
         $range = self::dateRange($window);

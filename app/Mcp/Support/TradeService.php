@@ -19,14 +19,13 @@ final class TradeService
 
     public function includedTrades(array $state): array
     {
-        $names = $this->includedAccountNames($state);
         $trades = [];
-        foreach (($state['trades'] ?? []) as $trade) {
+        foreach ($this->allTrades($state) as $trade) {
             if (!is_array($trade)) {
                 continue;
             }
             $account = isset($trade['account']) ? (string) $trade['account'] : '';
-            if ($account === '' || in_array($account, $names, true)) {
+            if (Metrics::accountIncluded($state, $account)) {
                 $trades[] = $trade;
             }
         }
@@ -130,7 +129,7 @@ final class TradeService
         }
 
         $filtered = [];
-        foreach ($this->includedTrades($state) as $trade) {
+        foreach ($this->allTrades($state) as $trade) {
             $result = $trade['result'] ?? null;
             if ($status === 'open' && $result !== null) {
                 continue;
@@ -179,13 +178,26 @@ final class TradeService
 
     public function find(array $state, string $id): ?array
     {
-        foreach ($this->includedTrades($state) as $trade) {
+        foreach ($this->allTrades($state) as $trade) {
             if ((string) ($trade['id'] ?? '') === $id) {
                 return $this->sanitize($trade, true);
             }
         }
 
         return null;
+    }
+
+    /**
+     * Account inclusion is an analytics filter, not a journal visibility rule.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function allTrades(array $state): array
+    {
+        return array_values(array_filter(
+            (array) ($state['trades'] ?? []),
+            static fn (mixed $trade): bool => is_array($trade)
+        ));
     }
 
     public function setupStats(array $state, string $setupName): array

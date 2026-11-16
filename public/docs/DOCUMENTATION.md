@@ -248,14 +248,20 @@ MCP (`mcp.alphavault.pl`) ma własny OAuth 2.1 i rejestr 79 narzędzi: 46 odczyt
 połączenie z zakresem `alphavault.read` daje od razu wszystkie 79 narzędzi; nie ma osobnego zakresu
 `alphavault.write` ani reconnectu po wdrożeniu. Narzędzia zapisu przechodzą przez `WriteEngine`,
 który waliduje argumenty, liczy formuły panelu i zapisuje stan w transakcji MySQL z
-`SELECT ... FOR UPDATE`, kontrolą `expectedRevision` i idempotencją (`mcp_idempotency`, 24 h).
+`SELECT ... FOR UPDATE`, kontrolą `expectedRevision` i idempotencją (`mcp_idempotency`, 24 h);
+fingerprint `{op, args, expectedRevision}` wiąże klucz z payloadem, a inna treść zwraca 409;
+klucze są porównywane case-sensitive. Zgodna decyzja legacy bez fingerprintu jest odtwarzana
+tylko po walidacji statusu, diffu i użytego kodu.
 Operacje wysokiego ryzyka tworzą wiersz `mcp_proposals` typu `write_op` z `{op, args}`; podgląd
 i wykonanie korzystają z tej samej funkcji, więc diff nie może się rozjechać. Zapis następuje po
 `approve_proposal` z `confirmed: true`, ustawionym wyłącznie po jednoznacznym „tak” użytkownika
 w rozmowie i zgodnym `diffHash`; kod z panelu jest opcjonalny. Usunięcia trafiają do `state.trash[]`
 i wracają przez `restore_deleted_record`. Brak danych = puste tablice, brak metryki = `null`.
 Dane giełdowe są niezmienne. Zakres `alphavault.health` jest osobny i wymaga zgody na ekranie OAuth
-oraz połączonego urządzenia.
+oraz połączonego urządzenia. Dashboard bez tego dostępu używa wyłącznie check-inu i nie zwraca
+zdrowotnych wartości ani składowych pochodnych, nawet z historycznego `state.health`.
+Bez check-inu wynik dashboardu jest pusty (`score: null`), nie generuje wartości domyślnej.
+`account.include` filtruje analitykę, nie listy i szczegóły transakcji.
 Szczegóły: [docs/MCP.md](https://github.com/miloszspyrka-code/av/blob/main/docs/MCP.md).
 
 ## 7. Discord Scheduled Events — pełny przepływ
@@ -522,9 +528,9 @@ Monitoring nie zapisuje tokenów ani treści wydarzeń. `/api/health` udostępni
 | `mcp_refresh_tokens` | refresh tokeny i rotacja | `id`, `user_id` |
 | `mcp_login_requests` | logowanie Discord na domenie MCP | `id`, `discord_state` |
 | `mcp_consents` | ekran zgody OAuth | `id`, `user_id` |
-| `mcp_proposals` | propozycje agenta (`write_op` i typy historyczne) do zatwierdzenia | `id`, `(user_id, idempotency_key)`, `(user_id, decision_key)` |
+| `mcp_proposals` | propozycje agenta (`write_op` i typy historyczne) do zatwierdzenia, fingerprint decyzji | `id`, `(user_id, idempotency_key)`, `(user_id, decision_key)` |
 | `mcp_audit` | audyt agenta i użytkownika | `id`, `proposal_id` |
-| `mcp_idempotency` | odpowiedzi operacji bezpośrednich na 24 h | `(user_id, idem_key)` |
+| `mcp_idempotency` | fingerprint payloadu i odpowiedzi operacji bezpośrednich na 24 h | `(user_id, idem_key)` |
 | `schema_migrations` | wersje migracji | `version` |
 
 ### 10.2. Indeksy wydarzeń
@@ -818,8 +824,9 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
   używa `Referrer-Policy: strict-origin-when-cross-origin` — przy `no-referrer` Chromium i Firefox
   zerują `Origin` formularzy `POST`, co wcześniej blokowało unieważnianie dostępu.
 
-MCP 3.1: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje
-`db/schema.sql` + `db/migrations/20261114_mcp2.sql` + `db/migrations/20261115_mcp_approval.sql`,
+MCP 3.1: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje:
+`db/schema.sql`, `db/migrations/20261114_mcp2.sql`, `db/migrations/20261115_mcp_approval.sql`
+oraz `db/migrations/20261116_mcp_idempotency_fingerprints.sql`,
 klucze OAuth i health check. `writes_enabled` domyślnie `true`; `false` ukrywa 33 narzędzia zapisu
 (zostaje 46 odczytu). `pilot_discord_ids` opcjonalnie ogranicza zapis do wybranych kont.
 Nie ma zakresu `alphavault.write`: token z `alphavault.read` od razu widzi wszystkie 79 narzędzi,
@@ -853,17 +860,21 @@ wymaga osobnego checkboxa na ekranie zgody. Deploy MCP nie dotyka `alphavault.pl
 | Rola / cron | `tests/role-guard.test.php` + `tests/role-recheck.e2e.mjs` | decyzje login, fail-open, 404, 429, lock, revoke sesji | 18/18 PASS |
 | Prop challenge | `tests/prop.unit.mjs` | szablony, limity, static/trailing, daty, statystyki | 27/27 PASS |
 | Prop parity | `tests/prop-parity.mjs` + `tests/prop-parity.php` | PHP ↔ JS: te same fixtures i metryki | PASS |
-| MCP propozycje | `tests/mcp.test.php` | kod jednorazowy, idempotencja decyzji, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | PASS |
+| MCP migracja upgrade | `tests/mcp-migration-upgrade.test.php` | odtworzenie schematu sprzed 20261116, dodanie kolumn/fingerprintów, kolacje case-sensitive i ponowienie migracji | CI po zmianie |
+| MCP propozycje | `tests/mcp.test.php` | gotowość z brakującymi metrykami, case-sensitive klucze propozycji/decyzji, kod jednorazowy, idempotencja decyzji powiązana z akcją i payloadem, break-even, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | CI po zmianie |
+| MCP dashboard health | `tests/mcp-tools.e2e.mjs` | metryki aktywnego Oura widoczne wyłącznie dla tokenu z `alphavault.health`; bez scope'u brak metryk, także przy aktywnym połączeniu | CI po zmianie |
+| MCP konto/analityka | `tests/mcp-tools.test.php`, `tests/mcp-tools.e2e.mjs` | jawne `include=false` filtruje analitykę, legacy konta bez konfiguracji zachowują statystyki, listy i szczegóły pozostają pełne | CI po zmianie |
+| MCP analityka | `tests/mcp-tools.test.php` | Metrics, analityka, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38, odznaki, screeny | CI po zmianie |
 | MCP zapis | `tests/mcp-write.test.php` | 30 operacji, routing 18/12, 33 schematy, formuły check-inu i planu, kosz, reguły ryzyka | PASS |
 | MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, pilot | PASS |
-| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | 33 narzędzia zapisu, propozycje, zgoda w rozmowie, kosz, idempotencja, konflikt wersji, 6 workflow | PASS |
+| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | dashboard bez scope zdrowotnego, transakcje konta poza analityką, break-even, payload-bound idempotency, 33 narzędzia zapisu, propozycje, kosz, konflikt wersji, 6 workflow | CI po zmianie |
 | MCP login | `tests/mcp-login.e2e.mjs` | mock Discord: rola, brak roli, duplikat konta | PASS |
 | MCP panel | `tests/mcp-ui.e2e.mjs` | diff, kod do rozmowy, approve, reject, reload, trwałość | PASS |
 | Routing | `tests/router.unit.mjs` | slugi widoków, aliasy starych adresów, `viewFromHash`, `showView` | 18/18 PASS |
 | Notowania | `tests/quotes.test.php` | cache, TTL, fallback, cząstkowe pobranie, uszkodzony cache | 14/14 PASS |
 | Daty demo | `tests/demo-state.test.php` | przesunięcie fixture na dziś, idempotencja, plany jako punkt zaczepienia, błędne dane | 15/15 PASS |
 | API | `tests/api.e2e.mjs` | health, sesja, CSRF, stan, events, macro, admin, eksport, prop | 23/23 PASS |
-| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro z nawigacją tygodni, pusty stan, zapisy, plan dnia z reloadem z MySQL, saldo portfela, portfel/MM i R:R w kalkulatorze, kalendarz PnL, Akademia (Dołącz, przypomnienie, harmonogram, nagrania, słownik, testy, zasady), 8 odznak, nagłówek | PASS |
+| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro z nawigacją tygodni, pusty stan, zapisy, komentarz i dashboard break-even, plan dnia z reloadem z MySQL, saldo portfela, portfel/MM i R:R w kalkulatorze, kalendarz PnL, Akademia, 8 odznak, nagłówek | CI po zmianie |
 | UI empty | `tests/ui-empty.e2e.mjs` | puste pola po sukcesie z `[]` | 12/12 PASS |
 | PWA mobile | `tests/pwa.e2e.mjs` | manifest, SW, instalacja, powiadomienie, deep link, 10 s, push, offline, brak przepełnienia 15 widoków przy 390 i 1024 px | PASS |
 | Urządzenia | `tests/wearables.e2e.mjs` | OAuth2 + PKCE Oura, rotacja tokenów i klucza, statusy, Apple, UI, bezpieczeństwo, wyłączenie Garmin/Whoop | PASS |

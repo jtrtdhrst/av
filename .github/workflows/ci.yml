@@ -112,6 +112,11 @@ jobs:
           ALPHA_VAULT_CONFIG: tests/config.test.json
         run: php app/db/migrate.php
 
+      - name: MCP migration upgrade regression
+        env:
+          ALPHA_VAULT_CONFIG: tests/config.test.json
+        run: php tests/mcp-migration-upgrade.test.php
+
       - name: Role recheck tests
         env:
           ALPHA_VAULT_CONFIG: tests/config.test.json

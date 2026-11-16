@@ -167,9 +167,11 @@ final class ProposalBuilder
             'r' => $r,
             'mfe' => max((float) ($trade['mfe'] ?? 0), abs($r)),
             'durationMin' => max(1, (int) round((time() - $openedAt) / 60)),
-            'mentor' => $result >= 0
+            'mentor' => $result > 0
                 ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
-                : 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.',
+                : ($result < 0
+                    ? 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.'
+                    : 'Pozycja zamknięta na zero (break-even). Oceń, czy wyjście było zgodne z planem.'),
         ];
         $before = [
             'exit' => $trade['exit'] ?? null,

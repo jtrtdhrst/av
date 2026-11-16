@@ -80,7 +80,6 @@ final class Tools
         $this->trades = new TradeService();
         $this->stats = new StatsService($this->trades);
         $this->events = new EventsService($config, $db);
-        $this->dashboard = new DashboardService($this->trades, $this->stats, $this->events);
         $this->macro = new MacroService($db);
         $this->capital = new CapitalService();
         $this->connections = new ConnectionsService($db);
@@ -93,6 +92,7 @@ final class Tools
         $this->performance = new PerformanceService($this->dayPlans, $this->risk);
         $this->setupDetails = new SetupService();
         $this->readiness = new ReadinessService();
+        $this->dashboard = new DashboardService($this->trades, $this->stats, $this->events, $this->readiness);
         $this->propContext = new PropContextService($this->prop);
         $this->calculator = new CalculatorService();
         $this->tax = new TaxService();
@@ -115,7 +115,12 @@ final class Tools
 
     public function getDashboard(RequestContext $context): array
     {
-        return $this->dashboard->dashboard($this->state($context));
+        $health = $this->healthContext($context);
+        return $this->dashboard->dashboard(
+            $this->state($context),
+            $health['access'],
+            $health['wearables']
+        );
     }
 
     public function listTrades(RequestContext $context, string $status = 'all', ?string $pair = null, ?string $setup = null, ?string $grade = null, ?string $from = null, ?string $to = null, int $limit = 20, int $offset = 0): array
@@ -485,10 +490,14 @@ final class Tools
 
     public function getReadinessContext(RequestContext $context, ?string $date = null): array
     {
-        $access = $this->healthAccess($context);
-        $wearables = $access === 'granted' ? $this->wearables->listForUser((int) $this->user($context)['id']) : null;
+        $health = $this->healthContext($context);
         try {
-            return $this->readiness->context($this->state($context), $date, $wearables, $access);
+            return $this->readiness->context(
+                $this->state($context),
+                $date,
+                $health['wearables'],
+                $health['access']
+            );
         } catch (\InvalidArgumentException $err) {
             throw new ToolCallException($err->getMessage());
         }
@@ -1206,22 +1215,34 @@ final class Tools
      */
     private function healthAccess(RequestContext $context): string
     {
+        return $this->healthContext($context)['access'];
+    }
+
+    /**
+     * Returns wearable metrics only when both the OAuth scope and a connected
+     * provider are present. Other tools can inspect access without receiving
+     * the health payload.
+     *
+     * @return array{access:string,wearables:?array}
+     */
+    private function healthContext(RequestContext $context): array
+    {
         $token = $context->getAccessToken();
         if ($token === null || !$token->hasScope('alphavault.health')) {
-            return 'scope_missing';
+            return ['access' => 'scope_missing', 'wearables' => null];
         }
         try {
             $summary = $this->wearables->listForUser((int) $this->user($context)['id']);
         } catch (\Throwable) {
-            return 'unavailable';
+            return ['access' => 'unavailable', 'wearables' => null];
         }
         foreach ((array) ($summary['devices'] ?? []) as $device) {
             if (is_array($device) && !empty($device['connected'])) {
-                return 'granted';
+                return ['access' => 'granted', 'wearables' => $summary];
             }
         }
 
-        return 'no_device';
+        return ['access' => 'no_device', 'wearables' => null];
     }
 
     private function user(RequestContext $context): array

@@ -129,6 +129,7 @@ Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnic
 |---|---|---|
 | Zakres 7/30/90 dni/wszystko | ✅ | |
 | Wynik, skuteczność, PF, expectancy | ✅ | z transakcji; przy 0 transakcji „—”, bez dzielenia przez zero |
+| Wynik transakcji równy 0 | ✅ | break-even; nie jest klasyfikowany jako zysk ani strata |
 | Max obsunięcie | ✅ | z krzywej kapitału |
 | % ze SL, zgodność z planem, opłaty | ✅ | przy 0 transakcji „—”; opłaty 0,00 bez ujemnego zera |
 | Krzywa kapitału | ✅ | SVG z realnych danych |
@@ -284,7 +285,7 @@ Poświadczenia są szyfrowane po stronie serwera (`INTEGRATIONS_KEY`) i nigdy ni
 | Personalizacja (rynki, akcent, strefa, godziny) | ✅ | |
 | Wyłącznik bezpieczeństwa | ✅ | limit strat, limit dzienny, czas blokady, wymóg powodu |
 | 3 zasady + punkty checklisty | ✅ | własny punkt checklisty |
-| Konta i kapitał | ✅ | dodawanie/usuwanie, włączanie do statystyk, edycja kapitału startowego i bieżącego salda bezpośrednio w tabeli |
+| Konta i kapitał | ✅ | dodawanie/usuwanie, włączanie do statystyk (bez ukrywania transakcji z list i szczegółów), edycja kapitału startowego i bieżącego salda bezpośrednio w tabeli |
 | Wpłaty/wypłaty | ✅ | saldo + PIT |
 | Odznaki | ✅ | 8 progów liczbowych z realnych danych; licznik „X z 8” i poziom wyliczane z liczby zdobytych; data zdobycia lub pozostała wartość w podpowiedzi |
 | Bezpieczeństwo i dane | ✅ | prawdziwa sesja serwerowa, wylogowanie, eksport, usunięcie konta; bez deklaracji 2FA i listy sesji |

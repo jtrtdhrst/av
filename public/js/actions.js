@@ -559,7 +559,11 @@
       t.result = Math.round(result * 100) / 100;
       t.r = risk ? Math.round(t.result / risk * 100) / 100 : 0;
       t.durationMin = Math.max(1, Math.round((Date.now() - new Date(t.date)) / 60000));
-      t.mentor = t.result >= 0 ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.' : 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.';
+      t.mentor = t.result > 0
+        ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
+        : (t.result < 0
+          ? 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.'
+          : 'Pozycja zamknięta na zero (break-even). Oceń, czy wyjście było zgodne z planem.');
       AV.saveNow(); AV.closeModal(); $('#tm').classList.remove('on'); AV.renderAll();
       clearTimeout(AV._pushTimer);
       await AV.pushStateImmediate();

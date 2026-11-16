@@ -9,16 +9,17 @@ final class DashboardService
         private readonly TradeService $trades,
         private readonly StatsService $stats,
         private readonly EventsService $events,
+        private readonly \AlphaVault\Mcp\Analytics\ReadinessService $readinessService,
     ) {
     }
 
-    public function dashboard(array $state): array
+    public function dashboard(array $state, string $healthAccess = 'scope_missing', ?array $wearables = null): array
     {
         $today = $this->trades->todayStats($state);
         $todayKey = Dates::todayKey();
         $plan = $this->planSummary($state['plans'][$todayKey] ?? null, $todayKey);
         $lock = $this->lockInfo($state, $today);
-        $readiness = $this->readiness($state);
+        $readiness = $this->readiness($state, $healthAccess, $wearables);
         $events = $this->events->list(['limit' => 1]);
 
         return [
@@ -129,89 +130,84 @@ final class DashboardService
         ];
     }
 
-    public function readiness(array $state): array
+    public function readiness(array $state, string $healthAccess = 'scope_missing', ?array $wearables = null): array
     {
-        $health = is_array($state['health'] ?? null) ? $state['health'] : [];
-        $settings = is_array($state['settings'] ?? null) ? $state['settings'] : [];
-        $check = null;
-        foreach (($state['checkins'] ?? []) as $candidate) {
-            if (!is_array($candidate) || (string) ($candidate['date'] ?? '') !== Dates::todayKey()) {
-                continue;
+        $context = $this->readinessService->context(
+            $state,
+            Dates::todayKey(),
+            $wearables,
+            $healthAccess
+        );
+        $ready = $context['readiness'];
+        $health = $context['health'];
+        $checkin = $context['checkin'];
+        $today = is_array($wearables['today'] ?? null) ? $wearables['today'] : [];
+        $components = is_array($today['components'] ?? null) ? $today['components'] : [];
+        $score = $ready['score'];
+        $title = (string) ($ready['title'] ?? '') !== '' ? $ready['title'] : null;
+        $class = $score === null ? null : ($score < 50 ? 'loss' : ($score < 65 ? 'warnc' : 'win'));
+
+        $healthDescription = [];
+        $sleepMinutes = $today['sleepMinutes'] ?? null;
+        $hrv = $today['hrvMs'] ?? null;
+        $restingHr = $today['restingHr'] ?? null;
+        $bodyBattery = $today['bodyBattery'] ?? null;
+        $providerScore = $today['providerScore'] ?? null;
+        if (is_numeric($sleepMinutes)) {
+            $sleepHours = (float) $sleepMinutes / 60;
+            $hours = (int) floor($sleepHours);
+            $minutes = (int) round(($sleepHours - $hours) * 60);
+            if ($minutes === 60) {
+                $hours++;
+                $minutes = 0;
             }
-            if ($check === null || (int) ($candidate['score'] ?? 0) > (int) ($check['score'] ?? 0)) {
-                $check = $candidate;
+            $healthDescription[] = 'Sen ' . $hours . ' h ' . str_pad((string) $minutes, 2, '0', STR_PAD_LEFT) . ' min';
+        }
+        if (is_numeric($hrv)) {
+            $healthDescription[] = 'HRV ' . round((float) $hrv, 1) . ' ms';
+        }
+        if (is_numeric($restingHr)) {
+            $healthDescription[] = 'tętno spoczynkowe ' . (int) $restingHr;
+        }
+        if (is_numeric($bodyBattery)) {
+            $healthDescription[] = 'body battery ' . (int) $bodyBattery;
+        }
+        if (is_numeric($providerScore)) {
+            $healthDescription[] = 'wynik urządzenia ' . (int) $providerScore;
+        }
+        $description = $healthDescription !== []
+            ? implode(', ', $healthDescription) . '.'
+            : ($checkin !== null ? 'Gotowość liczona tylko z check-inu.' : null);
+        $hasDeviceData = false;
+        foreach ([$sleepMinutes, $hrv, $restingHr, $bodyBattery, $providerScore] as $metric) {
+            if (is_numeric($metric)) {
+                $hasDeviceData = true;
+                break;
             }
         }
-
-        $moodMod = [
-            'Spokój' => 10,
-            'Skupienie' => 7,
-            'Pewność' => 5,
-            'Nuda' => -3,
-            'Zmęczenie' => -8,
-            'Strach' => -10,
-            'FOMO' => -12,
-            'Złość' => -14,
-            'Chciwość' => -6,
-        ];
-        $checkScore = $check !== null
-            ? $this->clamp(50 + (((int) ($check['energy'] ?? 3)) - 3) * 10 + ($moodMod[(string) ($check['mood'] ?? '')] ?? 0), 0, 100)
-            : 55;
-        $garmin = !empty($settings['devices']['garmin']);
-        $sleepH = (float) ($health['sleepH'] ?? 0);
-        $hrv = (float) ($health['hrv'] ?? 0);
-        $hrvBase = (float) ($health['hrvBase'] ?? 52);
-        $hr = (float) ($health['hr'] ?? 56);
-        $hrBase = (float) ($health['hrBase'] ?? 56);
-        if ($hrvBase <= 0) {
-            $hrvBase = 52;
-        }
-        if ($hr <= 0) {
-            $hr = 56;
-        }
-        $sleepScore = $this->clamp($sleepH / 8 * 100, 0, 100);
-        $hrvScore = $this->clamp($hrv / $hrvBase * 100, 0, 100);
-        $hrScore = $this->clamp($hrBase / $hr * 100, 0, 100);
-        $score = $garmin
-            ? (int) round($sleepScore * 0.35 + $hrvScore * 0.2 + $hrScore * 0.1 + $checkScore * 0.35)
-            : (int) round($checkScore);
-
-        $title = 'Świetna forma';
-        $class = 'win';
-        if ($score < 80) {
-            $title = 'Dobra forma';
-        }
-        if ($score < 65) {
-            $title = 'Ostrożnie dziś';
-            $class = 'warnc';
-        }
-        if ($score < 50) {
-            $title = 'Lepiej odpuścić';
-            $class = 'loss';
-        }
-
-        $description = $garmin
-            ? 'Sen ' . floor($sleepH) . ' h ' . str_pad((string) round(($sleepH - floor($sleepH)) * 60), 2, '0', STR_PAD_LEFT)
-                . ' min, HRV ' . round($hrv) . ' ms, tętno ' . round($hr) . '.'
-            : 'Brak danych z zegarka — gotowość liczona tylko z check-inu.';
+        $providers = array_values(array_filter(
+            (array) ($today['providers'] ?? []),
+            static fn ($provider): bool => is_string($provider) && $provider !== ''
+        ));
+        $garmin = in_array('garmin', $providers, true);
 
         return [
             'score' => $score,
             'title' => $title,
             'class' => $class,
             'description' => $description,
+            'healthAccess' => $healthAccess,
             'garmin' => $garmin,
-            'hasCheckin' => $check !== null,
-            'hasDeviceData' => $garmin && ($sleepH > 0 || $hrv > 0 || $hr > 0),
-            'checkScore' => Numbers::round($checkScore),
-            'sleepScore' => Numbers::round($sleepScore),
-            'hrvScore' => Numbers::round($hrvScore),
-            'heartRateScore' => Numbers::round($hrScore),
+            'hasCheckin' => $checkin !== null,
+            'hasDeviceData' => $hasDeviceData,
+            'checkScore' => $checkin['score'] ?? null,
+            'sleepScore' => $components['sleep'] ?? null,
+            'hrvScore' => $components['hrv'] ?? null,
+            'heartRateScore' => $components['restingHr'] ?? null,
+            'bodyBatteryScore' => $components['bodyBattery'] ?? null,
+            'recoveryScore' => $components['recovery'] ?? null,
+            'physiologyScore' => $health['physiologyScore'] ?? null,
+            'providers' => $providers,
         ];
-    }
-
-    private function clamp(float $value, float $min, float $max): float
-    {
-        return max($min, min($max, $value));
     }
 }

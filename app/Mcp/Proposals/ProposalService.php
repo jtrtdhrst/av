@@ -222,6 +222,7 @@ final class ProposalService
     public function approveWithCode(int $userId, string $proposalId, string $expectedDiffHash, ?string $confirmationCode, string $idempotencyKey, string $clientName): array
     {
         $key = $this->decisionKey($idempotencyKey);
+        $decisionHash = $this->decisionFingerprint('approve', $proposalId, $expectedDiffHash, $confirmationCode);
         $pdo = $this->db->pdo();
         $pdo->beginTransaction();
         try {
@@ -232,7 +233,15 @@ final class ProposalService
             if ($proposal === null) {
                 throw new ProposalException('not_found', 'Propozycja nie istnieje.', 404);
             }
-            $replay = $this->decisionReplay($userId, $key, $proposalId, 'approved');
+            $replay = $this->decisionReplay(
+                $userId,
+                $key,
+                $proposalId,
+                'approved',
+                $decisionHash,
+                $expectedDiffHash,
+                $confirmationCode
+            );
             if ($replay !== null) {
                 $pdo->commit();
                 return $replay;
@@ -335,9 +344,9 @@ final class ProposalService
                 "UPDATE mcp_proposals
                     SET status = 'approved', decided_at = UTC_TIMESTAMP(), decided_by = ?,
                         approval_code_used_at = IF(? IS NULL, approval_code_used_at, UTC_TIMESTAMP()),
-                        decision_key = ?, decision_result_json = ?
+                        decision_key = ?, decision_hash = ?, decision_result_json = ?
                   WHERE id = ?",
-                [$userId, $confirmationCode, $key, $this->encode($result), $proposalId]
+                [$userId, $confirmationCode, $key, $decisionHash, $this->encode($result), $proposalId]
             );
             $this->audit($userId, $proposalId, 'user', 'mcp.proposal.approve', [
                 'kind' => (string) $proposal['kind'],
@@ -365,6 +374,7 @@ final class ProposalService
     public function rejectWithKey(int $userId, string $proposalId, string $idempotencyKey, string $clientName): array
     {
         $key = $this->decisionKey($idempotencyKey);
+        $decisionHash = $this->decisionFingerprint('reject', $proposalId, null, null);
         $pdo = $this->db->pdo();
         $pdo->beginTransaction();
         try {
@@ -375,7 +385,7 @@ final class ProposalService
             if ($proposal === null) {
                 throw new ProposalException('not_found', 'Propozycja nie istnieje.', 404);
             }
-            $replay = $this->decisionReplay($userId, $key, $proposalId, 'rejected');
+            $replay = $this->decisionReplay($userId, $key, $proposalId, 'rejected', $decisionHash);
             if ($replay !== null) {
                 $pdo->commit();
                 return $replay;
@@ -396,9 +406,10 @@ final class ProposalService
             ];
             $this->db->execute(
                 "UPDATE mcp_proposals
-                    SET status = 'rejected', decided_at = UTC_TIMESTAMP(), decided_by = ?, decision_key = ?, decision_result_json = ?
+                    SET status = 'rejected', decided_at = UTC_TIMESTAMP(), decided_by = ?,
+                        decision_key = ?, decision_hash = ?, decision_result_json = ?
                   WHERE id = ?",
-                [$userId, $key, $this->encode($result), $proposalId]
+                [$userId, $key, $decisionHash, $this->encode($result), $proposalId]
             );
             $this->audit($userId, $proposalId, 'user', 'mcp.proposal.reject', [
                 'decidedBy' => $userId,
@@ -597,10 +608,32 @@ final class ProposalService
         return $key;
     }
 
-    private function decisionReplay(int $userId, string $key, string $proposalId, string $expectedStatus): ?array
+    private function decisionFingerprint(string $action, string $proposalId, ?string $expectedDiffHash, ?string $confirmationCode): string
+    {
+        return hash('sha256', $this->canonicalJson([
+            'action' => $action,
+            'proposalId' => $proposalId,
+            'expectedDiffHash' => $expectedDiffHash !== null ? strtolower(trim($expectedDiffHash)) : null,
+            'confirmationCodeHash' => $confirmationCode !== null ? $this->hashApprovalCode($confirmationCode) : null,
+        ]));
+    }
+
+    private function decisionReplay(
+        int $userId,
+        string $key,
+        string $proposalId,
+        string $expectedStatus,
+        string $decisionHash,
+        ?string $expectedDiffHash = null,
+        ?string $confirmationCode = null,
+    ): ?array
     {
         $row = $this->db->queryOne(
-            'SELECT id, decision_result_json FROM mcp_proposals WHERE user_id = ? AND decision_key = ? LIMIT 1',
+            'SELECT id, status, diff_hash, approval_code_hash, approval_code_used_at,
+                    decision_hash, decision_result_json
+               FROM mcp_proposals
+              WHERE user_id = ? AND decision_key = ?
+              LIMIT 1',
             [$userId, $key]
         );
         if ($row === null) {
@@ -609,9 +642,45 @@ final class ProposalService
         if ((string) $row['id'] !== $proposalId) {
             throw new ProposalException('idempotency_conflict', 'Ten sam idempotencyKey użyto dla innej propozycji.', 409);
         }
+        $storedHash = (string) ($row['decision_hash'] ?? '');
+        if ($storedHash === '') {
+            // Older decisions predate decision_hash. Reconstruct only when the
+            // persisted status and approval evidence prove the exact request.
+            $legacyMatches = (string) ($row['status'] ?? '') === $expectedStatus;
+            if ($legacyMatches && $expectedStatus === 'approved') {
+                $storedDiffHash = strtolower((string) ($row['diff_hash'] ?? ''));
+                $requestedDiffHash = strtolower(trim((string) $expectedDiffHash));
+                $legacyMatches = $requestedDiffHash !== ''
+                    && $storedDiffHash !== ''
+                    && hash_equals($storedDiffHash, $requestedDiffHash);
+                $codeWasUsed = ($row['approval_code_used_at'] ?? null) !== null;
+                if ($legacyMatches && $codeWasUsed) {
+                    $codeHash = (string) ($row['approval_code_hash'] ?? '');
+                    $legacyMatches = $confirmationCode !== null
+                        && $codeHash !== ''
+                        && $this->verifyApprovalCode($confirmationCode, $codeHash);
+                } elseif ($legacyMatches) {
+                    $legacyMatches = $confirmationCode === null;
+                }
+            }
+            if (!$legacyMatches) {
+                throw new ProposalException('idempotency_conflict', 'Ten sam idempotencyKey użyto z inną treścią decyzji.', 409);
+            }
+            $this->db->execute(
+                'UPDATE mcp_proposals SET decision_hash = ? WHERE id = ? AND decision_hash IS NULL',
+                [$decisionHash, $proposalId]
+            );
+            $storedHash = $decisionHash;
+        }
+        if (!hash_equals($storedHash, $decisionHash)) {
+            throw new ProposalException('idempotency_conflict', 'Ten sam idempotencyKey użyto z inną treścią decyzji.', 409);
+        }
         $result = json_decode((string) ($row['decision_result_json'] ?? ''), true);
         if (!is_array($result)) {
             $result = ['ok' => true, 'status' => $expectedStatus, 'proposalId' => $proposalId];
+        }
+        if ((string) ($result['status'] ?? '') !== $expectedStatus) {
+            throw new ProposalException('idempotency_conflict', 'Ten sam idempotencyKey użyto dla innej decyzji.', 409);
         }
         $result['duplicate'] = true;
 

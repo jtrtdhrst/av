@@ -238,6 +238,9 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 - 46 narzędzi odczytu: profil, pulpit, transakcje, dziennik, statystyki i raporty, wydarzenia, plan dnia, playbook, makro, prop, check-iny, gotowość, ryzyko, konta, kapitał, podatki, połączenia, lista i status propozycji.
 - 33 narzędzia zapisu: 30 operacji zapisuje bezpośrednio (transakcje, recenzje, setupy, plan dnia, check-in, screen, usunięcia, konta, wpłaty i wypłaty, reguły ryzyka, prop, zatwierdzenie planu, kosz) oraz 3 obsługujące opcjonalne propozycje (`propose_change`, `approve_proposal`, `reject_proposal`).
 - Każdy zapis ma `idempotencyKey` i opcjonalny `expectedRevision`; konflikt wersji nie nadpisuje danych.
+- Fingerprint wiąże `idempotencyKey` z operacją, argumentami i rewizją; ponowne użycie dla innego payloadu zwraca `idempotency_conflict` (409), także dla decyzji propozycji. Klucze są case-sensitive.
+- `account.include` ogranicza analitykę, nie odczyt list i szczegółów transakcji. Wynik 0 jest break-even, osobno od zysku i straty.
+- Dane zdrowotne na pulpicie MCP wymagają zakresu `alphavault.health` i aktywnego połączenia urządzenia; bez niego wynik gotowości zależy wyłącznie od check-inu, a bez check-inu `score` jest `null`.
 - Usunięcia są miękkie: rekord trafia do `state.trash[]` i wraca przez `restore_deleted_record`.
 - `propose_change` pokazuje diff bez zapisu; `approve_proposal` wykonuje propozycję po `confirmed: true`, a `reject_proposal` nie zmienia danych. Kod z panelu jest opcjonalny.
 - Idempotencja zapisu (24 h) i decyzji, TTL propozycji 30 min, `diffHash`, audyt, transakcja MySQL z `SELECT ... FOR UPDATE`.

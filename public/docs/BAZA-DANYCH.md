@@ -32,9 +32,9 @@ Schemat: `db/schema.sql`. Migracja: `php app/db/migrate.php`.
 | `mcp_refresh_tokens` | refresh tokeny 30 dni z rotacją i unieważnianiem rodziny |
 | `mcp_login_requests` | stan logowania Discord na domenie MCP |
 | `mcp_consents` | ekran zgody OAuth: CSRF, scope, resource, TTL 30 min |
-| `mcp_proposals` | propozycje zmian od agenta oczekujące na decyzję użytkownika; `payload_hash`, `diff_hash`, `base_revision`, TTL 30 min, jednorazowy `approval_code_hash` (TTL 10 min, limit 5 prób), `decision_key`/`decision_result_json` do idempotencji decyzji |
+| `mcp_proposals` | propozycje zmian od agenta oczekujące na decyzję użytkownika; `payload_hash`, `diff_hash`, `base_revision`, TTL 30 min, jednorazowy `approval_code_hash` (TTL 10 min, limit 5 prób), case-sensitive `idempotency_key`/`decision_key` oraz `decision_hash`/`decision_result_json` do idempotencji decyzji |
 | `mcp_audit` | audyt operacji MCP (agent, użytkownik, system) |
-| `mcp_idempotency` | odpowiedzi operacji zapisu MCP na 24 h; klucz `(user_id, idem_key)`, powtórka zwraca zapisany wynik z `duplicate: true` |
+| `mcp_idempotency` | fingerprint payloadu i odpowiedź operacji zapisu MCP na 24 h; case-sensitive klucz `(user_id, idem_key)`, zgodna powtórka zwraca wynik z `duplicate: true` |
 | `schema_migrations` | wersje migracji |
 | `exchange_connections` | połączenia giełd/brokerów, szyfrowane poświadczenia, maska, status, kursor backfillu; kod EA ważny 15 min przed pierwszym użyciem i 90 dni od ostatniej synchronizacji |
 | `exchange_imports` | deduplikacja transakcji po `(user_id, provider, external_id)` |
