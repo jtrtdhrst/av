@@ -194,6 +194,10 @@ function toolError(r) {
   return r.json?.result?.isError ? String(r.json.result.content?.[0]?.text || '') : '';
 }
 
+function stateOf(userId) {
+  return JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['state', String(userId)]));
+}
+
 async function main() {
   const sessions = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
   const a = sessions['mcp-e2e-a'];
@@ -514,11 +518,14 @@ async function mainWrites() {
   const clientReadOnly = await register('MCP E2E Read Only');
   const authReadOnly = await authorize(clientReadOnly, a.session, 'alphavault.read');
   const tokReadOnly = await token(clientReadOnly, authReadOnly);
-  const listReadOnly = await rpc(tokReadOnly.access_token, 'tools/list', {});
-  assert.equal(listReadOnly.res.status, 200, listReadOnly.text);
-  const readOnlyNames = listReadOnly.json.result.tools.map((tool) => tool.name);
-  assert.equal(readOnlyNames.length, READ_TOOLS.length, 'token bez write widzi tylko 46 narzędzi odczytu');
-  assert.equal(readOnlyNames.some((name) => WRITE_TOOLS.includes(name)), false, 'token bez write nie widzi narzędzi zapisu');
+  const revisionBeforeScope = stateOf(a.userId).revision;
+  const scopeBlocked = await call(tokReadOnly.access_token, 'create_checkin', {
+    mood: 'Spokój', energy: 3, idempotencyKey: 'idem-e2e-scope-' + crypto.randomBytes(8).toString('hex'),
+  });
+  const blockedByStatus = scopeBlocked.res.status !== 200;
+  const blockedByError = Boolean(scopeBlocked.json?.result?.isError) || Boolean(scopeBlocked.json?.error);
+  assert.ok(blockedByStatus || blockedByError, 'scope: status=' + scopeBlocked.res.status + ' body=' + scopeBlocked.text);
+  assert.equal(stateOf(a.userId).revision, revisionBeforeScope, 'zapis bez scope nie może zmienić stanu');
 
   console.log('MCP E2E writes PASS');
 }
