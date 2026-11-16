@@ -724,7 +724,7 @@ async function main() {
   await expectToolError(at, 'create_trade', {
     pair: 'E2E/RELATIVE-DATE', dir: 'long', entry: 100, size: 1,
     date: 'tomorrow', idempotencyKey: idem('trade-relative-date'),
-  }, /datę transakcji/i);
+  }, /data transakcji/i);
 
   const readTrade = await call(at, 'get_trade', { id: tradeId });
   assert.equal(readTrade.found, true);
