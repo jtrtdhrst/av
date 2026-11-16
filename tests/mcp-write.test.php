@@ -129,6 +129,13 @@ $calm = $apply($base(), 'checkin.create', ['date' => $dayKey(0), 'mood' => 'Spok
 check('Check-in: wynik 60', $calm['result']['score'] === 60, (string) $calm['result']['score']);
 $upsert = $apply($mood['state'], 'checkin.create', ['date' => $dayKey(0), 'mood' => 'Spokój', 'energy' => 3]);
 check('Check-in: kolejny wpis w tym dniu nadpisuje', count($upsert['state']['checkins']) === 1 && $upsert['state']['checkins'][0]['score'] === 60);
+$updated = $apply($mood['state'], 'checkin.update', ['date' => $dayKey(0), 'changes' => ['mood' => 'Spokój', 'energy' => 3]]);
+check(
+    'Check-in: update zapisuje stan',
+    $updated['state']['checkins'][0]['mood'] === 'Spokój'
+    && $updated['state']['checkins'][0]['score'] === 60
+    && $updated['state']['checkins'][0]['energy'] === 3
+);
 check('Check-in: energy poza zakresem', $errorOf($base(), 'checkin.create', ['energy' => 9]) === 'invalid_energy');
 check('Check-in: nieznany nastrój', $errorOf($base(), 'checkin.create', ['mood' => 'Euforia']) === 'invalid_mood');
 check('Check-in: edycja nieznanego pola', $errorOf($mood['state'], 'checkin.update', ['date' => $dayKey(0), 'changes' => ['score' => 1]]) === 'field_not_editable');

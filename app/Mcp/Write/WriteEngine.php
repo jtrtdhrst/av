@@ -863,6 +863,7 @@ final class WriteEngine
         ], $changes);
         $checkins[$index] = array_merge($before, $this->checkinPayload($payload));
         $checkins[$index]['date'] = $date;
+        $state['checkins'] = array_values($checkins);
 
         return $this->done($state, $before, $checkins[$index], 'checkin:' . $date, $checkins[$index]);
     }
