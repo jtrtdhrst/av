@@ -65,9 +65,10 @@ jobs:
             if (context.repo.owner !== 'miloszspyrka-code' || context.repo.repo !== 'av') {
               throw new Error('Deploy AlphaVault MCP is restricted to miloszspyrka-code/av.');
             }
-            const { validateMcpDeploy } = await import(
+            const { assertMcpDeployContext, validateMcpDeploy } = await import(
               `file://${process.env.GITHUB_WORKSPACE}/scripts/validate-mcp-deploy.mjs`
             );
+            assertMcpDeployContext(context);
             const deploySha = await validateMcpDeploy({
               github,
               owner: context.repo.owner,
