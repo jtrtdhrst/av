@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.0.0 - 2026-11-16
+
+### Dodane
+- MCP 3.0: 33 narzędzia zapisu obok 46 narzędzi odczytu (79 łącznie). 12 operacji niskiego ryzyka zapisuje bezpośrednio (`create_trade`, `update_trade`, `close_trade`, recenzje, setupy, szkic planu dnia, check-in, screen), 18 wymaga zgody człowieka (usunięcia, konta, wpłaty i wypłaty, reguły ryzyka, prop challenge, zatwierdzenie planu, przywracanie z kosza), a 3 obsługują propozycje (`propose_change`, `approve_proposal`, `reject_proposal`).
+- `app/Mcp/Write/WriteEngine.php`: jedna ścieżka walidacji, formuł i zapisu dla operacji bezpośrednich i zatwierdzanych; transakcja MySQL, `expectedRevision`, idempotencja 24 h i audyt w `mcp_audit`.
+- Propozycje typu `write_op` przechowują `{op, args}`; podgląd i wykonanie korzystają z `WriteEngine::apply()`, więc diff nie może się rozjechać z zapisem.
+- Miękkie usunięcia: rekord trafia do `state.trash[]` z `trashId` i wraca przez `restore_deleted_record` po zgodzie człowieka.
+- `update_risk_rules` może wyłącznie zaostrzać limity, wydłużać blokadę, włączać zabezpieczenia i dopisywać reguły; wymaga `reason` 10-500 znaków.
+- `MCP_PILOT_DISCORD_IDS` jest opcjonalną allowlistą; puste = wszyscy z scope `alphavault.write`. Deploy `writes_enabled` domyślnie `true`.
+
+### Zmienione
+- Stare narzędzia `propose_*`, `create_*_proposal` i `update_*_proposal` zniknęły z rejestru; ich typy propozycji pozostają obsługiwane dla istniejących wierszy.
+- `deploy-mcp.yml` i `scripts/deploy-mcp.sh` przyjmują `writes_enabled=true|false`; health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie.
+
+### Testy
+- `tests/mcp-write.test.php`: rejestr 30 operacji, routing 18/12, 33 schematy, formuły i walidacja `apply()` bez bazy.
+- `tests/mcp-tools.e2e.mjs`: pełne cykle 33 narzędzi, kosz i przywracanie, kod jednorazowy, odrzucenie, idempotencja i konflikt wersji.
+- `tests/mcp.e2e.mjs`: 79 narzędzi, cykl transakcji create → update → close → delete → restore, scope write i pilot.
+
 ## 3.9.8 - 2026-11-15
 
 ### Naprawione

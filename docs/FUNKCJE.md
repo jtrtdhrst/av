@@ -150,7 +150,7 @@ Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnic
 | Status serwera MCP | ✅ | pill z `/api/mcp`: `MCP · TYLKO ODCZYT`, `MCP · ZAPIS` albo `MCP · WYŁĄCZONY` |
 | Oczekujące propozycje | ✅ | lista zmian od agenta z diffem, przyciskami Zatwierdź/Odrzuć, kodem do rozmowy i statusem po decyzji |
 | Zatwierdzanie w rozmowie | ✅ | jednorazowy kod (TTL 10 min, limit 5 prób) wydawany w panelu; agent zatwierdza `approve_proposal` tylko z tym kodem |
-| Zakres MCP 2.1 | ✅/— | 46 narzędzi odczytu zawsze; 20 narzędzi zapisu (`propose_*`, `create_*_proposal`, `update_*_proposal`, `approve_proposal`, `reject_proposal`) tylko przy `MCP_WRITES_ENABLED=true` i scope `alphavault.write` |
+| Zakres MCP 3.0 | ✅/— | 46 narzędzi odczytu zawsze; 33 narzędzia zapisu tylko przy `MCP_WRITES_ENABLED=true` i scope `alphavault.write` (12 bezpośrednich: transakcje, recenzje, setupy, szkic planu, check-in, screen; 18 z zgodą człowieka: usunięcia, konta, wpłaty/wypłaty, reguły ryzyka, prop, zatwierdzenie planu, kosz; 3 propozycje: `propose_change`, `approve_proposal`, `reject_proposal`) |
 | Zakres danych MCP | ✅ | profil, plan dnia, transakcje, dziennik, playbook, statystyki i raporty, check-iny, ryzyko i tryb ochronny, prop challenge, kalkulator, kapitał i PIT-38, makro, synchronizacje, odznaki; bez kluczy API i haseł; dane zdrowotne tylko przy scope `alphavault.health` i zgodzie urządzenia |
 | Zgoda i wycofanie | ✅ | ekran zgody z zakresem, link do polityki §13.2, unieważnienie tokenu w `/oauth/connected` |
 | Proaktywna wiadomość przy limicie strat | ✅ | przycisk prowadzi do integracji MCP |

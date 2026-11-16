@@ -1,515 +1,320 @@
-# AlphaVault MCP 2.1 — OAuth 2.1, narzędzia, propozycje i zatwierdzanie kodem
+# AlphaVault MCP 3.0 — OAuth 2.1, 79 narzędzi, zapis i zgoda człowieka
 
-> **Status:** kod w `main` (MCP 2.1), endpoint produkcyjny `https://mcp.alphavault.pl/mcp`.
-> Domyślnie `MCP_ENABLED=true` na domenie MCP, `MCP_WRITES_ENABLED=false` — narzędzia zapisujące
-> nie są wtedy widoczne, a scope `alphavault.write` nie może zostać przyznany.
->
-> Repozytorium: `miloszspyrka-code/av` · Aplikacja: <https://alphavault.pl>
+> Serwer MCP działa na `https://mcp.alphavault.pl` i udostępnia dane wyłącznie
+> zalogowanego użytkownika. `alphavault.read` daje 46 narzędzi odczytu.
+> `alphavault.write` dodaje 33 narzędzia zapisu: 12 zapisuje bezpośrednio,
+> 18 wymaga zgody człowieka, 3 obsługują decyzje o propozycjach.
 
 ## 1. Architektura
 
-MCP jest osobnym front controllerem PHP 8.3 na `mcp.alphavault.pl`. Korzysta z tej samej bazy MySQL
-i tego samego konta LH.pl co AlphaVault. Nie ma stałego procesu Node.js.
-
 ```text
-ChatGPT / Claude / Grok
-          │ HTTPS + OAuth 2.1 Bearer
-          ▼
-https://mcp.alphavault.pl/mcp
-          ├── OAuth 2.1 AS (authorize, token, register, revoke, discovery)
-          ├── MCP Streamable HTTP (JSON-RPC 2.0)
-          ├── Tools (odczyt + propozycje zmian)
-          ├── Prompts (scenariusze pracy)
-          └── MySQL: users, user_states, mcp_*, macro_events, exchange_*
+ChatGPT / klient MCP
+  → https://mcp.alphavault.pl/mcp            (JSON-RPC 2.0, Streamable HTTP)
+  → OAuth 2.1 + PKCE S256                    (DCR, code, refresh, revoke)
+  → TokenValidator                            (subject = users.id, scope)
+  → McpController                             (46 read + 33 write)
+  → Tools (odczyt) / WriteTools (zapis)
+  → WriteEngine                               (walidacja, formuły, CAS, audyt)
+  → user_states.state (JSON)                  (jeden dokument na użytkownika)
+  → mcp_proposals / mcp_idempotency / mcp_audit
 ```
 
-Zasady:
+Pliki:
 
-- tylko dane właściciela tokenu OAuth; `user_id` nigdy nie jest argumentem narzędzia,
-- brak zewnętrznej synchronizacji Discord, giełd i makro z MCP,
-- agent nie zatwierdza własnych propozycji: `approve_proposal` wymaga jednorazowego kodu wydanego
-  wyłącznie w sesji panelu AlphaVault,
-- dane giełdowe są niezmienne,
-- puste dane = puste tablice lub `null`, bez tekstów zastępczych.
+| Warstwa | Plik |
+| --- | --- |
+| routing i rejestr | `app/Mcp/Http/McpController.php` |
+| OAuth, discovery, health | `app/Mcp/Http/OAuthController.php`, `mcp/public/index.php` |
+| odczyt | `app/Mcp/Tools/Tools.php`, `app/Mcp/Analytics/*`, `app/Mcp/Support/*` |
+| zapis | `app/Mcp/Tools/WriteTools.php`, `app/Mcp/Write/WriteEngine.php`, `app/Mcp/Tools/WriteSchemas.php` |
+| propozycje | `app/Mcp/Proposals/ProposalService.php` |
+| testy | `tests/mcp-write.test.php`, `tests/mcp-tools.e2e.mjs`, `tests/mcp.e2e.mjs` |
 
 ## 2. OAuth 2.1
 
-| Endpoint | Rola |
-| --- | --- |
-| `GET /.well-known/oauth-protected-resource` | metadata resource servera |
-| `GET /.well-known/oauth-authorization-server` | metadata AS |
-| `POST /oauth/register` | Dynamic Client Registration |
-| `GET/POST /oauth/authorize` | ekran zgody i decyzja |
-| `POST /oauth/token` | code + PKCE S256, refresh |
-| `POST /oauth/revoke` | unieważnienie tokenu |
-| `GET /oauth/login` | logowanie Discord na domenie MCP |
-| `GET /oauth/discord/callback` | powrót z Discorda |
-| `GET /oauth/connected` | aktywne połączenia i unieważnienie |
-
-- Authorization Code + PKCE `S256`, public client (`none`) lub `client_secret_post`.
-- `/oauth/authorize` przyjmuje żądanie autoryzacji także metodą `POST` (tak robi ChatGPT):
-  parametry z ciała formularza są normalizowane `303` do `GET` tego samego endpointu, więc logowanie,
-  zgoda i decyzja mają jeden przebieg. Decyzja na ekranie zgody nie wymaga kontroli `Origin`:
-  ciasteczko sesji jest `SameSite=Lax` (cross-site `POST` go nie wyśle), a stan zmienia wyłącznie
-  poprawny token CSRF z wiersza `mcp_consents` albo podpisany `consent_token` związany z sesją
-  i użytkownikiem. Żądanie autoryzacji nic nie zmienia, a jego poprawność wymusza serwer OAuth
-  (`client_id` + dokładny `redirect_uri`).
-- `/oauth/connected/revoke` jest zwykłym formularzem HTML, więc broni go token CSRF podpisany
-  kluczem sesji (`hmac(sessionId)`); endpoint akceptuje dosłowne `Origin: null`, obcy `Origin`
-  nadal dostaje `403 bad_origin`. `mcp/public/.htaccess` ustawia
-  `Referrer-Policy: strict-origin-when-cross-origin`, bo przy `no-referrer` Chromium i Firefox
-  zerują `Origin` formularzy `POST` – wcześniej blokowało to unieważnianie dostępu.
-- Dokładne `redirect_uri`; allowlista hostów: `chatgpt.com`, `chat.openai.com`, `platform.openai.com`,
-  `claude.ai`, `grok.com`, `x.ai` (localhost tylko poza produkcją).
-- Access token: JWT RS256, 1 h, `aud=https://mcp.alphavault.pl/mcp`; w bazie `mcp_access_tokens`.
-- Refresh token: 30 dni, rotacja przy każdym użyciu; ponowne użycie unieważnia rodzinę.
-- tokeny wyłącznie w `Authorization: Bearer`; brak tokenu → `401` z `WWW-Authenticate`,
-  brak scope → `403 insufficient_scope`.
+- Dynamic Client Registration, Authorization Code + PKCE S256, refresh token,
+  revoke; brak implicit i client credentials.
+- `resource` = `https://mcp.alphavault.pl/mcp`; token jest ważny tylko dla tego zasobu.
+- `GET /.well-known/oauth-protected-resource` i
+  `GET /.well-known/oauth-authorization-server` opisują zasób i serwer.
+- `GET /health` zwraca `mcp.tools`, `mcp.writesEnabled`, `ok` i status bazy.
+- Ekran zgody pokazuje zakresy; `alphavault.write` wymaga dodatkowego checkboxa.
 
 ### 2.1. Scope
 
 | Scope | Znaczenie |
 | --- | --- |
 | `alphavault.read` | 46 narzędzi odczytu, w tym lista i status propozycji |
-| `alphavault.health` | dostęp do danych zdrowotnych z podłączonego urządzenia (sen, HRV, tętno); osobna zgoda |
-| `alphavault.write` | 20 narzędzi: 18 propozycji zmian, zatwierdzenie kodem i odrzucenie; **nie** zapis bezpośredni |
+| `alphavault.health` | dane zdrowotne (sen, HRV, urządzenia); bez niego pole `health` jest `null` |
+| `alphavault.write` | 33 narzędzia zapisu; przyznawany tylko przy `MCP_WRITES_ENABLED=true` i zgodzie na ekranie OAuth |
 
-`alphavault.write` jest przyznawany tylko wtedy, gdy:
-
-1. `MCP_WRITES_ENABLED=true`,
-2. klient poprosi o ten scope,
-3. użytkownik zaznaczy na ekranie zgody „Zezwalam na przygotowywanie propozycji zmian”.
-
-Brak checkboxa = token tylko z `alphavault.read`.
-
-`alphavault.health` jest przyznawany tylko wtedy, gdy klient poprosi o ten scope, a użytkownik
-zaznaczy osobną zgodę. Bez tego zakresu narzędzia gotowości zwracają `health=null` i
-`healthAccess=scope_missing`; dodatkowo wymagane jest aktywne połączenie urządzenia
-(`healthAccess=no_device` bez niego).
+Po zmianie zakresów klient musi ponownie przejść OAuth. Stary token zachowuje
+wyłącznie zakresy z chwili wydania.
 
 ### 2.2. Feature flags
 
-| Zmienna | Domyślnie | Działanie |
+| Zmienna | Domyślnie | Znaczenie |
 | --- | --- | --- |
-| `MCP_ENABLED` | `false` (aplikacja), `true` (domena MCP) | kill switch całego MCP |
-| `MCP_WRITES_ENABLED` | `false` | `false` ukrywa 20 narzędzi zapisu (`propose_*`, `create_*_proposal`, `update_*_proposal`, `approve_proposal`, `reject_proposal`), blokuje scope write i bezpośrednie wywołania |
-| `MCP_PILOT_DISCORD_IDS` | puste | opcjonalna allowlista pilotowa |
+| `MCP_ENABLED` | `true` na domenie MCP | wyłącza całą domenę MCP |
+| `MCP_WRITES_ENABLED` | `false` | `true` dodaje 33 narzędzia zapisu i scope `alphavault.write` |
+| `MCP_PILOT_DISCORD_IDS` | puste | opcjonalna allowlista Discord ID; puste = każdy użytkownik z scope `alphavault.write`, niepuste = zapis tylko dla wskazanych kont |
+
+`MCP_WRITES_ENABLED=true` bez allowlisty jest poprawną konfiguracją
+produkcyjną. Allowlista służy wyłącznie do pilotażu.
 
 ## 3. Narzędzia odczytu (46)
 
-| Narzędzie | Źródło | Uwagi |
-| --- | --- | --- |
-| `get_profile` | `users` | plan, dostęp, rola, admin |
-| `get_dashboard` | `user_states`, `discord_*` | wynik dnia, plan, gotowość, limity, kapitał, sync |
-| `list_trades` | `user_states.trades` | filtry i paginacja; bez screenów |
-| `get_trade` | `user_states.trades` | szczegóły + recenzja |
-| `get_stats` | transakcje zamknięte | netto, WR, PF, expectancy, DD, oceny, setupy |
-| `get_events` | `discord_scheduled_events` | UTC + `Europe/Warsaw`; bez `raw_payload` |
-| `get_day_plan` | `user_states.plans` | plan lub `null` |
-| `list_setups` | `user_states.setups` | zasady + statystyki |
-| `get_macro_calendar` | `macro_events` | `forecast`, `previous`, `impact`; bez `raw_payload` |
-| `get_prop_challenges` | `user_states.prop.challenges` | metryki z `PropChallengeService` (parytet z `public/js/prop.js`) |
-| `get_checkin_history` | `user_states.checkins` | nastrój, energia, notatka, score |
-| `get_accounts` | `user_states.accounts` | typ, broker, waluta, saldo, `include`, `primary`; bez poświadczeń |
-| `get_capital_summary` | konta + `flows` | kapitał, start, przepływy, waluty; przeliczenia USDT orientacyjne |
-| `get_connection_status` | `exchange_connections` | status, permissions, `lastSyncAt`, `importedCount`, oczyszczony błąd |
-| `get_trade_context` | transakcja + recenzja + setup + plan | zgodność z planem, statystyki setupu; brak rekordu → `found=false` |
-| `list_pending_proposals` | `mcp_proposals` | oczekujące propozycje z diffem i `diffHash`; bez kodu |
-| `get_proposal_status` | `mcp_proposals` | status, diff, `diffHash`, TTL, czy aktywny jest kod; nieistniejące ID → `found=false` |
-| `get_day_plan_history` | `user_states.plans` | historia planów, status, rynki, limity, skrót zgodności; paginacja |
-| `get_day_plan_compliance` | plan dnia + transakcje | zgodność z reguł planu, naruszone reguły, wynik obu grup |
-| `get_day_plan_context` | plan + transakcje + makro + check-in + ryzyko | pełny kontekst dnia w jednym wywołaniu |
-| `get_trade_journal_context` | transakcja + recenzja + setup + plan | pełny kontekst transakcji, w tym ryzyko i screeny (metadane) |
-| `get_trade_review` | `user_states.tradeReviews` | recenzja albo `reviewAvailable=false` |
-| `get_trade_screenshots` | `user_states.trades[].screens` | metadane zawsze; obrazy tylko `includeImages=true`, maks. 2 × 200 KB |
-| `get_setup_details` | `user_states.setups` | zasady, potwierdzenie, unieważnienie, min. R:R, przykłady |
-| `get_setup_performance` | transakcje po nazwie setupu | WR, PF, expectancy, DD, A/B/C, błędy, instrumenty, sesje |
-| `get_readiness_context` | check-in + urządzenia | dane zdrowotne tylko z `alphavault.health` i zgodą urządzenia |
-| `get_checkin_trading_correlation` | check-iny + transakcje | grupy, korelacje Pearsona, ograniczenia statystyczne |
-| `get_risk_rules` | `settings` | limity, blokada, zasady osobiste, checklista |
-| `get_protection_status` | `settings` + dzisiejsze transakcje + `overrides` | tryb ochronny, powód, blokada, obejścia |
-| `get_risk_violations` | transakcje + plan + ustawienia | naruszenia z oczekiwaną i rzeczywistą wartością oraz istotnością |
-| `get_prop_challenge_context` | `user_states.prop` | kontekst challenge'u i metryki silnika |
-| `get_prop_challenge_risk` | `PropChallengeService` | budżet ryzyka, bufory, margines, naruszenia |
-| `get_performance_by_setup` | transakcje zamknięte | metryki per setup |
-| `get_performance_by_emotion` | transakcje zamknięte | metryki per emocja |
-| `get_performance_by_session` | transakcje zamknięte | sesje + przedziały godzin w `Europe/Warsaw` |
-| `get_performance_by_error` | transakcje zamknięte | koszt błędu i udział w wyniku |
-| `get_performance_by_grade` | transakcje zamknięte | A/B/C i indeks jakości ocen |
-| `get_performance_by_market` | transakcje zamknięte | klasa rynku i instrument |
-| `get_performance_by_day_plan_compliance` | plan + transakcje | zgodne vs niezgodne, tylko ustalone przypadki |
-| `get_trade_patterns` | transakcje + plan + naruszenia | wzorce z dowodami, próbą, zakresem i pewnością |
-| `get_calculator_result` | `CalculatorService` | te same formuły co kalkulator w panelu |
-| `get_account_transactions` | `user_states.flows` | wpłaty i wypłaty, PLN z `fiat * fx`, klasyfikacja podatkowa |
-| `get_tax_summary` | `flows` + `tax` | PIT-38 pomocniczo: przychód, koszt, dochód, 19%, strata do przeniesienia |
-| `get_macro_event_details` | `macro_events` | UTC i lokalny czas, prognoza, poprzednia wartość; `actual` = null bez danych |
-| `get_integration_sync_history` | `exchange_sync_runs` | pobrane, zaimportowane, pominięte, status, oczyszczony błąd |
-| `get_badges_progress` | transakcje, plany, setupy, challenge'e | poziomy brąz/srebro/złoto i data zdobycia |
-
-`get_macro_calendar` domyślnie zwraca wydarzenia od dziś w przód; pełną historię udostępnia
-`includePast=true`. Liczby są rozdzielone: `matchedCount`/`total` (spełniają filtr),
-`returnedCount` (w tej odpowiedzi), `storedCount` (wszystkie w bazie), `sync.eventsCount`
-(z ostatniej synchronizacji). `get_trade`, `get_trade_context` i `get_proposal_status`
-zwracają `found=false` dla nieistniejącego identyfikatora — bez wyjątku i bez ujawniania cudzych danych.
-
-Każde narzędzie ma `inputSchema` (`additionalProperties: false`), `outputSchema`, `annotations`
-i `_meta.securitySchemes`. Limity: 100 pozycji na stronę (200 dla naruszeń), zakres dat do 370 dni,
-obrazy 2 × 200 KB.
-
-## 4. Propozycje zmian (18) i decyzje (2)
-
-| Narzędzie | Model docelowy |
+| Grupa | Narzędzia |
 | --- | --- |
-| `propose_create_trade` | nowa ręczna transakcja: `pair`, `dir`, `entry`, `size`, `sl`, `tp`, `setup`, `emotion`, `grade`, `checklist`, `checkTotal`, `errors`, `note`, `date`, `account` |
-| `propose_close_trade` | zamknięcie ręcznej pozycji: `tradeId`, `exitPrice`; wynik i R liczone jak w UI |
-| `propose_trade_review` | `note`, `grade`, `setup`, `emotion`, `checklist`, `errors`; osobny `tradeReviews` |
-| `propose_save_day_plan` | `market`, `bias`, `why`, `levels`, `ifMain/thenMain`, `ifAlt/thenAlt`, `riskPercent`, `maxTrades`, `until`, `notDo`; bez `approvedAt` |
-| `propose_save_checkin` | `mood`, `energy`, opcjonalnie `note`; score jak w `public/js/state.js` |
-| `propose_save_setup` | `id?`, `name`, `tf`, `grade`, `rules` (2–5), `bad`, `seed`; bez usuwania Playbooka |
-| `propose_save_prop_challenge` | konfiguracja zgodna z `user_states.prop.challenges` i `public/js/prop.js` |
-| `propose_save_account` | `id?`, `name`, `exchange`, `type`, `currency`, `include`, `primary`, `lev`, `goal`, `date`; bez salda i kapitału startowego |
-| `propose_save_capital_flow` | `id?`, `date`, `account`, `type` (deposit/withdrawal), `amount`, `currency`, `fiat`, `fx`, `note`; wpis historii, bez zmiany salda |
-| `create_day_plan_proposal` | plan z `markets` (1–3), `bias`, `reason`, `levels`, `scenarioA`/`scenarioB` (condition + action), `riskPercent`, `maxTrades`, `until`, `rulesNotToDo`; bez `approvedAt` |
-| `create_trade_proposal` | pełny wpis ręczny: konto, instrument, kierunek, data i czas, wejście, wyjście, wielkość, SL, TP, opłata, setup, ocena, emocje, błędy, notatka, checklista; wynik i R liczy serwer |
-| `update_trade_proposal` | `tradeId` + `changes` (jawne pola); dane finansowe transakcji giełdowej zablokowane; wynik i R przeliczane |
-| `create_setup_proposal` | nazwa, opis, `entryRules`, interwały, potwierdzenie, unieważnienie, wymagany SL, `minRR`, `exitRules`, `examples` |
-| `update_setup_proposal` | `setupId` + `changes`; diff pokazuje zmienione reguły i metadane, bez usuwania setupu |
-| `create_checkin_proposal` | `mood`, `energy`, `note?`, `date?` (dziś lub wczoraj); score jak w panelu |
-| `create_risk_rules_proposal` | `changes` + `reason`; wyłącznie utrzymanie lub zaostrzenie zabezpieczeń |
-| `create_prop_challenge_proposal` | `templateId` + nadpisania parametrów; bez zmian transakcji i salda |
-| `update_prop_challenge_proposal` | `challengeId` + `changes`; bez zmian historycznych transakcji |
-| `approve_proposal` | `proposalId`, `expectedDiffHash`, `confirmationCode`, `idempotencyKey` |
-| `reject_proposal` | `proposalId`, `idempotencyKey` |
+| profil i pulpit | `get_profile`, `get_dashboard`, `get_badges_progress` |
+| transakcje | `list_trades`, `get_trade`, `get_trade_context`, `get_trade_journal_context`, `get_trade_review`, `get_trade_screenshots`, `get_trade_patterns` |
+| statystyki | `get_stats`, `get_performance_by_setup`, `get_performance_by_emotion`, `get_performance_by_session`, `get_performance_by_error`, `get_performance_by_grade`, `get_performance_by_market`, `get_performance_by_day_plan_compliance` |
+| plan dnia | `get_day_plan`, `get_day_plan_history`, `get_day_plan_compliance`, `get_day_plan_context` |
+| setup i playbook | `list_setups`, `get_setup_details`, `get_setup_performance` |
+| ryzyko | `get_risk_rules`, `get_protection_status`, `get_risk_violations` |
+| gotowość | `get_checkin_history`, `get_readiness_context`, `get_checkin_trading_correlation` |
+| prop challenge | `get_prop_challenges`, `get_prop_challenge_context`, `get_prop_challenge_risk` |
+| kapitał | `get_accounts`, `get_account_transactions`, `get_capital_summary` |
+| makro i sync | `get_macro_calendar`, `get_macro_event_details`, `get_events`, `get_integration_sync_history`, `get_connection_status` |
+| podatki i kalkulator | `get_tax_summary`, `get_calculator_result` |
+| propozycje | `list_pending_proposals`, `get_proposal_status` |
 
-Wszystkie propozycje wymagają `idempotencyKey` (8–120 znaków). Ponowienie z tym samym kluczem i tym
-samym wnioskiem zwraca istniejącą propozycję. Ten sam klucz z inną treścią → `409 idempotency_conflict`.
-Decyzje mają własny `idempotencyKey`; powtórzenie zwraca zapisany wynik z `duplicate=true`.
+Zasady odczytu:
 
-### 4.1. Przykłady wywołań
+- brak danych = `[]` albo `null`; bez tekstów zastępczych i domyślnych godzin,
+- czas źródłowy UTC + ISO 8601, prezentacja w `Europe/Warsaw`,
+- screeny zwracają metadane; obraz tylko po `includeImages=true` (limit 2, 200 KB),
+- dane giełdowe i `raw_payload` nie są udostępniane w surowej postaci.
 
-```json
-{ "tool": "propose_create_trade", "arguments": {
-  "pair": "BTCUSDT", "dir": "long", "entry": 62000, "size": 0.01,
-  "sl": 61000, "tp": 64000, "setup": "Pullback w trendzie", "emotion": "Spokój",
-  "grade": "A", "checklist": 7, "checkTotal": 7, "note": "Wejście z planu",
-  "account": "WEEX", "idempotencyKey": "trade-2026-11-13-btc-1"
-} }
-```
+## 4. Narzędzia zapisu (33)
 
-```json
-{ "tool": "propose_close_trade", "arguments": {
-  "tradeId": "manual_1a2b3c4d", "exitPrice": 63500, "idempotencyKey": "close-2026-11-13-btc-1"
-} }
-```
+### 4.1. Zapis bezpośredni (12)
 
-```json
-{ "tool": "propose_trade_review", "arguments": {
-  "tradeId": "manual_1a2b3c4d", "note": "Wejście zgodne z planem, wyjście przed TP.",
-  "grade": "B", "setup": "Pullback w trendzie", "emotion": "Skupienie",
-  "checklist": 6, "errors": ["Wyjście przed TP"], "idempotencyKey": "review-2026-11-13-btc-1"
-} }
-```
+Wykonuje się od razu, w transakcji, i zwraca nowy `revision`.
 
-```json
-{ "tool": "propose_save_day_plan", "arguments": {
-  "date": "2026-11-13", "market": "BTC", "bias": "long", "why": "Retest wsparcia",
-  "levels": [{ "type": "support", "price": "61000", "note": "Dzienny poziom" }],
-  "ifMain": "Retest 61k", "thenMain": "Wejście long po potwierdzeniu",
-  "ifAlt": "Zejście pod 60k", "thenAlt": "Brak transakcji",
-  "riskPercent": 1, "maxTrades": 2, "until": "16:00", "notDo": "Brak wejścia bez potwierdzenia",
-  "idempotencyKey": "plan-2026-11-13"
-} }
-```
+| Narzędzie | Operacja |
+| --- | --- |
+| `create_trade` | `trade.create` |
+| `update_trade` | `trade.update` (pola dziennika; dane giełdowe zablokowane) |
+| `close_trade` | `trade.close` (wynik i R liczone serwerowo) |
+| `create_trade_review` | `review.create` |
+| `update_trade_review` | `review.update` |
+| `create_setup` | `setup.create` |
+| `update_setup` | `setup.update` |
+| `create_day_plan` | `plan.create` (szkic, bez zatwierdzenia) |
+| `update_day_plan` | `plan.update` |
+| `create_checkin` | `checkin.create` (score z formuły panelu) |
+| `update_checkin` | `checkin.update` |
+| `add_trade_screenshot` | `screenshot.add` (PNG/JPEG/WebP data URL) |
 
-```json
-{ "tool": "propose_save_checkin", "arguments": {
-  "mood": "Spokój", "energy": 4, "note": "Dobry sen", "idempotencyKey": "checkin-2026-11-13"
-} }
-```
+### 4.2. Wymaga zgody człowieka (18)
 
-```json
-{ "tool": "propose_save_setup", "arguments": {
-  "name": "Retest wybicia", "tf": "M15", "grade": "A",
-  "rules": ["Wybicie z konsolidacji", "Retest poziomu", "SL pod retestem"],
-  "bad": false, "idempotencyKey": "setup-retest-1"
-} }
-```
+Narzędzie tworzy propozycję `write_op` i nic nie zapisuje. Zapis następuje po
+zatwierdzeniu kodem z panelu.
 
-```json
-{ "tool": "propose_save_prop_challenge", "arguments": {
-  "name": "FTMO 100k", "firm": "FTMO", "templateId": "ftmo-2step", "phase": "Phase 1",
-  "account": "FTMO", "currency": "USD", "accountSize": 100000, "startBalance": 100000,
-  "targetPct": 10, "dailyLossPct": 5, "maxLossPct": 10, "drawdownType": "static",
-  "dailyBasis": "initial", "minDays": 4, "startDate": "2026-11-13",
-  "idempotencyKey": "prop-ftmo-100k-1"
-} }
-```
+| Narzędzie | Operacja |
+| --- | --- |
+| `delete_trade` | `trade.delete` |
+| `delete_trade_review` | `review.delete` |
+| `delete_setup` | `setup.delete` |
+| `delete_day_plan` | `plan.delete` |
+| `approve_day_plan` | `plan.approve` |
+| `delete_checkin` | `checkin.delete` |
+| `create_account`, `update_account`, `delete_account` | `account.*` |
+| `create_account_transaction`, `update_account_transaction`, `delete_account_transaction` | `flow.*` |
+| `update_risk_rules` | `risk.update` (tylko zaostrzanie) |
+| `create_prop_challenge`, `update_prop_challenge`, `delete_prop_challenge` | `prop.*` |
+| `delete_trade_screenshot` | `screenshot.delete` |
+| `restore_deleted_record` | `restore.record` |
+
+### 4.3. Propozycje i decyzje (3)
+
+| Narzędzie | Działanie |
+| --- | --- |
+| `propose_change` | dowolna operacja zapisu jako propozycja `write_op` z podglądem diff |
+| `approve_proposal` | zatwierdzenie kodem jednorazowym z panelu |
+| `reject_proposal` | odrzucenie propozycji |
+
+`propose_change` przyjmuje `operation` z listy 30 operacji i `args` zgodne z
+danym narzędziem. Stosuj je, gdy chcesz pokazać diff bez tworzenia wpisu.
+
+## 5. Kontrakt zapisu
+
+Każde wywołanie zapisu przyjmuje:
+
+| Pole | Wymagane | Znaczenie |
+| --- | --- | --- |
+| `idempotencyKey` | tak | 8-128 znaków; powtórka zwraca zapisaną odpowiedź z `duplicate: true` |
+| `expectedRevision` | nie | optimistic lock na `user_states.revision`; niezgodność = `revision_conflict` (409) |
+
+Odpowiedź bezpośrednia:
 
 ```json
-{ "tool": "propose_save_account", "arguments": {
-  "name": "FTMO", "exchange": "FTMO", "type": "Futures", "currency": "USD",
-  "include": true, "primary": false, "lev": "1:100", "goal": "Przejść Phase 1",
-  "idempotencyKey": "account-ftmo-1"
-} }
+{
+  "ok": true,
+  "applied": "direct",
+  "operation": "trade.create",
+  "target": "trade:manual_1a2b3c4d",
+  "revision": 42,
+  "revisionBefore": 41,
+  "record": { "id": "manual_1a2b3c4d" },
+  "changes": ["checklist", "dir", "entry"],
+  "diff": [{ "field": "entry", "before": null, "after": "100" }],
+  "note": "Zapis trwały potwierdzony w bazie."
+}
 ```
+
+Odpowiedź propozycji:
 
 ```json
-{ "tool": "propose_save_capital_flow", "arguments": {
-  "type": "deposit", "amount": 1000, "account": "WEEX", "currency": "PLN",
-  "fiat": 4000, "fx": 1, "note": "P2P", "idempotencyKey": "flow-deposit-2026-11-13"
-} }
+{
+  "ok": true,
+  "applied": "proposal",
+  "operation": "trade.delete",
+  "status": "pending",
+  "proposalId": "6f1c2a9e-...",
+  "diffHash": "<64 hex>",
+  "baseRevision": 42,
+  "changes": ["deleted"],
+  "diff": [{ "field": "deleted", "before": null, "after": true }],
+  "preview": { "deleted": true, "tradeId": "manual_1a2b3c4d", "trashId": "tr_..." },
+  "expiresAt": "2026-11-16T21:00:00Z"
+}
 ```
 
-```json
-{ "tool": "get_calculator_result", "arguments": {
-  "balance": 10000, "riskPercent": 1, "direction": "long", "entry": 100,
-  "stopLoss": 95, "takeProfit": 120, "leverage": 10
-} }
-```
+Podgląd liczy ta sama funkcja co zapis (`WriteEngine::apply()`), więc diff nie
+może rozjechać się z wykonaniem. `revision` rośnie tylko przy realnym zapisie.
 
-Odpowiedź: `maxLoss=100`, `positionValue=2000`, `marginRequired=200`, `potentialProfit=400`,
-`riskReward=4`, `breakevenWinRatePct=20` — te same liczby co kalkulator w panelu.
+## 6. Idempotencja, wersje i audyt
 
-```json
-{ "tool": "create_trade_proposal", "arguments": {
-  "pair": "BTC/USDT", "dir": "long", "entry": 62000, "exit": 63500, "size": 0.01,
-  "sl": 61000, "tp": 64000, "fee": 1.2, "setup": "Pullback w trendzie",
-  "grade": "A", "checklist": 7, "checkTotal": 7, "note": "Wejście z planu",
-  "date": "2026-11-13", "time": "09:30", "account": "WEEX",
-  "idempotencyKey": "trade-2026-11-13-btc-2"
-} }
-```
+- `mcp_idempotency` przechowuje odpowiedź 24 h; powtórka nie zmienia stanu.
+- Ten sam `idempotencyKey` z inną treścią = `idempotency_conflict` (409).
+- `expectedRevision` porównywane jest w transakcji `SELECT ... FOR UPDATE`.
+- Każdy zapis i decyzja trafia do `mcp_audit` (aktor, operacja, target, revision, zmiany).
+- Propozycja ma `base_revision`; zatwierdzenie po zmianie stanu kończy się
+  `revision_conflict` i wymaga nowej propozycji.
 
-```json
-{ "tool": "create_risk_rules_proposal", "arguments": {
-  "changes": { "maxRisk": 0.5, "maxLosses": 1 },
-  "reason": "Zaostrzenie zasad po dwóch stratach z rzędu.",
-  "idempotencyKey": "risk-rules-2026-11-13"
-} }
-```
+## 7. Kosz i przywracanie
 
-```json
-{ "tool": "get_proposal_status", "arguments": { "proposalId": "6f1c2a9e-..." } }
-```
+- Usunięcia nie kasują danych fizycznie: rekord trafia do `state.trash[]` z
+  identyfikatorem `tr_*` zwracanym jako `trashId`.
+- `restore_deleted_record` przywraca wpis i wymaga zgody człowieka.
+- Konflikt przywracania (np. transakcja o tym ID już istnieje) = `restore_conflict`.
+- Kosz obejmuje transakcje, recenzje, setupy, plany, check-iny, konta, wpływy
+  kapitału, prop challenge i screeny.
 
-```json
-{ "tool": "approve_proposal", "arguments": {
-  "proposalId": "6f1c2a9e-...", "expectedDiffHash": "<diffHash z propose_*>",
-  "confirmationCode": "ABCD-EFGH", "idempotencyKey": "approve-6f1c2a9e-1"
-} }
-```
+## 8. Reguły ryzyka
 
-```json
-{ "tool": "reject_proposal", "arguments": {
-  "proposalId": "6f1c2a9e-...", "idempotencyKey": "reject-6f1c2a9e-1"
-} }
-```
+`update_risk_rules` może wyłącznie zaostrzać zabezpieczenia:
 
-## 5. Przepływ zatwierdzania
+- `maxRisk`, `maxLosses`, `maxDailyLoss` — tylko w dół,
+- `block` — tylko dłuższy (`1h` → `4h` → `midnight`),
+- `safetyEnabled`, `requireReason`, `pushLimit` — tylko włączanie,
+- `rules`, `checklist` — tylko dopisywanie pozycji,
+- `reason` — 10-500 znaków.
 
-### 5.1. Panel (zawsze dostępny)
+Poluzowanie limitu = `risk_not_tightened` (403). MCP nigdy nie zdejmuje blokady
+po stratach i nie zmienia ustawień poza tymi polami.
+
+## 9. Przepływ zatwierdzania
 
 ```text
-Agent AI → propose_* → walidacja → mcp_proposals (pending)
-                                      │
-                                      ▼
-                          Panel AlphaVault → podgląd diff
-                                      │
-                 Zatwierdź / Odrzuć (sesja + CSRF)
-                                      │
-                                      ▼
-                     transakcja MySQL + SELECT ... FOR UPDATE
-                     → nowa revision + audit → user_states
+Agent → delete_trade → propozycja pending + diffHash + preview
+Użytkownik → panel AlphaVault → Mentor AI → Propozycje zmian → kod jednorazowy
+Użytkownik → podaje kod w rozmowie
+Agent → approve_proposal(proposalId, expectedDiffHash, confirmationCode, idempotencyKey)
+Serwer → sprawdza diffHash, kod, TTL i base_revision → zapis + revision
 ```
 
-### 5.2. Zatwierdzanie w rozmowie kodem jednorazowym
+- Kod: `POST /api/mcp/proposals/{id}/approval-code`, TTL 10 minut, 5 prób,
+  jednorazowy, powiązany z propozycją i użytkownikiem.
+- Propozycja: TTL 30 minut; wygasła = `proposal_expired`.
+- Agent nie może zatwierdzić własnej propozycji bez kodu; `userConfirmed` nie
+  jest zgodą.
+- Odrzucenie: `reject_proposal` (status `rejected`, stan bez zmian).
+- Zatwierdzanie w panelu działa bez MCP i nie wymaga scope.
 
-MCP nie ma mechanizmu, któremu serwer może zaufać, że model rzeczywiście pokazał użytkownikowi diff.
-Dlatego zgoda jest dowodzona kodem, którego agent nie zna:
+## 10. Model danych
 
-```text
-1. Agent → propose_* → pending + diffHash
-2. Użytkownik → panel → "Kod do rozmowy"
-   POST /api/mcp/proposals/{id}/approval-code (sesja + CSRF)
-   → kod XXXXX-XXXX, TTL 10 min, jednorazowy, w bazie tylko SHA-256
-3. Użytkownik wpisuje kod w rozmowie
-4. Agent → approve_proposal(proposalId, expectedDiffHash, confirmationCode, idempotencyKey)
-5. Serwer sprawdza owner, status, TTL, base_revision, diffHash, kod i limit prób
-   → transakcja MySQL + FOR UPDATE → zapis → revision + audit
-```
-
-Zasady:
-
-- TTL propozycji: 30 minut; TTL kodu: 10 minut, nie dłużej niż TTL propozycji.
-- Kod jest jednorazowy. Nowe żądanie kodu unieważnia poprzedni.
-- Pięć błędnych prób unieważnia kod; kolejne wywołanie wymaga nowego kodu.
-- `userConfirmed=true`, zdanie „potwierdzam” ani żaden argument agenta nie są dowodem zgody.
-- Kod powstaje wyłącznie w sesji panelu; nie ma narzędzia MCP, które go tworzy.
-- Zatwierdzenie ponownie sprawdza: właściciela, status, TTL, `base_revision`, `diffHash`, target
-  i rozmiar stanu.
-- `diffHash` pochodzi z `propose_*`/`get_proposal_status` i obejmuje `kind`, target oraz diff.
-- Konflikt rewizji → `409 revision_conflict`; użytkownik prosi agenta o nową propozycję.
-- Brak częściowego zapisu: błąd = rollback.
-- Decyzja jest idempotentna po `idempotencyKey`; powtórzenie zwraca zapisany wynik.
-- Odrzucenie (`reject_proposal`) nie zmienia danych i nie wymaga kodu; wymaga jednoznacznego
-  polecenia użytkownika.
-
-## 6. Model danych
-
-Tabele addytywne (szczegóły w [BAZA-DANYCH.md](BAZA-DANYCH.md)):
-
-| Tabela | Przeznaczenie |
+| Tabela | Rola |
 | --- | --- |
-| `mcp_clients` | klienci DCR |
-| `mcp_auth_codes` | kody autoryzacyjne |
-| `mcp_access_tokens` | access tokeny (JWT, `jti`) |
-| `mcp_refresh_tokens` | refresh tokeny i rotacja |
-| `mcp_login_requests` | stan logowania Discord |
-| `mcp_consents` | ekran zgody, CSRF, TTL |
-| `mcp_proposals` | propozycje zmian, diff, idempotencja, TTL |
-| `mcp_audit` | audyt agenta i użytkownika |
-| `mcp_idempotency` | rezerwa pod przyszłe operacje bezpośrednie |
+| `user_states` | jeden dokument JSON na użytkownika; `revision` = wersja |
+| `mcp_proposals` | propozycje: `kind` (`write_op` i typy historyczne), `target_ref`, `base_revision`, `diff_hash`, `after_json`, `status`, TTL, kod jednorazowy, idempotencja decyzji |
+| `mcp_idempotency` | odpowiedzi zapisu na 24 h |
+| `mcp_audit` | ślad operacji agenta, użytkownika i systemu |
 
-`mcp_proposals`:
+`write_op` przechowuje `{op, args}`; zatwierdzenie uruchamia tę samą operację
+`WriteEngine`, więc wynik jest identyczny z podglądem. Typy historyczne
+(`manual_trade`, `trade_update`, `day_plan`, `checkin`, `setup`, `prop_challenge`,
+`account`, `capital_flow`, `risk_rules`, `trade_review`, `close_trade`) pozostają
+obsługiwane dla starszych wierszy.
 
-| Kolumna | Opis |
-| --- | --- |
-| `id` | UUID |
-| `user_id` | właściciel |
-| `client_name` | klient OAuth |
-| `kind` | `manual_trade`, `close_trade`, `trade_review`, `trade_update`, `day_plan`, `checkin`, `setup`, `prop_challenge`, `account`, `capital_flow`, `risk_rules` |
-| `target_ref` | `trade:new`, `trade:<id>`, `plan:<data>`, `checkin:<data>`, `setup:new`, `setup:<id>`, `prop:new`, `prop:<id>`, `account:new`, `flow:new`, `settings:risk` |
-| `base_revision` | rewizja `user_states` w chwili utworzenia |
-| `payload_hash` | hash wniosku do idempotencji |
-| `before_json`, `after_json`, `diff_json` | podgląd zmiany |
-| `status` | `pending`, `approved`, `rejected`, `expired` |
-| `idempotency_key` | unikalny per użytkownik |
-| `diff_hash` | SHA-256 z `kind`, target i diffu; dowód, że zatwierdzany jest ten sam diff |
-| `approval_code_hash` | SHA-256 jednorazowego kodu; nigdy nie wraca przez MCP |
-| `approval_code_expires_at`, `approval_code_attempts`, `approval_code_used_at` | TTL, limit 5 prób, jednorazowość |
-| `decision_key`, `decision_result_json` | idempotencja decyzji i zapisany wynik |
-| `expires_at`, `decided_at`, `decided_by` | TTL i audyt |
+## 11. Ochrona danych giełdowych
 
-## 7. Ochrona danych giełdowych
+- Transakcja zaimportowana z giełdy (`exchange_imports`) jest tylko do odczytu
+  w polach wykonania: `entry`, `exit`, `size`, `sl`, `tp`, `result`, `r`, `fee`.
+- Dozwolone zmiany: ocena, emocje, notatka, checklista, błędy, setup, sesja, plan.
+- `close_trade` i `delete_trade` odmawiają dla transakcji giełdowej.
+- Nowa transakcja przez MCP zawsze ma `source: "Ręcznie"`.
+- MCP nie składa zleceń, nie zmienia kluczy API, nie usuwa wydarzeń Discord ani
+  wpisów kalendarza makro, nie dotyka ustawień kont i haseł.
 
-MCP nigdy nie zmienia: `entry`, `exit`, `exitPrice`, `price`, `fill`, `fillPrice`, `result`, `pnl`,
-`size`, `qty`, `quantity`, `sl`, `tp`, `leverage`, `fee`, `fees`, `balance`, `start`, `equity`,
-`source`, `exchangeId`, `externalId`.
+## 12. Kody błędów
 
-Allowlisty są per operacja, nie globalne:
-
-- `propose_create_trade` jawnie dopuszcza `entry`, `size`, `sl`, `tp` **wyłącznie** dla nowej
-  transakcji ręcznej (`source = Ręcznie`). Każde inne pole finansowe → `403 exchange_data_readonly`.
-- `create_trade_proposal` dopuszcza pełny wpis ręczny (także `exit`, `fee`, `date`, `time`) i sam
-  liczy wynik oraz R. `update_trade_proposal` przy transakcji z giełdy dopuszcza wyłącznie pola
-  dziennika (`setup`, `grade`, `emotion`, `errors`, `note`, `checklist`, `checkTotal`, `session`).
-- `create_risk_rules_proposal` może tylko utrzymać albo zaostrzyć zabezpieczenia: nie wyłącza
-  wyłącznika, nie podnosi `maxRisk`, `maxLosses`, `maxDailyLoss` i nie skraca blokady.
-- `propose_close_trade` dopuszcza `exitPrice` **wyłącznie** dla otwartej transakcji ręcznej; odmawia
-  dla `exchange_imports` i źródła innego niż ręczne.
-- `propose_trade_review` nie przyjmuje żadnego pola finansowego; recenzja trafia do
-  `user_states.tradeReviews`.
-- `propose_save_account` nie przyjmuje `balance` ani `start`; nowe konto ma saldo 0, a edycja
-  zachowuje obecne saldo.
-- `propose_save_capital_flow` zapisuje wpis historii (`flows`), ale nie zmienia `accounts.balance`,
-  `start`, equity ani prowizji. Wpis jest deklaracją użytkownika dla historii i PIT-38.
-- Zatwierdzenie ponownie sprawdza target; usunięty setup, challenge, konto lub wpis →
-  `409 target_missing`, bez wskrzeszania rekordu.
-
-## 8. Panel AlphaVault
-
-Sekcja „Mentor AI → Integracje MCP” zawiera listę oczekujących propozycji:
-
-- typ zmiany, klient, data utworzenia, TTL, target,
-- czytelny diff `before → after`,
-- Zatwierdź / Odrzuć,
-- status po decyzji i komunikat konfliktu rewizji.
-
-Endpointy panelu:
-
-| Metoda | Ścieżka | Opis |
+| Kod | HTTP | Znaczenie |
 | --- | --- | --- |
-| `GET` | `/api/mcp` | propozycje pending + audyt + informacje o scope |
-| `POST` | `/api/mcp/proposals/decide` | `{id, action: approve\|reject}` |
-| `POST` | `/api/mcp/proposals/{id}/approval-code` | jednorazowy kod do zatwierdzenia w rozmowie |
+| `writes_disabled` | — | `MCP_WRITES_ENABLED=false`; użyj odczytu |
+| `scope_missing` | — | brak `alphavault.write`; połącz klienta ponownie |
+| `pilot_only` | — | konto poza allowlistą pilotażową |
+| `auth_required` | — | brak konta AlphaVault dla tokenu |
+| `revision_conflict` | 409 | stan zmienił się od odczytu |
+| `idempotency_conflict` | 409 | klucz użyty z inną treścią |
+| `bad_request` | 400 | niepoprawne argumenty |
+| `not_found` / `*_missing` | 404 | brak rekordu |
+| `field_not_editable` | 400 | pole spoza kontraktu MCP |
+| `exchange_data_readonly` | 403 | dane wykonania transakcji giełdowej |
+| `risk_not_tightened` | 403 | próba poluzowania zabezpieczeń |
+| `confirmation_required` | 403 | brak aktywnego kodu potwierdzenia |
+| `invalid_confirmation` | 403 | kod nieprawidłowy albo zużyty |
+| `diff_mismatch` | 409 | `expectedDiffHash` niezgodny z propozycją |
+| `proposal_expired` / `proposal_closed` | 409 | propozycja wygasła albo już rozstrzygnięta |
+| `state_too_large` | 413 | dokument przekracza limit `maxStateBytes` |
+| `trash_missing` / `restore_conflict` | 404/409 | kosz: brak wpisu albo konflikt przywracania |
 
-Wymagane: sesja panelu (`requireAuth`), `requireSameOrigin`, rate limit 60/min (kod: 10/min),
-własność propozycji. Kod jest pokazywany raz i nigdy nie jest zwracany przez MCP.
+Komunikat narzędzia ma postać `[error_code] czytelny opis po polsku`.
 
-## 9. Prompty
+## 13. Wdrożenie
 
-| Prompt | Zawartość |
-| --- | --- |
-| `prepare_trading_day` | dashboard, plan, makro, wydarzenia, gotowość, limity |
-| `review_trade` | transakcja, setup, plan, checklista, emocje, błędy |
-| `weekly_review` | wyniki, WR, PF, setupy, emocje, błędy, challenge'e |
+Workflow `Deploy AlphaVault MCP` (`.github/workflows/deploy-mcp.yml`) uruchamia
+`scripts/deploy-mcp.sh`, migrację, klucze OAuth i health check.
 
-Prompty nie wykonują zapisu. Mogą zawierać wyłącznie instrukcje i identyfikatory przekazane przez
-użytkownika.
+```powershell
+gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main `
+  -f ref=main -f dry_run=false -f writes_enabled=true
+```
 
-## 10. Testy
+- `writes_enabled` domyślnie `true`; `false` wyłącza zapis i scope.
+- `pilot_discord_ids` (CSV) opcjonalnie ogranicza zapis do wybranych kont.
+- Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie.
+- Wdrożenie nie dotyka `alphavault.pl` ani innych domen.
+
+## 14. Testy
 
 | Test | Zakres |
 | --- | --- |
-| `php tests/mcp.test.php` | propozycje, kod jednorazowy, idempotencja decyzji, konflikt rewizji, TTL, ochrona giełdy, target_missing, izolacja, audyt |
-| `php tests/mcp-tools.test.php` | silniki bez HTTP i DB: Metrics (null vs zero), plan i zgodność, ryzyko, wydajność per grupa, kalkulator, PIT, odznaki, screeny |
-| `node tests/mcp.e2e.mjs` | OAuth, PKCE, DCR, tokeny, 46 read + 20 write, approve kodem, konflikt diffu, prompts, writes on/off |
-| `node tests/mcp-tools.e2e.mjs` | 38 nowych narzędzi: poprawne wywołania, brak danych, nieistniejące ID, walidacja, izolacja, 9 cykli propozycji (diff, approve, reject, expire, idempotencja, konflikt), 6 workflow |
-| `node tests/mcp-login.e2e.mjs` | logowanie Discord na mocku: rola, brak roli, duplikat konta |
-| `node tests/mcp-ui.e2e.mjs` | panel: diff, kod do rozmowy, approve, reject, reload, trwałość |
-| `node tests/prop-parity.mjs` | parytet PHP ↔ JS silnika prop challenge |
-| `node tests/mcp-user-service.php` | idempotentne dopasowanie konta po Discord ID |
+| `php tests/mcp-write.test.php` | rejestr 30 operacji, routing zgody, schematy 33 narzędzi, formuły i walidacja `apply()` bez DB |
+| `php tests/mcp.test.php` | tokeny, PKCE, revoke, rate limit, nagłówki |
+| `node tests/mcp.e2e.mjs` | OAuth, 79 narzędzi, cykl create → update → close → delete → restore, idempotencja, revision, scope i pilot |
+| `node tests/mcp-tools.e2e.mjs` | pełne cykle wszystkich 33 narzędzi, propozycje, kod jednorazowy, odrzucenie, kosz, workflow analityczne |
+| `node tests/mcp-login.e2e.mjs` | logowanie i panel MCP |
 
-CI: `.github/workflows/ci.yml` — krok `MCP security tests`, `MCP prop parity`, `MCP E2E`,
-`MCP login E2E`, `MCP panel E2E`.
+Bramką jest workflow `CI` (`PHP + API + UI`). Deploy jest poprawny dopiero po
+zielonym runie i health checku `https://mcp.alphavault.pl/health`.
 
-## 11. Wdrożenie
+## 15. Prywatność i granice
 
-- `alphavault.pl`: `deploy-alphavault.yml` (public + app + db, bez `vendor/`).
-- `mcp.alphavault.pl`: `Deploy AlphaVault MCP` → `scripts/deploy-mcp.sh`, ref `main`.
-- Deploy MCP nie dotyka `alphavault.pl` ani WordPressa.
-- Domyślnie `MCP_WRITES_ENABLED=false`. Pilot wymaga jednocześnie `writes_enabled=true` i niepustego
-  `pilot_discord_ids`; skrypt deployu odrzuca włączenie zapisu bez allowlisty.
-- Migracja `db/migrations/20261115_mcp_approval.sql` dodaje `diff_hash`, kolumny kodu i decyzji.
-- Rollback: `MCP_ENABLED=false`, unieważnienie tokenów, restore `.app` z backupu.
-- Włączenie zapisu dla pilota: `MCP_WRITES_ENABLED=true` + ponowne połączenie klienta MCP, żeby
-  uzyskał scope `alphavault.write`; stary token zachowuje wyłącznie `alphavault.read`.
-
-## 12. Zmienne środowiskowe MCP
-
-| Zmienna | Domyślnie | Opis |
-| --- | --- | --- |
-| `MCP_ENABLED` | `false` | główny kill switch |
-| `MCP_WRITES_ENABLED` | `false` | propozycje zmian i decyzje |
-| `MCP_PILOT_DISCORD_IDS` | puste | opcjonalna allowlista Discord ID; puste = wszyscy z scope write, ustawione = zapis tylko dla pilota |
-| `MCP_ISSUER` | `APP_URL` | issuer OAuth |
-| `MCP_RESOURCE` | `APP_URL/mcp` | audience/resource |
-| `MCP_PRIVATE_KEY_PATH` | `keys/oauth-private.pem` | klucz RSA |
-| `MCP_PUBLIC_KEY_PATH` | `keys/oauth-public.pem` | klucz publiczny |
-| `MCP_ENCRYPTION_KEY_PATH` | `keys/oauth-encryption.key` | klucz szyfrowania tokenów |
-| `MCP_ALLOWED_REDIRECT_HOSTS` | lista klientów AI | allowlista redirect URI |
-| `MCP_ACCESS_TOKEN_TTL` | `3600` | sekundy |
-| `MCP_REFRESH_TOKEN_TTL` | `2592000` | sekundy |
-| `MCP_AUTH_CODE_TTL` | `300` | sekundy |
-| `MCP_BODY_LIMIT` | `65536` | bajty |
-| `MCP_LOG_FILE` | `logs/mcp.log` | log zgody i błędów |
-| `SESSION_COOKIE` | `av_session` / `mcp_session` | cookie sesji |
-
-### 12.1. Prywatność
-
-Dane tradingowe są przekazywane wyłącznie klientowi AI, którego połączenie użytkownik autoryzował.
-Polityka prywatności §13.2 opisuje zakres MCP, zgody i wycofanie tokenu:
-[/polityka-prywatnosci](https://alphavault.pl/polityka-prywatnosci). Ekran zgody pokazuje zakres
-dostępu i link do polityki; token można unieważnić na `/oauth/connected`.
-
-## 13. Powiązania
-
-- [PRD.md](../PRD.md)
-- [DOCUMENTATION.md](../DOCUMENTATION.md)
-- [API.md](API.md)
-- [ARCHITEKTURA.md](ARCHITEKTURA.md)
-- [BAZA-DANYCH.md](BAZA-DANYCH.md)
-- [DEPLOY.md](DEPLOY.md)
-- [TESTOWANIE.md](TESTOWANIE.md)
-- [AGENTS.md](../AGENTS.md)
-- [Polityka prywatności](https://alphavault.pl/polityka-prywatnosci)
+- Serwer nie przyjmuje `user_id`; tożsamość wynika wyłącznie z tokenu.
+- Dane zdrowotne wymagają `alphavault.health`; bez niego pole `health` jest `null`.
+- Opisy wydarzeń i kalendarza są danymi, nie instrukcjami dla modelu.
+- Tokeny, kody potwierdzenia i sekrety nie trafiają do logów, URL ani odpowiedzi.
+- MCP nie jest publicznym API: każde wywołanie wymaga tokenu OAuth użytkownika.

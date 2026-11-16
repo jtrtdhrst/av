@@ -7,6 +7,7 @@ use AlphaVault\Config;
 use AlphaVault\Db;
 use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Support\PropChallengeService;
+use AlphaVault\Mcp\Write\WriteEngine;
 
 /**
  * Model propozycji zmian MCP.
@@ -18,7 +19,7 @@ final class ProposalService
 {
     public const TTL_MINUTES = 30;
     public const STATUSES = ['pending', 'approved', 'rejected', 'expired'];
-    public const KINDS = ['manual_trade', 'close_trade', 'trade_review', 'trade_update', 'day_plan', 'checkin', 'setup', 'prop_challenge', 'account', 'capital_flow', 'risk_rules'];
+    public const KINDS = ['manual_trade', 'close_trade', 'trade_review', 'trade_update', 'day_plan', 'checkin', 'setup', 'prop_challenge', 'account', 'capital_flow', 'risk_rules', 'write_op'];
     public const APPROVAL_CODE_TTL_MINUTES = 10;
     public const APPROVAL_CODE_ATTEMPTS = 5;
     private const APPROVAL_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -35,7 +36,7 @@ final class ProposalService
     ) {
     }
 
-    public function create(int $userId, string $clientName, string $kind, string $targetRef, ?array $before, array $after, string $idempotencyKey, ?string $fingerprint = null): array
+    public function create(int $userId, string $clientName, string $kind, string $targetRef, ?array $before, array $after, string $idempotencyKey, ?string $fingerprint = null, ?array $diffAfter = null): array
     {
         $key = trim($idempotencyKey);
         if (mb_strlen($key) < 8 || mb_strlen($key) > 120) {
@@ -44,6 +45,7 @@ final class ProposalService
         if (!in_array($kind, self::KINDS, true)) {
             throw new ProposalException('bad_request', 'Nieznany typ propozycji.', 400);
         }
+        $diffTarget = $diffAfter ?? $after;
         $payloadHash = hash('sha256', $this->canonicalJson([
             'kind' => $kind,
             'target' => $targetRef,
@@ -62,7 +64,7 @@ final class ProposalService
         $revision = (int) ($revisionRow['revision'] ?? 0);
         $id = $this->uuid();
         $expires = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->modify('+' . self::TTL_MINUTES . ' minutes');
-        $diff = $this->diff($before, $after);
+        $diff = $this->diff($before, $diffTarget);
         $diffHash = $this->diffHash($kind, $targetRef, $diff);
 
         try {
@@ -101,7 +103,7 @@ final class ProposalService
         $this->audit($userId, $id, 'agent', 'mcp.proposal.create', [
             'kind' => $kind,
             'target' => $targetRef,
-            'fields' => array_keys($after),
+            'fields' => array_keys($diffTarget),
         ]);
 
         return [
@@ -883,6 +885,17 @@ final class ProposalService
                     $flows[] = $after;
                 }
                 $state['flows'] = array_values($flows);
+                break;
+
+            case 'write_op':
+                $op = (string) ($after['op'] ?? '');
+                $opArgs = is_array($after['args'] ?? null) ? $after['args'] : [];
+                if ($op === '' || !in_array($op, WriteEngine::OPERATIONS, true)) {
+                    throw new ProposalException('bad_proposal', 'Propozycja nie zawiera prawidłowej operacji zapisu.', 400);
+                }
+                $engine = new WriteEngine($this->db, $this->config);
+                $applied = $engine->apply($userId, $state, $op, $opArgs);
+                $state = $applied['state'];
                 break;
 
             default:
