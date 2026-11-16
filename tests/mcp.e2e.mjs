@@ -190,6 +190,7 @@ async function call(tokenValue, name, args = {}) {
 }
 
 function toolError(r) {
+  if (r.json?.error) return String(r.json.error.message || '');
   return r.json?.result?.isError ? String(r.json.result.content?.[0]?.text || '') : '';
 }
 
