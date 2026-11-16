@@ -158,6 +158,7 @@ check(
     Dates::timestamp('2026-03-29T01:30:00+01:00') === (new DateTimeImmutable('2026-03-29T00:30:00Z'))->getTimestamp()
     && Dates::localParts('2026-03-29T01:30:00+01:00')['time'] === '01:30'
     && Dates::timestamp('2026-03-29T01:30:00+0100') === Dates::timestamp('2026-03-29T01:30:00+01:00')
+    && Dates::parseUtc('2026-03-29T01:30:00+99:99') === null
     && Dates::parseUtc('tomorrow') === null
 );
 $tradeService = new TradeService();
