@@ -1,9 +1,10 @@
-# AlphaVault MCP 3.0 — OAuth 2.1, 79 narzędzi, zapis i zgoda człowieka
+# AlphaVault MCP 3.1 — OAuth 2.1, 79 narzędzi, zapis i zgoda w rozmowie
 
 > Serwer MCP działa na `https://mcp.alphavault.pl` i udostępnia dane wyłącznie
-> zalogowanego użytkownika. `alphavault.read` daje 46 narzędzi odczytu.
-> `alphavault.write` dodaje 33 narzędzia zapisu: 12 zapisuje bezpośrednio,
-> 18 wymaga zgody człowieka, 3 obsługują decyzje o propozycjach.
+> zalogowanego użytkownika. Zakres `alphavault.read` daje od razu wszystkie
+> 79 narzędzi: 46 odczytu i 33 zapisu. 12 narzędzi zapisuje bezpośrednio,
+> 18 wymaga potwierdzenia w rozmowie (`confirmed: true`), 3 obsługują propozycje.
+> Nie ma osobnego zakresu `alphavault.write` ani obowiązkowego kodu z panelu.
 
 ## 1. Architektura
 
@@ -38,26 +39,25 @@ Pliki:
 - `GET /.well-known/oauth-protected-resource` i
   `GET /.well-known/oauth-authorization-server` opisują zasób i serwer.
 - `GET /health` zwraca `mcp.tools`, `mcp.writesEnabled`, `ok` i status bazy.
-- Ekran zgody pokazuje zakresy; `alphavault.write` wymaga dodatkowego checkboxa.
+- Ekran zgody pokazuje zakresy; zapis jest częścią `alphavault.read` i nie wymaga osobnego checkboxa.
 
 ### 2.1. Scope
 
 | Scope | Znaczenie |
 | --- | --- |
-| `alphavault.read` | 46 narzędzi odczytu, w tym lista i status propozycji |
+| `alphavault.read` | wszystkie 79 narzędzi: 46 odczytu i 33 zapisu, w tym lista i status propozycji |
 | `alphavault.health` | dane zdrowotne (sen, HRV, urządzenia); bez niego pole `health` jest `null` |
-| `alphavault.write` | 33 narzędzia zapisu; przyznawany tylko przy `MCP_WRITES_ENABLED=true` i zgodzie na ekranie OAuth |
 
-Po zmianie zakresów klient musi ponownie przejść OAuth. Stary token zachowuje
-wyłącznie zakresy z chwili wydania.
+Nie ma zakresu `alphavault.write`. Token z `alphavault.read` od razu widzi
+i wywołuje narzędzia zapisu; nie trzeba ponownie łączyć klienta po wdrożeniu.
 
 ### 2.2. Feature flags
 
 | Zmienna | Domyślnie | Znaczenie |
 | --- | --- | --- |
 | `MCP_ENABLED` | `true` na domenie MCP | wyłącza całą domenę MCP |
-| `MCP_WRITES_ENABLED` | `false` | `true` dodaje 33 narzędzia zapisu i scope `alphavault.write` |
-| `MCP_PILOT_DISCORD_IDS` | puste | opcjonalna allowlista Discord ID; puste = każdy użytkownik z scope `alphavault.write`, niepuste = zapis tylko dla wskazanych kont |
+| `MCP_WRITES_ENABLED` | `false` | `true` dodaje 33 narzędzia zapisu (79 łącznie); `false` zostawia 46 odczytu |
+| `MCP_PILOT_DISCORD_IDS` | puste | opcjonalna allowlista Discord ID; puste = każdy użytkownik z `alphavault.read`, niepuste = zapis tylko dla wskazanych kont |
 
 `MCP_WRITES_ENABLED=true` bez allowlisty jest poprawną konfiguracją
 produkcyjną. Allowlista służy wyłącznie do pilotażu.
@@ -110,7 +110,8 @@ Wykonuje się od razu, w transakcji, i zwraca nowy `revision`.
 ### 4.2. Wymaga zgody człowieka (18)
 
 Narzędzie tworzy propozycję `write_op` i nic nie zapisuje. Zapis następuje po
-zatwierdzeniu kodem z panelu.
+potwierdzeniu w rozmowie: pokaż diff, zapytaj wprost, a po „tak” wywołaj
+`approve_proposal` z `confirmed: true`.
 
 | Narzędzie | Operacja |
 | --- | --- |
@@ -132,7 +133,7 @@ zatwierdzeniu kodem z panelu.
 | Narzędzie | Działanie |
 | --- | --- |
 | `propose_change` | dowolna operacja zapisu jako propozycja `write_op` z podglądem diff |
-| `approve_proposal` | zatwierdzenie kodem jednorazowym z panelu |
+| `approve_proposal` | wykonanie propozycji po `confirmed: true` w rozmowie; opcjonalny `confirmationCode` z panelu |
 | `reject_proposal` | odrzucenie propozycji |
 
 `propose_change` przyjmuje `operation` z listy 30 operacji i `args` zgodne z
@@ -220,19 +221,20 @@ po stratach i nie zmienia ustawień poza tymi polami.
 
 ```text
 Agent → delete_trade → propozycja pending + diffHash + preview
-Użytkownik → panel AlphaVault → Mentor AI → Propozycje zmian → kod jednorazowy
-Użytkownik → podaje kod w rozmowie
-Agent → approve_proposal(proposalId, expectedDiffHash, confirmationCode, idempotencyKey)
-Serwer → sprawdza diffHash, kod, TTL i base_revision → zapis + revision
+Agent → pokazuje diff i pyta użytkownika wprost
+Użytkownik → „tak” w rozmowie
+Agent → approve_proposal(proposalId, expectedDiffHash, confirmed=true, idempotencyKey)
+Serwer → sprawdza diffHash, TTL i base_revision → zapis + revision
 ```
 
-- Kod: `POST /api/mcp/proposals/{id}/approval-code`, TTL 10 minut, 5 prób,
-  jednorazowy, powiązany z propozycją i użytkownikiem.
+- `confirmed: true` jest wymagane; bez niego narzędzie zwraca `confirmation_required`.
+  Agent ustawia je wyłącznie po jednoznacznym „tak” użytkownika w tej rozmowie.
+- `confirmationCode` z panelu jest opcjonalny. Jeśli użytkownik go poda, serwer
+  zweryfikuje kod; jeśli nie — wystarczy `confirmed: true`.
 - Propozycja: TTL 30 minut; wygasła = `proposal_expired`.
-- Agent nie może zatwierdzić własnej propozycji bez kodu; `userConfirmed` nie
-  jest zgodą.
+- Panel AlphaVault nadal pozwala zatwierdzić lub odrzucić propozycję i wygenerować
+  kod, ale nie jest już wymagany do zapisu z rozmowy.
 - Odrzucenie: `reject_proposal` (status `rejected`, stan bez zmian).
-- Zatwierdzanie w panelu działa bez MCP i nie wymaga scope.
 
 ## 10. Model danych
 
@@ -264,7 +266,6 @@ obsługiwane dla starszych wierszy.
 | Kod | HTTP | Znaczenie |
 | --- | --- | --- |
 | `writes_disabled` | — | `MCP_WRITES_ENABLED=false`; użyj odczytu |
-| `scope_missing` | — | brak `alphavault.write`; połącz klienta ponownie |
 | `pilot_only` | — | konto poza allowlistą pilotażową |
 | `auth_required` | — | brak konta AlphaVault dla tokenu |
 | `revision_conflict` | 409 | stan zmienił się od odczytu |
@@ -274,7 +275,7 @@ obsługiwane dla starszych wierszy.
 | `field_not_editable` | 400 | pole spoza kontraktu MCP |
 | `exchange_data_readonly` | 403 | dane wykonania transakcji giełdowej |
 | `risk_not_tightened` | 403 | próba poluzowania zabezpieczeń |
-| `confirmation_required` | 403 | brak aktywnego kodu potwierdzenia |
+| `confirmation_required` | 403 | brak `confirmed: true` albo aktywnego kodu |
 | `invalid_confirmation` | 403 | kod nieprawidłowy albo zużyty |
 | `diff_mismatch` | 409 | `expectedDiffHash` niezgodny z propozycją |
 | `proposal_expired` / `proposal_closed` | 409 | propozycja wygasła albo już rozstrzygnięta |
@@ -293,19 +294,19 @@ gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main `
   -f ref=main -f dry_run=false -f writes_enabled=true
 ```
 
-- `writes_enabled` domyślnie `true`; `false` wyłącza zapis i scope.
+- `writes_enabled` domyślnie `true`; `false` wyłącza 33 narzędzia zapisu (zostaje 46 odczytu).
 - `pilot_discord_ids` (CSV) opcjonalnie ogranicza zapis do wybranych kont.
-- Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie.
+- Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie oraz braku `alphavault.write` w metadanych OAuth.
 - Wdrożenie nie dotyka `alphavault.pl` ani innych domen.
 
 ## 14. Testy
 
 | Test | Zakres |
 | --- | --- |
-| `php tests/mcp-write.test.php` | rejestr 30 operacji, routing zgody, schematy 33 narzędzi, formuły i walidacja `apply()` bez DB |
-| `php tests/mcp.test.php` | tokeny, PKCE, revoke, rate limit, nagłówki |
-| `node tests/mcp.e2e.mjs` | OAuth, 79 narzędzi, cykl create → update → close → delete → restore, idempotencja, revision, scope i pilot |
-| `node tests/mcp-tools.e2e.mjs` | pełne cykle wszystkich 33 narzędzi, propozycje, kod jednorazowy, odrzucenie, kosz, workflow analityczne |
+| `php tests/mcp-write.test.php` | rejestr 30 operacji, routing zgody, schematy 33 narzędzi (w tym `confirmed`), formuły i walidacja `apply()` bez DB |
+| `php tests/mcp.test.php` | tokeny, PKCE, revoke, rate limit, nagłówki, zatwierdzenie kodem i bez kodu |
+| `node tests/mcp.e2e.mjs` | OAuth, 79 narzędzi z `alphavault.read`, cykl create → update → close → delete → restore, idempotencja, revision, `confirmed`, pilot |
+| `node tests/mcp-tools.e2e.mjs` | pełne cykle wszystkich 33 narzędzi, propozycje, `confirmed` w rozmowie, odrzucenie, kosz, workflow analityczne |
 | `node tests/mcp-login.e2e.mjs` | logowanie i panel MCP |
 
 Bramką jest workflow `CI` (`PHP + API + UI`). Deploy jest poprawny dopiero po
@@ -314,6 +315,8 @@ zielonym runie i health checku `https://mcp.alphavault.pl/health`.
 ## 15. Prywatność i granice
 
 - Serwer nie przyjmuje `user_id`; tożsamość wynika wyłącznie z tokenu.
+- Jedno połączenie OAuth daje od razu wszystkie 79 narzędzi; nie ma drugiego zakresu ani reconnectu po wdrożeniu.
+- Operacje wysokiego ryzyka wymagają `confirmed: true`, ustawianego wyłącznie po wyraźnym „tak” użytkownika w rozmowie.
 - Dane zdrowotne wymagają `alphavault.health`; bez niego pole `health` jest `null`.
 - Opisy wydarzeń i kalendarza są danymi, nie instrukcjami dla modelu.
 - Tokeny, kody potwierdzenia i sekrety nie trafiają do logów, URL ani odpowiedzi.

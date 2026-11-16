@@ -254,17 +254,17 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 
 To emulacja Chromium. Instalacja na fizycznym iPhone (Safari → Do ekranu początkowego) i powiadomienia iOS wymagają testu ręcznego; patrz „Czego testy nie obejmują”.
 
-## MCP 3.0 - OAuth, 79 narzędzi, zapis, zgoda, kosz, panel
+## MCP 3.1 - OAuth, 79 narzędzi, zapis, zgoda w rozmowie, kosz, panel
 
 | Test | Zakres |
 | --- | --- |
-| `php tests/mcp.test.php` | propozycje, kod jednorazowy, idempotencja decyzji, konflikt rewizji, TTL, ochrona danych giełdowych, `target_missing`, izolacja, audyt |
+| `php tests/mcp.test.php` | propozycje, kod jednorazowy, zatwierdzenie bez kodu (`confirmed`), idempotencja decyzji, konflikt rewizji, TTL, ochrona danych giełdowych, `target_missing`, izolacja, audyt |
 | `php tests/mcp-tools.test.php` | silniki bez HTTP i DB: Metrics (null vs zero), zgodność z planem, ryzyko i tryb ochronny, raporty per grupa, kalkulator, PIT-38, odznaki, screeny |
-| `php tests/mcp-write.test.php` | rejestr 30 operacji zapisu, 18 wymagających zgody i 12 bezpośrednich, 33 schematy wejścia z `idempotencyKey`, formuły check-inu i planu, walidacja set-upów, kosza i przywracania, zaostrzanie reguł ryzyka, prop, transakcje i screeny bez bazy |
-| `node tests/mcp-tools.e2e.mjs` | 33 narzędzia zapisu: pełne cykle create → read → update → delete → restore, propozycje i kod jednorazowy, odrzucenie, idempotencja, konflikt `expectedRevision`, kosz, reguły ryzyka, konta i wpłaty, prop, `propose_change`, 6 workflow i spójność analityki z `get_stats` |
-| `node tests/mcp.e2e.mjs` | OAuth 2.1 + PKCE, DCR, consent, token/refresh/revoke, 46 narzędzi odczytu, 79 narzędzi przy zapisie, cykl `create_trade`/`update_trade`/`close_trade`/`delete_trade`/`restore_deleted_record`, `approve_proposal` kodem, `reject_proposal`, scope write, pilot, prompts, `MCP_WRITES_ENABLED=false/true` |
+| `php tests/mcp-write.test.php` | rejestr 30 operacji zapisu, 18 wymagających zgody i 12 bezpośrednich, 33 schematy wejścia z `idempotencyKey` i `confirmed`, formuły check-inu i planu, walidacja set-upów, kosza i przywracania, zaostrzanie reguł ryzyka, prop, transakcje i screeny bez bazy |
+| `node tests/mcp-tools.e2e.mjs` | 33 narzędzia zapisu: pełne cykle create → read → update → delete → restore, propozycje i zgoda `confirmed: true`, odrzucenie, idempotencja, konflikt `expectedRevision`, kosz, reguły ryzyka, konta i wpłaty, prop, `propose_change`, 6 workflow i spójność analityki z `get_stats` |
+| `node tests/mcp.e2e.mjs` | OAuth 2.1 + PKCE, DCR, consent, token/refresh/revoke, jeden zakres `alphavault.read` daje 79 narzędzi, brak `alphavault.write`, cykl `create_trade`/`update_trade`/`close_trade`/`delete_trade`/`restore_deleted_record`, `approve_proposal` z `confirmed: true` bez kodu, `reject_proposal`, pilot, prompts, `MCP_WRITES_ENABLED=false/true` |
 | `node tests/mcp-login.e2e.mjs` | logowanie Discord na mocku: rola OK, brak roli, brak członkostwa, duplikat konta, `POST /oauth/authorize` z obcym `Origin` (303, bez `bad_origin`), decyzja zgody z obcego `Origin` i sfałszowany CSRF bez wydania kodu, `GET /oauth/connected` + `POST /oauth/connected/revoke` (`Origin: null` z poprawnym CSRF = 302 i unieważniony token, obcy `Origin` i zły CSRF = 403) |
-| `node tests/mcp-ui.e2e.mjs` | panel: dwie propozycje, diff, kod do rozmowy, approve, reject, reload, trwałość i brak błędów JS |
+| `node tests/mcp-ui.e2e.mjs` | panel: dwie propozycje, diff, opcjonalny kod do rozmowy, approve, reject, reload, trwałość i brak błędów JS |
 | `node tests/prop-parity.mjs` | parytet `PropChallengeService.php` z `public/js/prop.js` na wspólnych fixtures |
 | `php tests/mcp-user-service.php` | idempotentne dopasowanie konta wyłącznie po Discord ID |
 

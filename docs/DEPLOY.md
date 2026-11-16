@@ -345,10 +345,10 @@ Plik `integrations/mt5/AlphaVault.mq5` kompiluje się w MetaEditorze. Wymaga:
 
 - MCP 2.0 używa Composer (`league/oauth2-server`, `mcp/sdk`); deploy uruchamia `composer install`, jeśli `vendor/autoload.php` nie istnieje na runnerze.
 - Migracje MCP są addytywne: `db/schema.sql` tworzy tabele `mcp_*`, `db/migrations/20261114_mcp2.sql` dodaje `payload_hash` i rozszerza `mcp_proposals.kind`, a `db/migrations/20261115_mcp_approval.sql` dodaje `diff_hash`, kolumny kodu jednorazowego i idempotencji decyzji.
-- Domyślnie działa 46 narzędzi odczytu; 33 narzędzia zapisu pojawiają się przy `MCP_WRITES_ENABLED=true` i scope `alphavault.write`. W zapisie jest 12 narzędzi bezpośrednich, 18 wymagających zgody człowieka i 3 obsługujące propozycje (`propose_change`, `approve_proposal`, `reject_proposal`).
-- Zatwierdzanie w rozmowie wymaga kodu z panelu (`POST /api/mcp/proposals/{id}/approval-code`); po włączeniu zapisu klient musi ponownie przejść OAuth, żeby uzyskać nowy scope.
-- `MCP_PILOT_DISCORD_IDS` (CSV) opcjonalnie ogranicza zapis do wybranych kont Discord; puste = wszyscy z scope `alphavault.write`. Allowlista jest egzekwowana przy każdym wywołaniu zapisu, nie tylko na ekranie zgody.
+- Domyślnie działa 46 narzędzi odczytu; przy `MCP_WRITES_ENABLED=true` rejestr ma 79 narzędzi (46 odczytu + 33 zapisu). Nie ma zakresu `alphavault.write`: token z `alphavault.read` od razu widzi cały rejestr, a wdrożenie nie wymaga ponownego OAuth.
+- W zapisie jest 12 narzędzi bezpośrednich, 18 wymagających `confirmed: true` w rozmowie i 3 obsługujące propozycje (`propose_change`, `approve_proposal`, `reject_proposal`). Kod z panelu (`POST /api/mcp/proposals/{id}/approval-code`) jest opcjonalny.
+- `MCP_PILOT_DISCORD_IDS` (CSV) opcjonalnie ogranicza zapis do wybranych kont Discord; puste = wszyscy z `alphavault.read`. Allowlista jest egzekwowana przy każdym wywołaniu zapisu.
 - Workflow sprawdza sekrety, uruchamia `php -l` i `scripts/deploy-mcp.sh`: backup, rsync, migracja, klucze OAuth, health check.
-- `writes_enabled` domyślnie `true`; `false` wyłącza zapis i scope. Pilot: `-f writes_enabled=true -f pilot_discord_ids=<ID>`. Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie. Po zmianie flagi klient musi ponownie przejść OAuth.
+- `writes_enabled` domyślnie `true`; `false` wyłącza 33 narzędzia zapisu. Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie oraz braku `alphavault.write` w metadanych OAuth.
 - Workflow nie dotyka `alphavault.pl` ani WordPressa; environment `alphavault-production`.
 - Diagnostyka: workflow `MCP logs` (`mcp-logs.yml`) wypisuje ostatnie linie `.app/logs/mcp.log` i `php-error.log`; uruchamiaj z `main`.

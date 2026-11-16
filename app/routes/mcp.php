@@ -30,9 +30,7 @@ function av_handle_mcp_api(Config $config, Db $db, Auth $auth, ?array $user, str
                 'endpoint' => 'https://mcp.alphavault.pl/mcp',
                 'enabled' => true,
                 'writesEnabled' => (bool) $config->mcp['writesEnabled'],
-                'scopes' => (bool) $config->mcp['writesEnabled']
-                    ? ['alphavault.read', 'alphavault.health', 'alphavault.write']
-                    : ['alphavault.read', 'alphavault.health'],
+                'scopes' => ['alphavault.read', 'alphavault.health'],
                 'proposals' => $pending,
                 'proposalCount' => count($pending),
                 'audit' => $service->auditLog($userId, 20),

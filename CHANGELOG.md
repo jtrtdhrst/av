@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.1.0 - 2026-11-16
+
+### Zmienione
+- MCP: jedno połączenie OAuth z `alphavault.read` daje od razu wszystkie 79 narzędzi (46 odczytu + 33 zapisu). Usunięty osobny zakres `alphavault.write`, checkbox zgody na zapis i wymóg ponownego OAuth po wdrożeniu. Stary token z `alphavault.read` widzi cały rejestr bez reconnectu.
+- MCP: operacje wysokiego ryzyka zatwierdza `approve_proposal` z `confirmed: true` wywoływane w rozmowie (ChatGPT/Claude) po wyraźnym „tak” użytkownika. Kod jednorazowy z panelu jest opcjonalny (`confirmationCode`), a panel nadal pozwala zatwierdzić lub odrzucić propozycję.
+- `McpController`: metadane `securitySchemes` i `ScopePolicy` wymagają wyłącznie `alphavault.read`; `WriteTools::guard` nie sprawdza już `alphavault.write`.
+- `scripts/deploy-mcp.sh`: health check odrzuca metadane OAuth nadal oferujące `alphavault.write`.
+
+### Testy
+- `tests/mcp.e2e.mjs`: 79 narzędzi z jednym zakresem, brak `alphavault.write`, `approve_proposal` z `confirmed: true`, pilot.
+- `tests/mcp-tools.e2e.mjs`: zgoda w rozmowie zamiast kodu, pełne cykle 33 narzędzi.
+- `tests/mcp.test.php`: zatwierdzenie bez kodu (`confirmed`) obok dotychczasowego kodu.
+- `tests/mcp-write.test.php`: schemat `approve_proposal` wymaga `confirmed`, nie `confirmationCode`.
+
 ## 4.0.0 - 2026-11-16
 
 ### Dodane

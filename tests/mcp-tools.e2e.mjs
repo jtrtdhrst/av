@@ -109,11 +109,10 @@ async function authorize(client, session, scope, grants = {}) {
   });
   const page = await req('/oauth/authorize?' + q.toString(), { headers: { Cookie: 'mcp_session=' + session } });
   assert.equal(page.res.status, 200, page.text);
-  if (grants.write) assert.match(page.text, /name="grant_write"/);
+  assert.doesNotMatch(page.text, /name="grant_write"/, 'checkbox write nie powinien istnieć');
   if (grants.health) assert.match(page.text, /name="grant_health"/);
   const { consentId, csrf } = parseConsent(page.text);
   const body = new URLSearchParams({ consent_id: consentId, csrf, decision: 'allow' });
-  if (grants.write) body.set('grant_write', '1');
   if (grants.health) body.set('grant_health', '1');
   const posted = await req('/oauth/authorize', {
     method: 'POST',
@@ -183,11 +182,11 @@ async function main() {
   const a = sessions['mcp-e2e-a'];
   const b = sessions['mcp-e2e-b'];
   const client = await register('MCP Tools E2E');
-  const authA = await authorize(client, a.session, 'alphavault.read alphavault.health alphavault.write', { write: true, health: true });
+  const authA = await authorize(client, a.session, 'alphavault.read alphavault.health', { health: true });
   const tokA = await token(client, authA);
   assert.deepEqual(
     String(JSON.parse(Buffer.from(tokA.access_token.split('.')[1], 'base64url').toString('utf8')).scope).split(' ').sort(),
-    ['alphavault.health', 'alphavault.read', 'alphavault.write']
+    ['alphavault.health', 'alphavault.read']
   );
   const at = tokA.access_token;
 
@@ -551,13 +550,11 @@ async function main() {
   // =================================================================
   // 11. Zapis: 33 narzędzia, bezpośrednie i przez propozycję
   // =================================================================
-  const issueCode = (proposalId) => JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['code', proposalId, String(a.userId)]));
   const approveWith = async (proposal, key) => {
-    const issued = issueCode(proposal.proposalId);
     const approved = await call(at, 'approve_proposal', {
       proposalId: proposal.proposalId,
       expectedDiffHash: proposal.diffHash,
-      confirmationCode: issued.code,
+      confirmed: true,
       idempotencyKey: key,
     });
     assert.equal(approved.status, 'approved', JSON.stringify(approved).slice(0, 300));
@@ -927,7 +924,7 @@ async function main() {
     operation: 'trade.nuke', args: {}, idempotencyKey: idem('propose-bad'),
   });
 
-  // --- 11.12. Zgoda człowieka: kod jednorazowy i odrzucenie ---
+  // --- 11.12. Zgoda człowieka w rozmowie i odrzucenie ---
   const gateDate = dayKey(-21);
   await call(at, 'create_checkin', {
     date: gateDate, mood: 'Spokój', energy: 3, idempotencyKey: idem('gate-checkin'),
@@ -937,25 +934,20 @@ async function main() {
   });
   await expectToolError(at, 'approve_proposal', {
     proposalId: gateProposal.proposalId, expectedDiffHash: 'a'.repeat(64),
-    confirmationCode: 'ZZZZ-ZZZZ', idempotencyKey: idem('gate-hash'),
+    confirmed: true, idempotencyKey: idem('gate-hash'),
   }, /diff/i);
   await expectToolError(at, 'approve_proposal', {
     proposalId: gateProposal.proposalId, expectedDiffHash: gateProposal.diffHash,
-    confirmationCode: 'ZZZZ-ZZZZ', idempotencyKey: idem('gate-nocode'),
-  }, /kod|potwierdze/i);
+    idempotencyKey: idem('gate-noconfirm'),
+  }, /potwierdzen|confirmed/i);
   assert.equal(
     (await call(at, 'get_checkin_history', { limit: 80 })).items.some((row) => row.date === gateDate),
     true,
-    'bez kodu nie może być zapisu'
+    'bez confirmed=true nie może być zapisu'
   );
-  const gateCode = issueCode(gateProposal.proposalId);
-  await expectToolError(at, 'approve_proposal', {
-    proposalId: gateProposal.proposalId, expectedDiffHash: gateProposal.diffHash,
-    confirmationCode: 'AAAA-AAAA', idempotencyKey: idem('gate-badcode'),
-  }, /nieprawid/i);
   const gateApproved = await call(at, 'approve_proposal', {
     proposalId: gateProposal.proposalId, expectedDiffHash: gateProposal.diffHash,
-    confirmationCode: gateCode.code, idempotencyKey: idem('gate-approve'),
+    confirmed: true, idempotencyKey: idem('gate-approve'),
   });
   assert.equal(gateApproved.status, 'approved');
   assert.equal(
@@ -1098,7 +1090,7 @@ async function startServer() {
         ALPHA_VAULT_CONFIG: CONFIG,
         ...LOCAL_ENV,
         MCP_WRITES_ENABLED: 'true',
-        MCP_PILOT_DISCORD_IDS: 'mcp-e2e-a',
+        MCP_PILOT_DISCORD_IDS: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     }

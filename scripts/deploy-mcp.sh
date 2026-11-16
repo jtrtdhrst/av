@@ -37,7 +37,7 @@ ALLOW_DEMO_LOGIN="${ALLOW_DEMO_LOGIN:-false}"
 MAX_STATE_BYTES="${MAX_STATE_BYTES:-12582912}"
 
 [ "$MCP_APP_URL" = "https://mcp.alphavault.pl" ] || fail "MCP_APP_URL must be exactly https://mcp.alphavault.pl."
-# Zapis jest dostępny dla każdego użytkownika z zakresem alphavault.write.
+# Zapis jest dostępny dla każdego użytkownika z zakresem alphavault.read.
 # MCP_PILOT_DISCORD_IDS jest opcjonalną allowlistą zawężającą zapis w trakcie pilotażu.
 case "$MCP_WRITES_ENABLED" in
   true|false) ;;
@@ -169,6 +169,10 @@ health_check() {
   local prm
   prm="$(curl -fsS --max-time 25 "$MCP_APP_URL/.well-known/oauth-protected-resource" 2>/dev/null || true)"
   printf '%s' "$prm" | grep -q '"resource":"https://mcp.alphavault.pl/mcp"' || fail "Protected Resource Metadata invalid: $prm"
+  printf '%s' "$prm" | grep -q '"alphavault.read"' || fail "Protected Resource Metadata without alphavault.read: $prm"
+  if printf '%s' "$prm" | grep -q '"alphavault.write"'; then
+    fail "Protected Resource Metadata still advertises alphavault.write: $prm"
+  fi
   local status
   status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 25 -X POST "$MCP_APP_URL/mcp" -H 'Content-Type: application/json' -d '{}' 2>/dev/null || true)"
   [ "$status" = "401" ] || fail "POST /mcp without token returned $status, expected 401."

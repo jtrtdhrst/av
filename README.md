@@ -65,8 +65,8 @@ npm run test:quotes      # notowania rynkowe: 14 scenariuszy
 npm run test:demo-state  # daty fixture demo: 15 scenariuszy
 npm run test:roles       # rola: login + cron recheck: 18 scenariuszy
 npm run test:wearables   # urządzenia zdrowotne API + UI: 42 scenariusze
-npm run test:mcp          # MCP 3.0: OAuth, 46 read + 33 write, cykl create→delete→restore (MySQL + PHP)
-npm run test:mcp:tools    # MCP: 33 narzędzia zapisu, propozycje, kod, kosz, 6 workflow
+npm run test:mcp          # MCP 3.1: OAuth, 79 narzędzi w jednym zakresie, create→delete→restore (MySQL + PHP)
+npm run test:mcp:tools    # MCP: 33 narzędzia zapisu, zgoda confirmed w rozmowie, kosz, 6 workflow
 npm run test:mcp:write    # MCP: rejestr operacji, routing zgody, schematy i formuły bez bazy
 npm run test:mcp:login    # mock Discord: rola, brak roli, duplikat konta
 npm run test:mcp:ui       # panel propozycji: diff, kod do rozmowy, approve, reject, reload
