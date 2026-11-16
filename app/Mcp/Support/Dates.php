@@ -95,7 +95,7 @@ final class Dates
         }
         $dateOnly = preg_match('/^\d{4}-\d{2}-\d{2}$/', $text) === 1;
         $isoDateTime = preg_match(
-            '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?$/i',
+            '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?$/i',
             $text
         ) === 1;
         $databaseDateTime = preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,9})?$/', $text) === 1;
