@@ -371,7 +371,8 @@ async function main() {
   assert.ok(correlation.correlations.energyVsDailyNet === null || typeof correlation.correlations.energyVsDailyNet.r === 'number');
   await expectToolError(at, 'get_checkin_trading_correlation', { minSample: 0 });
 
-  seedWearables(a.userId, TODAY, { sleepMinutes: 420, hrvMs: 80, restingHr: 55, providerScore: 80 });
+  const dashboardDate = dayKey(0);
+  seedWearables(a.userId, dashboardDate, { sleepMinutes: 420, hrvMs: 80, restingHr: 55, providerScore: 80 });
   const wearableDashboard = await call(at, 'get_dashboard');
   assert.equal(wearableDashboard.readiness.healthAccess, 'granted');
   assert.equal(wearableDashboard.readiness.hasDeviceData, true);
@@ -383,7 +384,7 @@ async function main() {
   assert.equal(wearableDashboard.readiness.recoveryScore, 80);
   assert.ok(wearableDashboard.readiness.physiologyScore !== null);
   assert.match(wearableDashboard.readiness.description, /Sen 7 h 00 min/);
-  const wearableReadiness = await call(at, 'get_readiness_context', { date: TODAY });
+  const wearableReadiness = await call(at, 'get_readiness_context', { date: dashboardDate });
   assert.equal(wearableDashboard.readiness.score, wearableReadiness.readiness.score);
 
   // =================================================================
@@ -555,7 +556,8 @@ async function main() {
   const authB = await authorize(clientB, b.session, 'alphavault.read');
   const tokB = await token(clientB, authB);
   const atB = tokB.access_token;
-  seedWearables(b.userId, TODAY, { sleepMinutes: 333, hrvMs: 99, restingHr: 44, providerScore: 88 });
+  const isolatedDashboardDate = dayKey(0);
+  seedWearables(b.userId, isolatedDashboardDate, { sleepMinutes: 333, hrvMs: 99, restingHr: 44, providerScore: 88 });
   patchState(b.userId, {
     trades: [], plans: {}, setups: [], prop: { challenges: [], selectedId: null }, tradeReviews: {},
     settings: { devices: { garmin: true } },
@@ -567,7 +569,7 @@ async function main() {
   assert.equal(noCheckinDashboard.readiness.checkScore, null);
   assert.equal(noCheckinDashboard.readiness.title, null);
   assert.equal(noCheckinDashboard.readiness.description, null);
-  patchState(b.userId, { checkins: [{ date: TODAY, mood: 'Skupienie', energy: 4, score: 67 }] });
+  patchState(b.userId, { checkins: [{ date: isolatedDashboardDate, mood: 'Skupienie', energy: 4, score: 67 }] });
   const dashboardB = await call(atB, 'get_dashboard');
   assert.equal(dashboardB.readiness.healthAccess, 'scope_missing');
   assert.equal(dashboardB.readiness.score, 67, 'bez health wynik opiera się tylko na check-inie');
@@ -582,7 +584,7 @@ async function main() {
   }
   assert.doesNotMatch(dashboardB.readiness.description, /7 h|120 ms|45/);
   assert.doesNotMatch(JSON.stringify(dashboardB.readiness), /5 h 33|99 ms|spoczynkowe 44|urządzenia 88/);
-  const readinessB = await call(atB, 'get_readiness_context', { date: TODAY });
+  const readinessB = await call(atB, 'get_readiness_context', { date: isolatedDashboardDate });
   assert.equal(readinessB.healthAccess, 'scope_missing');
   assert.equal(readinessB.health, null);
   assert.equal((await call(atB, 'get_trade_journal_context', { tradeId: 'fx_aligned_short' })).found, false);

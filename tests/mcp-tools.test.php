@@ -230,6 +230,7 @@ $accountFilterState = [
         $trade(['id' => 'excluded-open', 'account' => 'Wyłączone', 'result' => null]),
         $trade(['id' => 'excluded-zero', 'account' => 'Wyłączone', 'result' => 0.0]),
         $trade(['id' => 'included-win', 'account' => 'Wliczane', 'result' => 5.0]),
+        $trade(['id' => 'legacy-account-win', 'account' => 'Konto archiwalne', 'result' => 2.0]),
     ],
 ];
 $allAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'all', 'limit' => 10]);
@@ -238,11 +239,12 @@ $closedAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'clo
 $winAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'win', 'limit' => 10]);
 $lossAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'loss', 'limit' => 10]);
 check('Transakcje: konto wyłączone nadal widoczne w szczególe i liście', $tradeReader->find($accountFilterState, 'excluded-open') !== null
-    && $allAccountTrades['total'] === 3 && $openAccountTrades['total'] === 1
-    && $closedAccountTrades['total'] === 2 && $winAccountTrades['total'] === 1
+    && $allAccountTrades['total'] === 4 && $openAccountTrades['total'] === 1
+    && $closedAccountTrades['total'] === 3 && $winAccountTrades['total'] === 2
     && $lossAccountTrades['total'] === 0);
-check('Transakcje: konto wyłączone pozostaje poza analityką', count($tradeReader->closedTrades($accountFilterState)) === 1
-    && count($tradeReader->openTrades($accountFilterState)) === 0);
+check('Transakcje: filtr konta zgodny w statystykach i analityce', count($tradeReader->closedTrades($accountFilterState)) === 2
+    && count($tradeReader->openTrades($accountFilterState)) === 0
+    && count(Metrics::window($accountFilterState, null, null)['trades']) === 2);
 
 echo "\nWynik: {$pass} PASS, {$fail} FAIL\n";
 exit($fail === 0 ? 0 : 1);

@@ -19,14 +19,13 @@ final class TradeService
 
     public function includedTrades(array $state): array
     {
-        $names = $this->includedAccountNames($state);
         $trades = [];
         foreach ($this->allTrades($state) as $trade) {
             if (!is_array($trade)) {
                 continue;
             }
             $account = isset($trade['account']) ? (string) $trade['account'] : '';
-            if ($account === '' || in_array($account, $names, true)) {
+            if (Metrics::accountIncluded($state, $account)) {
                 $trades[] = $trade;
             }
         }
