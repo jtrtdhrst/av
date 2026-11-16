@@ -244,7 +244,7 @@ Panel MCP jest dostępny w widoku `#/mentor-ai`. Endpointy panelu:
   TTL 10 min, rate limit 10/min, w bazie tylko SHA-256. Nie jest wymagany do zapisu z rozmowy.
 
 MCP (`mcp.alphavault.pl`) ma własny OAuth 2.1 i rejestr 79 narzędzi: 46 odczytu oraz 33 zapisu
-(12 bezpośrednich, 18 wymagających potwierdzenia w rozmowie, 3 obsługujące propozycje). Jedno
+(30 bezpośrednich, 3 obsługujące opcjonalne propozycje). Jedno
 połączenie z zakresem `alphavault.read` daje od razu wszystkie 79 narzędzi; nie ma osobnego zakresu
 `alphavault.write` ani reconnectu po wdrożeniu. Narzędzia zapisu przechodzą przez `WriteEngine`,
 który waliduje argumenty, liczy formuły panelu i zapisuje stan w transakcji MySQL z

@@ -512,7 +512,7 @@ Panel MCP: status, scope i oczekujące propozycje zmian.
 - Zwraca `{endpoint, enabled, writesEnabled, scopes, proposals[], proposalCount, audit[]}`.
 - `scopes` odzwierciedla zakresy serwera MCP: `alphavault.read` (wszystkie 79 narzędzi: 46 odczytu
   i 33 zapisu) oraz `alphavault.health` (dane zdrowotne, osobna zgoda). Nie ma zakresu
-  `alphavault.write`; zapis jest częścią `alphavault.read` i wymaga `confirmed: true` przy operacjach wysokiego ryzyka.
+  `alphavault.write`; wszystkie operacje zapisu działają bezpośrednio, a `propose_change`/`approve_proposal` są opcjonalne.
 - `proposals` zawiera `proposalId`, `kind`, `target`, `baseRevision`, `diffHash`, `changes`,
   `before`, `after`, `diff`, `status`, `canApprove`, `approvalCodeActive`, `approvalCodeExpiresAt`,
   `createdAt`, `expiresAt`, `clientName`.

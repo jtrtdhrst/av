@@ -25,6 +25,11 @@ final class Db
             PDO::ATTR_STRINGIFY_FETCHES => false,
         ];
         $this->pdo = new PDO($dsn, $config['user'], $config['password'], $options);
+        // Wszystkie TIMESTAMP/DATETIME w bazie trzymamy w UTC; prezentacja liczy
+        // Europe/Warsaw w PHP. Bez tego `created_at` (TIMESTAMP) było w strefie
+        // serwera, a `expires_at` (DATETIME z PHP) w UTC, więc potrafiło wyjść
+        // `expiresAt` wcześniejsze niż `createdAt`.
+        $this->pdo->exec("SET time_zone = '+00:00'");
     }
 
     public function pdo(): PDO
