@@ -714,13 +714,13 @@ async function main() {
   const tradeId = tradeResult.record.id;
   const offsetTrade = await call(at, 'create_trade', {
     pair: 'E2E/OFFSET', dir: 'long', entry: 100, size: 1, sl: 99,
-    date: '2026-03-29T01:30:00+01:00', idempotencyKey: idem('trade-offset'),
+    date: '2026-03-29T00:30:00+01:00', idempotencyKey: idem('trade-offset'),
   });
-  assert.equal(offsetTrade.record.date, '2026-03-29T00:30:00.000Z');
+  assert.equal(offsetTrade.record.date, '2026-03-28T23:30:00.000Z');
   const offsetTradeRead = await call(at, 'get_trade', { id: offsetTrade.record.id });
   assert.equal(offsetTradeRead.found, true);
   assert.equal(offsetTradeRead.trade.localDate, '2026-03-29');
-  assert.equal(offsetTradeRead.trade.localTime, '01:30');
+  assert.equal(offsetTradeRead.trade.localTime, '00:30');
   await expectToolError(at, 'create_trade', {
     pair: 'E2E/RELATIVE-DATE', dir: 'long', entry: 100, size: 1,
     date: 'tomorrow', idempotencyKey: idem('trade-relative-date'),
@@ -732,7 +732,7 @@ async function main() {
   assert.equal(readTrade.trade.grade, 'B');
 
   const tradeUpdate = await call(at, 'update_trade', {
-    tradeId, expectedRevision: tradeResult.revision,
+    tradeId, expectedRevision: offsetTrade.revision,
     changes: { note: 'Poprawiona notatka', grade: 'A', setup: 'Pullback w trendzie', emotion: 'Skupienie' },
     idempotencyKey: idem('trade-update'),
   });
