@@ -12,6 +12,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use AlphaVault\Mcp\Analytics\BadgesService;
 use AlphaVault\Mcp\Analytics\CalculatorService;
 use AlphaVault\Mcp\Analytics\DayPlanService;
+use AlphaVault\Mcp\Analytics\JournalService;
 use AlphaVault\Mcp\Analytics\PerformanceService;
 use AlphaVault\Mcp\Analytics\RiskService;
 use AlphaVault\Mcp\Analytics\ScreensService;
@@ -20,6 +21,7 @@ use AlphaVault\Mcp\Analytics\TaxService;
 use AlphaVault\Mcp\Support\Metrics;
 use AlphaVault\Mcp\Support\PropChallengeService;
 use AlphaVault\Mcp\Support\TradeService;
+use AlphaVault\Mcp\Tools\Prompts;
 
 $pass = 0;
 $fail = 0;
@@ -245,6 +247,50 @@ check('Transakcje: konto wyłączone nadal widoczne w szczególe i liście', $tr
 check('Transakcje: filtr konta zgodny w statystykach i analityce', count($tradeReader->closedTrades($accountFilterState)) === 2
     && count($tradeReader->openTrades($accountFilterState)) === 0
     && count(Metrics::window($accountFilterState, null, null)['trades']) === 2);
+
+// --- Rewizja trade coach: ocena A nie dowodzi zgodności z planem ---
+$reviewState = $state;
+$reviewState['tradeReviews']['l1'] = [
+    'grade' => 'A', 'setup' => '', 'checklist' => 7, 'errors' => [],
+    'emotion' => 'Spokój', 'note' => 'Ocena tradera',
+];
+$journalService = new JournalService(new TradeService(), new SetupService(), new DayPlanService(), new ScreensService());
+$draftReview = $journalService->review($reviewState, 'l1');
+check('Journal: ocena A nie implikuje zatwierdzonego planu',
+    $draftReview['reviewAvailable'] === true
+    && $draftReview['decisionQuality']['grade'] === 'A'
+    && $draftReview['planCompliance']['determined'] === false
+    && in_array('plan_not_approved', $draftReview['planCompliance']['reasons'], true)
+    && !str_contains($draftReview['decisionQuality']['assessment'], 'zgodna z planem')
+);
+check('Journal: pusty setup recenzji nie ukrywa setupu transakcji',
+    $draftReview['setupCompliance']['effectiveSetup'] === 'Range'
+    && $draftReview['setupCompliance']['setupSource'] === 'trade'
+    && $draftReview['setupCompliance']['setupExists'] === true
+    && $draftReview['setupCompliance']['rules'] === ['B1', 'B2']
+    && $draftReview['setupCompliance']['matchesTrade'] === false
+);
+$noReview = $journalService->review($state, 'l1');
+check('Journal: wskazówki używają aktualnych narzędzi zapisu',
+    str_contains($noReview['hint'], 'create_trade_review')
+    && !str_contains($noReview['hint'], 'propose_trade_review')
+);
+
+$prompts = new Prompts();
+$dayPrompt = implode("\n", array_column($prompts->prepareTradingDay(), 'content'));
+$tradePrompt = implode("\n", array_column($prompts->reviewTrade('l1'), 'content'));
+check('MCP prompts: aktualne narzędzia zapisowe',
+    str_contains($dayPrompt, 'create_day_plan')
+    && !str_contains($dayPrompt, 'create_day_plan_proposal')
+    && str_contains($tradePrompt, 'create_trade_review')
+    && str_contains($tradePrompt, 'update_trade_review')
+    && !str_contains($tradePrompt, 'propose_trade_review')
+    && !str_contains($tradePrompt, 'update_trade_proposal')
+);
+check('MCP prompts: agent nie przypisuje ocenie A zgodności z planem',
+    str_contains($tradePrompt, 'determined=false')
+    && str_contains($tradePrompt, 'Ocena A nie dowodzi zgodności')
+);
 
 echo "\nWynik: {$pass} PASS, {$fail} FAIL\n";
 exit($fail === 0 ? 0 : 1);

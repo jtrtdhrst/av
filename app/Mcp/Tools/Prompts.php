@@ -24,7 +24,7 @@ final class Prompts
                     . "2. Podaj: wynik dnia, gotowość, aktywny plan, najbliższe wydarzenia makro o impact 3 (get_macro_calendar lub get_macro_event_details), limity ryzyka i stan challenge'y (get_prop_challenge_risk).\n"
                     . "3. Wskaż ryzyka: przekroczone limity, brak planu, brak check-inu, wydarzenia w trakcie sesji, aktywne naruszenia z get_risk_violations.\n"
                     . "4. Zakończ trzema konkretnymi zdaniami: co robić, czego nie robić, kiedy przerwać.\n"
-                    . "Nie składaj żadnej propozycji zapisu, dopóki użytkownik o to nie poprosi. Plan dnia to wyłącznie create_day_plan_proposal — nigdy nie zapisuj go bez zgody.",
+                    . "Nie składaj żadnej propozycji zapisu, dopóki użytkownik o to nie poprosi. Plan zapisuj wyłącznie po wyraźnym poleceniu: create_day_plan (szkic) z unikalnym idempotencyKey. Jeżeli użytkownik chce najpierw zobaczyć diff bez zapisu, użyj propose_change(operation=plan.create, args=...). Nie wywołuj approve_day_plan bez osobnej zgody.",
             ],
         ];
     }
@@ -40,9 +40,9 @@ final class Prompts
                 'role' => 'user',
                 'content' => "Przeanalizuj transakcję o id " . $tradeId . ".\n\n"
                     . "1. Wywołaj get_trade_journal_context z tradeId=" . $tradeId . ", potem get_trade_review i get_setup_performance dla setupu tej transakcji.\n"
-                    . "2. Oceń: zgodność z planem (get_day_plan_compliance dla daty), setup i jego zasady, checklistę, emocję, błędy, R i MFE/MAE.\n"
+                    . "2. Oceń osobno zgodność z planem (get_day_plan_compliance dla daty; determined=false oznacza brak rozstrzygnięcia), jakość decyzji z recenzji, setup i jego zasady, checklistę, emocję, błędy, R i MFE/MAE. Ocena A nie dowodzi zgodności z planem.\n"
                     . "3. Wskaż jedną rzecz do powtórzenia i jedną do poprawy.\n"
-                    . "4. Jeśli użytkownik poprosi o zapis recenzji, użyj propose_trade_review lub update_trade_proposal (pola dziennika). Nigdy nie proponuj zmiany entry, SL, TP, size, wyniku ani danych giełdowych transakcji importowanej.",
+                    . "4. Jeśli użytkownik poprosi o zapis recenzji, użyj create_trade_review albo update_trade_review z unikalnym idempotencyKey. Pola dziennika edytuj przez update_trade. Dla samego podglądu diff bez zapisu użyj propose_change(operation=review.create lub review.update, args=...). Nigdy nie zmieniaj danych wykonania transakcji zaimportowanej z giełdy.",
             ],
         ];
     }
