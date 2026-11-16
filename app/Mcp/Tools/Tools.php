@@ -1185,8 +1185,8 @@ final class Tools
             throw new ToolCallException('Propozycje zmian są wyłączone (MCP_WRITES_ENABLED=false).');
         }
         $token = $context->getAccessToken();
-        if ($token === null || !$token->hasScope('alphavault.write')) {
-            throw new ToolCallException('Brak zakresu alphavault.write.');
+        if ($token === null) {
+            throw new ToolCallException('Brak tokenu OAuth.');
         }
         $user = $this->user($context);
         if ($this->pilotIds !== [] && !in_array((string) ($user['discordId'] ?? ''), $this->pilotIds, true)) {

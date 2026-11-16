@@ -118,7 +118,7 @@ function parseConsent(html) {
   return { consentId: consent[1], csrf: csrf[1] };
 }
 
-async function authorize(client, session, scope = 'alphavault.read', grantWrite = false) {
+async function authorize(client, session, scope = 'alphavault.read') {
   const { verifier, challenge } = pkce();
   const state = 'state-' + crypto.randomBytes(8).toString('hex');
   const q = new URLSearchParams({
@@ -127,12 +127,9 @@ async function authorize(client, session, scope = 'alphavault.read', grantWrite 
   });
   const g = await req('/oauth/authorize?' + q.toString(), { headers: { Cookie: 'mcp_session=' + session } });
   assert.equal(g.res.status, 200, g.text);
-  if (grantWrite) {
-    assert.match(g.text, /name="grant_write"/, 'brak checkboxa write');
-  }
+  assert.doesNotMatch(g.text, /name="grant_write"/, 'checkbox write nie powinien istnieć');
   const { consentId, csrf } = parseConsent(g.text);
   const body = new URLSearchParams({ consent_id: consentId, csrf, decision: 'allow' });
-  if (grantWrite) body.set('grant_write', '1');
   const p = await req('/oauth/authorize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: 'mcp_session=' + session },
@@ -378,19 +375,18 @@ async function mainWrites() {
   const b = sessions['mcp-e2e-b'];
   const client = await register('MCP E2E Writer');
   const todayKey = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
-  const issueCode = (proposalId) => JSON.parse(runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['code', proposalId, String(a.userId)]));
 
   const health = await req('/health');
   assert.equal(health.json.mcp.tools, 79, 'rejestr MCP: 46 odczytu + 33 zapisu');
   assert.equal(health.json.mcp.writesEnabled, true);
   const prm = await req('/.well-known/oauth-protected-resource');
   assert.ok(prm.json.scopes_supported.includes('alphavault.read'));
-  assert.ok(prm.json.scopes_supported.includes('alphavault.write'));
+  assert.equal(prm.json.scopes_supported.includes('alphavault.write'), false, 'write nie jest osobnym zakresem');
 
-  const auth = await authorize(client, a.session, 'alphavault.read alphavault.write', true);
+  const auth = await authorize(client, a.session, 'alphavault.read');
   const tok = await token(client, auth);
   const claims = jwtPayload(tok.access_token);
-  assert.deepEqual(claims.scope.split(' ').sort(), ['alphavault.read', 'alphavault.write']);
+  assert.deepEqual(claims.scope.split(' ').sort(), ['alphavault.read']);
 
   const list = await rpc(tok.access_token, 'tools/list', {});
   assert.equal(list.res.status, 200, list.text);
@@ -401,7 +397,8 @@ async function mainWrites() {
     const tool = tools.find((t) => t.name === name);
     assert.ok(tool, name);
     assert.equal(tool.annotations?.readOnlyHint, false, name + ' readOnlyHint');
-    assert.ok(tool._meta.securitySchemes[0].scopes.includes('alphavault.write'), name + ' scope');
+    assert.ok(tool._meta.securitySchemes[0].scopes.includes('alphavault.read'), name + ' scope');
+    assert.equal(tool._meta.securitySchemes[0].scopes.includes('alphavault.write'), false, name + ' bez write');
     assert.equal(tool.inputSchema.additionalProperties, false, name + ' additionalProperties');
     assert.ok(tool.inputSchema.required.includes('idempotencyKey'), name + ' idempotencyKey');
     assert.ok(tool.outputSchema, name + ' outputSchema');
@@ -456,22 +453,21 @@ async function mainWrites() {
   const stillThere = await call(tok.access_token, 'get_trade', { id: tradeId });
   assert.equal(stillThere.json.result.structuredContent.found, true, 'propozycja nie może usunąć przed zgodą');
 
-  const noCode = await call(tok.access_token, 'approve_proposal', {
+  const noConfirm = await call(tok.access_token, 'approve_proposal', {
     proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
-    confirmationCode: 'ZZZZ-ZZZZ', idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
+    idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
-  assert.match(toolError(noCode), /kod|potwierdzen/i, noCode.text);
+  assert.match(toolError(noConfirm), /potwierdzen|confirmed/i, noConfirm.text);
 
-  const issuedCode = issueCode(deleteBody.proposalId);
   const approveKey = 'idem-e2e-approve-' + crypto.randomBytes(8).toString('hex');
   const approved = await call(tok.access_token, 'approve_proposal', {
     proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
-    confirmationCode: issuedCode.code, idempotencyKey: approveKey,
+    confirmed: true, idempotencyKey: approveKey,
   });
   assert.equal(approved.json.result.structuredContent.status, 'approved', approved.text);
   const approvedReplay = await call(tok.access_token, 'approve_proposal', {
     proposalId: deleteBody.proposalId, expectedDiffHash: deleteBody.diffHash,
-    confirmationCode: issuedCode.code, idempotencyKey: approveKey,
+    confirmed: true, idempotencyKey: approveKey,
   });
   assert.equal(approvedReplay.json.result.structuredContent.duplicate, true, approvedReplay.text);
   const gone = await call(tok.access_token, 'get_trade', { id: tradeId });
@@ -486,10 +482,9 @@ async function mainWrites() {
   });
   const restoreBody = restoreProposal.json.result.structuredContent;
   assert.equal(restoreBody.applied, 'proposal');
-  const restoreCode = issueCode(restoreBody.proposalId);
   const restored = await call(tok.access_token, 'approve_proposal', {
     proposalId: restoreBody.proposalId, expectedDiffHash: restoreBody.diffHash,
-    confirmationCode: restoreCode.code, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
+    confirmed: true, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
   assert.equal(restored.json.result.structuredContent.status, 'approved', restored.text);
   const back = await call(tok.access_token, 'get_trade', { id: tradeId });
@@ -507,25 +502,13 @@ async function mainWrites() {
   );
 
   const clientB = await register('MCP E2E Pilot B');
-  const authB = await authorize(clientB, b.session, 'alphavault.read alphavault.write', true);
+  const authB = await authorize(clientB, b.session, 'alphavault.read');
   const tokB = await token(clientB, authB);
   const blocked = await call(tokB.access_token, 'create_trade', {
     pair: 'PILOT/USDT', dir: 'long', entry: 1, size: 1,
     idempotencyKey: 'idem-e2e-pilot-' + crypto.randomBytes(8).toString('hex'),
   });
   assert.match(toolError(blocked), /pilota/i, blocked.text);
-
-  const clientReadOnly = await register('MCP E2E Read Only');
-  const authReadOnly = await authorize(clientReadOnly, a.session, 'alphavault.read');
-  const tokReadOnly = await token(clientReadOnly, authReadOnly);
-  const revisionBeforeScope = stateOf(a.userId).revision;
-  const scopeBlocked = await call(tokReadOnly.access_token, 'create_checkin', {
-    mood: 'Spokój', energy: 3, idempotencyKey: 'idem-e2e-scope-' + crypto.randomBytes(8).toString('hex'),
-  });
-  const blockedByStatus = scopeBlocked.res.status !== 200;
-  const blockedByError = Boolean(scopeBlocked.json?.result?.isError) || Boolean(scopeBlocked.json?.error);
-  assert.ok(blockedByStatus || blockedByError, 'scope: status=' + scopeBlocked.res.status + ' body=' + scopeBlocked.text);
-  assert.equal(stateOf(a.userId).revision, revisionBeforeScope, 'zapis bez scope nie może zmienić stanu');
 
   console.log('MCP E2E writes PASS');
 }

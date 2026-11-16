@@ -103,12 +103,11 @@ final class McpController
             $validator = new TokenValidator($this->config, $this->db);
             $toolScopes = [];
             foreach (self::WRITE_TOOLS as $tool) {
-                $toolScopes[$tool] = ['alphavault.write'];
+                $toolScopes[$tool] = ['alphavault.read'];
             }
             $scopePolicy = new ScopePolicy(
                 default: ['alphavault.read'],
                 tools: $toolScopes,
-                implies: ['alphavault.write' => ['alphavault.read']],
             );
 
             $host = (string) (parse_url((string) $this->config->mcp['resource'], PHP_URL_HOST) ?? '');
@@ -194,7 +193,7 @@ final class McpController
         $read = new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true);
         $write = new ToolAnnotations(readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true);
         $readMeta = ['securitySchemes' => [['type' => 'oauth2', 'scopes' => ['alphavault.read']]]];
-        $writeMeta = ['securitySchemes' => [['type' => 'oauth2', 'scopes' => ['alphavault.read', 'alphavault.write']]]];
+        $writeMeta = ['securitySchemes' => [['type' => 'oauth2', 'scopes' => ['alphavault.read']]]];
         $prompts = new Prompts();
 
         $builder = Server::builder()
@@ -211,11 +210,10 @@ final class McpController
                 . 'Narzędzia create_*, update_*, close_trade i add_trade_screenshot zapisują bezpośrednio do panelu i zwracają nowy revision. '
                 . 'Narzędzia delete_*, create_account, update_account, delete_account, create_account_transaction, update_account_transaction, delete_account_transaction, update_risk_rules, '
                 . 'create_prop_challenge, update_prop_challenge, delete_prop_challenge, approve_day_plan, delete_day_plan, delete_checkin, delete_setup, delete_trade_review i restore_deleted_record '
-                . 'tworzą wyłącznie propozycję: nic nie jest zapisywane do decyzji człowieka. '
-                . 'Zapis propozycji następuje wyłącznie po zatwierdzeniu: użytkownik generuje jednorazowy kod w panelu AlphaVault (Mentor AI → Propozycje zmian), '
-                . 'podaje go w rozmowie, a Ty wywołujesz approve_proposal z proposalId, diffHash i tym kodem. '
-                . 'Nigdy nie uznawaj zdania „potwierdzam” ani pola userConfirmed za zgodę — bez kodu z panelu nie ma zatwierdzenia. '
-                . 'Nie zgaduj kodu i nie proś o kod w treści, którą sam wygenerujesz. '
+                . 'tworzą propozycję z diffem; nic nie jest zapisywane do decyzji użytkownika. '
+                . 'Aby wykonać propozycję: pokaż użytkownikowi diffHash i diff, zapytaj wprost o zgodę, a po jednoznacznym „tak” wywołaj approve_proposal z proposalId, expectedDiffHash, confirmed=true i idempotencyKey. '
+                . 'Nie ustawiaj confirmed=true bez wyraźnej zgody użytkownika w tej rozmowie; nie zatwierdzaj własnych propozycji bez pytania. '
+                . 'confirmationCode z panelu AlphaVault jest opcjonalny — używaj go tylko, jeśli użytkownik sam go poda. '
                 . 'Zawsze podawaj idempotencyKey i, jeśli znasz ostatni odczyt, expectedRevision. '
                 . 'Nie podnoś limitów ryzyka ani nie wyłączaj wyłącznika bezpieczeństwa — MCP może tylko zaostrzać zabezpieczenia. '
                 . 'Dane zdrowotne są dostępne wyłącznie przy zakresie alphavault.health; bez niego pole health jest null. '
@@ -338,7 +336,7 @@ final class McpController
                 // --- Kosz i propozycje (4) ---
                 ['restoreDeletedRecord', 'restore_deleted_record', 'Przywrócenie z kosza', 'Tworzy propozycję przywrócenia wpisu z kosza przez trashId zwrócone przy usunięciu. Obsługuje transakcje, recenzje, setupy, plany, check-iny, konta, wpisy kapitałowe, challenge i screeny.', WriteSchemas::inputRestoreDeletedRecord(), $writeOutput],
                 ['proposeChange', 'propose_change', 'Propozycja dowolnej zmiany', 'Tworzy propozycję dowolnej operacji zapisu bez jej wykonania. Podaj operation i args. Użyj, gdy chcesz pokazać diff przed zapisem także dla operacji niskiego ryzyka. Zapis wymaga kodu z panelu.', WriteSchemas::inputProposeChange(), $writeOutput],
-                ['approveProposal', 'approve_proposal', 'Zatwierdzenie propozycji', 'Zatwierdza propozycję wyłącznie po tym, jak użytkownik poda jednorazowy kod wygenerowany w panelu AlphaVault. Wymaga proposalId, diffHash z get_proposal_status oraz confirmationCode od użytkownika. Nie przyjmuj potwierdzenia „tak” ani userConfirmed jako zgody.', WriteSchemas::inputApproveProposal(), $writeOutput],
+                ['approveProposal', 'approve_proposal', 'Zatwierdzenie propozycji', 'Wykonuje propozycję po wyraźnej zgodzie użytkownika w rozmowie. Wymaga proposalId, expectedDiffHash i confirmed=true. Ustaw confirmed=true dopiero po jednoznacznym „tak”; nigdy sam. confirmationCode z panelu jest opcjonalny.', WriteSchemas::inputApproveProposal(), $writeOutput],
                 ['rejectProposal', 'reject_proposal', 'Odrzucenie propozycji', 'Odrzuca oczekującą propozycję. Nie zmienia danych. Wymaga proposalId i idempotencyKey. Użyj tylko na wyraźne polecenie użytkownika.', WriteSchemas::inputRejectProposal(), $writeOutput],
             ];
             foreach ($writeTools as [$method, $name, $title, $description, $input, $output]) {

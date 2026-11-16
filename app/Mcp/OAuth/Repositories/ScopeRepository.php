@@ -39,20 +39,12 @@ final class ScopeRepository implements ScopeRepositoryInterface
         if ($result === []) {
             $result['alphavault.read'] = new ScopeEntity('alphavault.read');
         }
-        if (isset($result['alphavault.write'])) {
-            $result['alphavault.read'] = new ScopeEntity('alphavault.read');
-        }
 
         return array_values($result);
     }
 
     public function allowedScopes(): array
     {
-        $scopes = ['alphavault.read', 'alphavault.health'];
-        if ((bool) $this->config->mcp['writesEnabled']) {
-            $scopes[] = 'alphavault.write';
-        }
-
-        return $scopes;
+        return ['alphavault.read', 'alphavault.health'];
     }
 }

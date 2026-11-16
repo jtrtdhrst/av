@@ -57,9 +57,10 @@ foreach ($schemaMethods as $method) {
 }
 check('Schematy: idempotencyKey i zamknięty kontrakt', $schemaProblems === [], implode(', ', $schemaProblems));
 check(
-    'Schematy: approve_proposal wymaga kodu i hash',
-    in_array('confirmationCode', WriteSchemas::inputApproveProposal()['required'], true)
+    'Schematy: approve_proposal wymaga confirmed i hash',
+    in_array('confirmed', WriteSchemas::inputApproveProposal()['required'], true)
     && in_array('expectedDiffHash', WriteSchemas::inputApproveProposal()['required'], true)
+    && !in_array('confirmationCode', WriteSchemas::inputApproveProposal()['required'], true)
 );
 
 // --- Rejestr operacji i routing zgody --------------------------------

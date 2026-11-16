@@ -621,10 +621,14 @@ final class WriteTools
         RequestContext $context,
         string $proposalId,
         string $expectedDiffHash,
-        string $confirmationCode,
-        string $idempotencyKey
+        string $idempotencyKey,
+        bool $confirmed = false,
+        ?string $confirmationCode = null
     ): array {
         [$userId, $client] = $this->guard($context);
+        if (!$confirmed) {
+            throw new ToolCallException('[confirmation_required] Zatwierdzenie wymaga confirmed=true po wyraźnym „tak” użytkownika w rozmowie.');
+        }
         try {
             return $this->proposals->approveWithCode(
                 $userId,
@@ -636,6 +640,9 @@ final class WriteTools
             );
         } catch (ProposalException $err) {
             throw new ToolCallException('[' . $err->errorCode . '] ' . $err->getMessage());
+        } catch (\Throwable $err) {
+            error_log('[mcp-write] approve proposal ' . $err::class . ': ' . $err->getMessage());
+            throw new ToolCallException('[internal] Propozycja nie została zatwierdzona z powodu błędu serwera.');
         }
     }
 
@@ -734,8 +741,8 @@ final class WriteTools
             throw new ToolCallException('[writes_disabled] Zapis MCP jest wyłączony (MCP_WRITES_ENABLED=false).');
         }
         $token = $context->getAccessToken();
-        if ($token === null || !$token->hasScope('alphavault.write')) {
-            throw new ToolCallException('[scope_missing] Brak zakresu alphavault.write. Połącz klienta ponownie i zaakceptuj zapis.');
+        if ($token === null) {
+            throw new ToolCallException('[auth_required] Brak tokenu OAuth. Połącz klienta ponownie.');
         }
         $subject = $token->getSubject();
         if ($subject === null || !ctype_digit($subject)) {

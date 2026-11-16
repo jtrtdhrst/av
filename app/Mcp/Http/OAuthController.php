@@ -271,14 +271,9 @@ final class OAuthController
                 'reason' => $row === null ? 'row_missing' : 'db_csrf_mismatch',
             ]);
         }
-        // alphavault.write tylko za jawną zgodą użytkownika i przy włączonych zapisach.
+        // Dane zdrowotne tylko za osobną zgodą; bez checkboxa zakres jest odrzucany.
         $requestedScopes = preg_split('/\s+/', trim((string) ($data['scope'] ?? ''))) ?: [];
         $requestedScopes = array_values(array_filter($requestedScopes, static fn (string $scope): bool => $scope !== ''));
-        if (in_array('alphavault.write', $requestedScopes, true)
-            && (!(bool) $this->config->mcp['writesEnabled'] || (string) ($_POST['grant_write'] ?? '') !== '1')) {
-            $requestedScopes = array_values(array_diff($requestedScopes, ['alphavault.write']));
-        }
-        // Dane zdrowotne tylko za osobną zgodą; bez checkboxa zakres jest odrzucany.
         if (in_array('alphavault.health', $requestedScopes, true) && (string) ($_POST['grant_health'] ?? '') !== '1') {
             $requestedScopes = array_values(array_diff($requestedScopes, ['alphavault.health']));
         }
@@ -931,17 +926,13 @@ final class OAuthController
         $scopeHtml = '';
         foreach ($scopes as $scope) {
             $label = match ($scope) {
-                'alphavault.read' => 'Odczyt danych: profil, transakcje, statystyki, plan dnia, wydarzenia, playbook.',
+                'alphavault.read' => 'Odczyt danych i zapis w Twoim panelu: profil, transakcje, statystyki, plan dnia, wydarzenia, playbook, konta, ryzyko i prop challenge.',
                 'alphavault.health' => 'Dane zdrowotne z podłączonego urządzenia: sen, HRV, tętno spoczynkowe i gotowość. Osobny zakres, wymaga Twojej zgody.',
-                'alphavault.write' => 'Propozycje zmian: nowe transakcje, zamknięcia, recenzje, plan dnia, check-in, setup i prop challenge. Zapis zawsze zatwierdzasz w panelu AlphaVault.',
                 default => $scope,
             };
             $scopeHtml .= '<li><code>' . htmlspecialchars($scope, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code> — ' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</li>';
         }
-        $writeNotice = in_array('alphavault.write', $scopes, true)
-            ? '<p style="border-left:3px solid #d9b25f;padding-left:12px"><strong>Uwaga:</strong> ten klient może przygotowywać propozycje zmian. Każdą zmianę zatwierdzasz lub odrzucasz w panelu AlphaVault. Agent nie zapisuje danych bez Twojej decyzji.</p>'
-                . '<label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px"><input type="checkbox" name="grant_write" value="1" style="margin-top:4px"><span>Zezwalam na przygotowywanie propozycji zmian (alphavault.write).</span></label>'
-            : '';
+        $writeNotice = '<p style="border-left:3px solid #d9b25f;padding-left:12px"><strong>Zapis:</strong> klient AI może zmieniać dane w Twoim panelu. Operacje wysokiego ryzyka (usunięcia, finanse, reguły ryzyka, prop challenge, zatwierdzenie planu, przywracanie z kosza) wymagają Twojego wyraźnego „tak” w rozmowie — agent nie zatwierdza ich sam. Możesz w każdej chwili unieważnić dostęp na stronie <a style="color:#f1d48e" href="/oauth/connected">Połączone aplikacje</a>.</p>';
         $healthNotice = in_array('alphavault.health', $scopes, true)
             ? '<label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px"><input type="checkbox" name="grant_health" value="1" style="margin-top:4px"><span>Zezwalam na odczyt danych zdrowotnych z urządzenia (alphavault.health).</span></label>'
             : '';

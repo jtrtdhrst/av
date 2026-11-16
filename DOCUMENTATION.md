@@ -232,25 +232,28 @@ Pełny kontrakt: [docs/API.md](docs/API.md). Specyfikacja: [docs/openapi.yaml](d
 
 Oura używa OAuth2 z jednorazowym `state` i PKCE S256 (`code_verifier` w `wearable_oauth_states`). Tokeny są szyfrowane AES-256-GCM wyłącznie kluczem `WEARABLES_ENCRYPTION_KEY` (brak fallbacku na `SESSION_SECRET`), a `WEARABLES_ENCRYPTION_KEY_PREVIOUS` obsługuje rotację. Odświeżanie respektuje `refresh_token_expires_at` i jest serializowane blokadą `GET_LOCK` na użytkowniku i dostawcy; nowy refresh token jest zapisywany atomowo. Apple Watch używa kodu parowania i tokenu urządzenia. Połączenie zapisuje metryki w `wearable_daily_metrics`, a `GET /api/wearables` liczy gotowość z dostępnych składników (sen 40%, HRV 25%, tętno 10%, regeneracja 15%, Body Battery 10%) i łączy ją z check-inem w proporcji 70/30. Odłączenie najpierw próbuje wycofać dostęp u dostawcy, a potem usuwa tokeny i metryki w transakcji. Garmin i Whoop są wyłączone na razie: `Wearables::PROVIDERS` zawiera tylko `apple` i `oura`, więc ich endpointy zwracają 404, a kafelki nie renderują się.
 
-### 6.2. MCP 3.0 - panel, zapis, propozycje i kod
+### 6.2. MCP 3.1 - panel, zapis, propozycje i zgoda w rozmowie
 
 Panel MCP jest dostępny w widoku `#/mentor-ai`. Endpointy panelu:
 
 - `GET /api/mcp` — status, scope, oczekujące propozycje, audyt; wymaga sesji.
 - `POST /api/mcp/proposals/decide` — `{id, action}`; sesja, `requireSameOrigin`, rate limit 60/min.
-- `POST /api/mcp/proposals/{id}/approval-code` — jednorazowy kod do zatwierdzenia w rozmowie;
-  TTL 10 min, rate limit 10/min, w bazie tylko SHA-256.
+- `POST /api/mcp/proposals/{id}/approval-code` — opcjonalny jednorazowy kod do zatwierdzenia;
+  TTL 10 min, rate limit 10/min, w bazie tylko SHA-256. Nie jest wymagany do zapisu z rozmowy.
 
 MCP (`mcp.alphavault.pl`) ma własny OAuth 2.1 i rejestr 79 narzędzi: 46 odczytu oraz 33 zapisu
-(12 bezpośrednich, 18 wymagających zgody człowieka, 3 obsługujące propozycje). Narzędzia zapisu
-przechodzą przez `WriteEngine`, który waliduje argumenty, liczy formuły panelu i zapisuje stan
-w transakcji MySQL z `SELECT ... FOR UPDATE`, kontrolą `expectedRevision` i idempotencją
-(`mcp_idempotency`, 24 h). Operacje wysokiego ryzyka tworzą wiersz `mcp_proposals` typu `write_op`
-z `{op, args}`; podgląd i wykonanie korzystają z tej samej funkcji, więc diff nie może się rozjechać.
-Zapis następuje po zatwierdzeniu kodem z panelu i zgodnym `diffHash`; sam tekst „potwierdzam” nie jest
-dowodem zgody. Usunięcia trafiają do `state.trash[]` i wracają przez `restore_deleted_record`.
-Brak danych = puste tablice, brak metryki = `null`. Dane giełdowe są niezmienne. Zakres
-`alphavault.health` jest osobny i wymaga zgody na ekranie OAuth oraz połączonego urządzenia.
+(12 bezpośrednich, 18 wymagających potwierdzenia w rozmowie, 3 obsługujące propozycje). Jedno
+połączenie z zakresem `alphavault.read` daje od razu wszystkie 79 narzędzi; nie ma osobnego zakresu
+`alphavault.write` ani reconnectu po wdrożeniu. Narzędzia zapisu przechodzą przez `WriteEngine`,
+który waliduje argumenty, liczy formuły panelu i zapisuje stan w transakcji MySQL z
+`SELECT ... FOR UPDATE`, kontrolą `expectedRevision` i idempotencją (`mcp_idempotency`, 24 h).
+Operacje wysokiego ryzyka tworzą wiersz `mcp_proposals` typu `write_op` z `{op, args}`; podgląd
+i wykonanie korzystają z tej samej funkcji, więc diff nie może się rozjechać. Zapis następuje po
+`approve_proposal` z `confirmed: true`, ustawionym wyłącznie po jednoznacznym „tak” użytkownika
+w rozmowie i zgodnym `diffHash`; kod z panelu jest opcjonalny. Usunięcia trafiają do `state.trash[]`
+i wracają przez `restore_deleted_record`. Brak danych = puste tablice, brak metryki = `null`.
+Dane giełdowe są niezmienne. Zakres `alphavault.health` jest osobny i wymaga zgody na ekranie OAuth
+oraz połączonego urządzenia.
 Szczegóły: [docs/MCP.md](docs/MCP.md).
 
 ## 7. Discord Scheduled Events — pełny przepływ
@@ -813,14 +816,14 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
   używa `Referrer-Policy: strict-origin-when-cross-origin` — przy `no-referrer` Chromium i Firefox
   zerują `Origin` formularzy `POST`, co wcześniej blokowało unieważnianie dostępu.
 
-MCP 3.0: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje
+MCP 3.1: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje
 `db/schema.sql` + `db/migrations/20261114_mcp2.sql` + `db/migrations/20261115_mcp_approval.sql`,
 klucze OAuth i health check. `writes_enabled` domyślnie `true`; `false` ukrywa 33 narzędzia zapisu
-i blokuje scope `alphavault.write`. `pilot_discord_ids` opcjonalnie ogranicza zapis do wybranych kont.
-Po zmianie flagi klient musi ponownie przejść OAuth, żeby uzyskać scope `alphavault.write`; stary token
-zachowuje tylko odczyt. Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie.
-Zakres `alphavault.health` wymaga osobnego checkboxa na ekranie zgody. Deploy MCP nie dotyka
-`alphavault.pl` ani WordPressa.
+(zostaje 46 odczytu). `pilot_discord_ids` opcjonalnie ogranicza zapis do wybranych kont.
+Nie ma zakresu `alphavault.write`: token z `alphavault.read` od razu widzi wszystkie 79 narzędzi,
+więc wdrożenie nie wymaga ponownego OAuth. Health check wymaga `tools=79` i `writesEnabled=true`
+przy włączonym zapisie oraz braku `alphavault.write` w metadanych. Zakres `alphavault.health`
+wymaga osobnego checkboxa na ekranie zgody. Deploy MCP nie dotyka `alphavault.pl` ani WordPressa.
 
 ## 15. Bezpieczeństwo
 
@@ -850,8 +853,8 @@ Zakres `alphavault.health` wymaga osobnego checkboxa na ekranie zgody. Deploy MC
 | Prop parity | `tests/prop-parity.mjs` + `tests/prop-parity.php` | PHP ↔ JS: te same fixtures i metryki | PASS |
 | MCP propozycje | `tests/mcp.test.php` | kod jednorazowy, idempotencja decyzji, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | PASS |
 | MCP zapis | `tests/mcp-write.test.php` | 30 operacji, routing 18/12, 33 schematy, formuły check-inu i planu, kosz, reguły ryzyka | PASS |
-| MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46 read + 33 write, create→delete→restore, approve kodem, scope i pilot | PASS |
-| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | 33 narzędzia zapisu, propozycje, kod, kosz, idempotencja, konflikt wersji, 6 workflow | PASS |
+| MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, pilot | PASS |
+| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | 33 narzędzia zapisu, propozycje, zgoda w rozmowie, kosz, idempotencja, konflikt wersji, 6 workflow | PASS |
 | MCP login | `tests/mcp-login.e2e.mjs` | mock Discord: rola, brak roli, duplikat konta | PASS |
 | MCP panel | `tests/mcp-ui.e2e.mjs` | diff, kod do rozmowy, approve, reject, reload, trwałość | PASS |
 | Routing | `tests/router.unit.mjs` | slugi widoków, aliasy starych adresów, `viewFromHash`, `showView` | 18/18 PASS |

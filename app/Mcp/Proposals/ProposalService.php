@@ -215,10 +215,11 @@ final class ProposalService
     }
 
     /**
-     * Zatwierdzenie propozycji przez MCP. Wymaga kodu wydanego w panelu,
-     * zgodnego hasha diffu i klucza idempotencji decyzji.
+     * Zatwierdzenie propozycji przez MCP. Wymaga zgodnego hasha diffu i klucza
+     * idempotencji decyzji. Kod z panelu jest opcjonalny: gdy go brak, wystarcza
+     * potwierdzenie `confirmed: true` z rozmowy (sprawdzane w WriteTools).
      */
-    public function approveWithCode(int $userId, string $proposalId, string $expectedDiffHash, string $confirmationCode, string $idempotencyKey, string $clientName): array
+    public function approveWithCode(int $userId, string $proposalId, string $expectedDiffHash, ?string $confirmationCode, string $idempotencyKey, string $clientName): array
     {
         $key = $this->decisionKey($idempotencyKey);
         $pdo = $this->db->pdo();
@@ -252,31 +253,33 @@ final class ProposalService
                 throw new ProposalException('diff_mismatch', 'Hash diffu nie zgadza się z propozycją. Odczytaj propozycję ponownie przez get_proposal_status.', 409);
             }
 
-            $codeHash = (string) ($proposal['approval_code_hash'] ?? '');
-            $codeExpiry = $proposal['approval_code_expires_at'] !== null
-                ? strtotime((string) $proposal['approval_code_expires_at'] . ' UTC')
-                : false;
-            if ($codeHash === '' || $proposal['approval_code_used_at'] !== null || $codeExpiry === false || $codeExpiry < time()) {
-                throw new ProposalException('confirmation_required', 'Brak aktywnego kodu potwierdzenia. Poproś użytkownika o wygenerowanie kodu w panelu AlphaVault.', 403);
-            }
-            if (!$this->verifyApprovalCode($confirmationCode, $codeHash)) {
-                $attempts = (int) ($proposal['approval_code_attempts'] ?? 0) + 1;
-                $invalidate = $attempts >= self::APPROVAL_CODE_ATTEMPTS ? 1 : 0;
-                $this->db->execute(
-                    'UPDATE mcp_proposals
-                        SET approval_code_attempts = ?,
-                            approval_code_hash = IF(? = 1, NULL, approval_code_hash),
-                            approval_code_expires_at = IF(? = 1, NULL, approval_code_expires_at)
-                      WHERE id = ?',
-                    [$attempts, $invalidate, $invalidate, $proposalId]
-                );
-                $this->audit($userId, $proposalId, 'user', 'mcp.proposal.code_failed', [
-                    'channel' => 'mcp',
-                    'attempts' => $attempts,
-                    'invalidated' => $invalidate === 1,
-                ]);
-                $pdo->commit();
-                throw new ProposalException('invalid_confirmation', 'Kod potwierdzenia jest nieprawidłowy.', 403);
+            if ($confirmationCode !== null) {
+                $codeHash = (string) ($proposal['approval_code_hash'] ?? '');
+                $codeExpiry = $proposal['approval_code_expires_at'] !== null
+                    ? strtotime((string) $proposal['approval_code_expires_at'] . ' UTC')
+                    : false;
+                if ($codeHash === '' || $proposal['approval_code_used_at'] !== null || $codeExpiry === false || $codeExpiry < time()) {
+                    throw new ProposalException('confirmation_required', 'Brak aktywnego kodu potwierdzenia. Zatwierdź w rozmowie z confirmed=true albo wygeneruj kod w panelu AlphaVault.', 403);
+                }
+                if (!$this->verifyApprovalCode($confirmationCode, $codeHash)) {
+                    $attempts = (int) ($proposal['approval_code_attempts'] ?? 0) + 1;
+                    $invalidate = $attempts >= self::APPROVAL_CODE_ATTEMPTS ? 1 : 0;
+                    $this->db->execute(
+                        'UPDATE mcp_proposals
+                            SET approval_code_attempts = ?,
+                                approval_code_hash = IF(? = 1, NULL, approval_code_hash),
+                                approval_code_expires_at = IF(? = 1, NULL, approval_code_expires_at)
+                          WHERE id = ?',
+                        [$attempts, $invalidate, $invalidate, $proposalId]
+                    );
+                    $this->audit($userId, $proposalId, 'user', 'mcp.proposal.code_failed', [
+                        'channel' => 'mcp',
+                        'attempts' => $attempts,
+                        'invalidated' => $invalidate === 1,
+                    ]);
+                    $pdo->commit();
+                    throw new ProposalException('invalid_confirmation', 'Kod potwierdzenia jest nieprawidłowy.', 403);
+                }
             }
 
             $row = $this->db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ? FOR UPDATE', [$userId]);
@@ -331,15 +334,17 @@ final class ProposalService
             $this->db->execute(
                 "UPDATE mcp_proposals
                     SET status = 'approved', decided_at = UTC_TIMESTAMP(), decided_by = ?,
-                        approval_code_used_at = UTC_TIMESTAMP(), decision_key = ?, decision_result_json = ?
+                        approval_code_used_at = IF(? IS NULL, approval_code_used_at, UTC_TIMESTAMP()),
+                        decision_key = ?, decision_result_json = ?
                   WHERE id = ?",
-                [$userId, $key, $this->encode($result), $proposalId]
+                [$userId, $confirmationCode, $key, $this->encode($result), $proposalId]
             );
             $this->audit($userId, $proposalId, 'user', 'mcp.proposal.approve', [
                 'kind' => (string) $proposal['kind'],
                 'revision' => $revision,
                 'decidedBy' => $userId,
                 'channel' => 'mcp',
+                'confirmed' => $confirmationCode === null,
                 'client' => mb_substr($clientName !== '' ? $clientName : 'Agent MCP', 0, 100),
                 'diffHash' => $storedHash,
             ]);

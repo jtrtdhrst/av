@@ -257,6 +257,15 @@ try {
         && $reusedCode === 'proposal_closed'
         && (int) $todayCheckin['energy'] === 3, json_encode([$approvedByMcp, $replayed, $reusedCode]));
 
+    // 20b. Zatwierdzenie w rozmowie (confirmed) bez kodu.
+    $chatProposal = $builder->saveCheckin($userA, ['mood' => 'Nuda', 'energy' => 3, 'idempotencyKey' => 'idem-chat-checkin-1'], 'test-client');
+    $chatApproved = $service->approveWithCode($userA, $chatProposal['proposalId'], $chatProposal['diffHash'], null, 'idem-chat-decision-1', 'test-client');
+    $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $chatState = json_decode((string) $row['state'], true);
+    $chatCheckin = $chatState['checkins'][0] ?? null;
+    check('20b. confirmed bez kodu zatwierdza', ($chatApproved['status'] ?? '') === 'approved'
+        && ($chatCheckin['mood'] ?? '') === 'Nuda', json_encode([$chatApproved, $chatCheckin]));
+
     // 21. Odrzucenie przez MCP i powtórzenie.
     $rejectTarget = $builder->saveCheckin($userA, ['mood' => 'Skupienie', 'energy' => 4, 'idempotencyKey' => 'idem-reject-mcp-1'], 'test-client');
     $rejected = $service->rejectWithKey($userA, $rejectTarget['proposalId'], 'idem-reject-decision-1', 'test-client');

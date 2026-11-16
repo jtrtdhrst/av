@@ -18,12 +18,12 @@ on:
         default: true
         type: boolean
       writes_enabled:
-        description: "Włącz narzędzia zapisu MCP (wymaga scope alphavault.write; pilot_discord_ids opcjonalne)"
+        description: "Włącz 33 narzędzia zapisu MCP (79 łącznie; zakres alphavault.read, pilot_discord_ids opcjonalne)"
         required: false
         default: true
         type: boolean
       pilot_discord_ids:
-        description: "Opcjonalna allowlista Discord ID dla zapisu (CSV); puste = wszyscy z scope alphavault.write"
+        description: "Opcjonalna allowlista Discord ID dla zapisu (CSV); puste = wszyscy z alphavault.read"
         required: false
         default: ""
         type: string

@@ -459,10 +459,11 @@ final class WriteSchemas
 
     public static function inputApproveProposal(): array
     {
-        return self::tool(['proposalId', 'expectedDiffHash', 'confirmationCode', 'idempotencyKey'], [
+        return self::tool(['proposalId', 'expectedDiffHash', 'confirmed', 'idempotencyKey'], [
             'proposalId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
             'expectedDiffHash' => ['type' => 'string', 'minLength' => 64, 'maxLength' => 64],
-            'confirmationCode' => ['type' => 'string', 'minLength' => 8, 'maxLength' => 12],
+            'confirmed' => ['type' => 'boolean', 'description' => 'Ustaw true wyłącznie po wyraźnym „tak” użytkownika w rozmowie. Agent nie zatwierdza sam.'],
+            'confirmationCode' => ['type' => 'string', 'minLength' => 8, 'maxLength' => 12, 'description' => 'Opcjonalny kod z panelu AlphaVault. Zatwierdzanie w rozmowie go nie wymaga.'],
             'idempotencyKey' => self::idem(),
         ]);
     }
