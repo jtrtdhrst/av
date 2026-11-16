@@ -668,6 +668,10 @@ final class WriteTools
             return $this->engine->execute($userId, $op, $args, $expectedRevision, $idempotencyKey);
         } catch (WriteException $err) {
             throw new ToolCallException('[' . $err->errorCode . '] ' . $err->getMessage());
+        } catch (\Throwable $err) {
+            error_log('[mcp-write] ' . $op . ' ' . $err::class . ': ' . $err->getMessage() . ' @ ' . $err->getFile() . ':' . $err->getLine());
+
+            throw new ToolCallException('[internal] Zapis nie został wykonany z powodu błędu serwera.');
         }
     }
 
@@ -714,6 +718,10 @@ final class WriteTools
             throw new ToolCallException('[' . $err->errorCode . '] ' . $err->getMessage());
         } catch (ProposalException $err) {
             throw new ToolCallException('[' . $err->errorCode . '] ' . $err->getMessage());
+        } catch (\Throwable $err) {
+            error_log('[mcp-write] ' . $op . ' proposal ' . $err::class . ': ' . $err->getMessage() . ' @ ' . $err->getFile() . ':' . $err->getLine());
+
+            throw new ToolCallException('[internal] Propozycja nie została utworzona z powodu błędu serwera.');
         }
     }
 
