@@ -40,7 +40,8 @@ Pliki:
 - `resource` = `https://mcp.alphavault.pl/mcp`; token jest ważny tylko dla tego zasobu.
 - `GET /.well-known/oauth-protected-resource` i
   `GET /.well-known/oauth-authorization-server` opisują zasób i serwer.
-- `GET /health` zwraca `mcp.tools`, `mcp.writesEnabled`, `ok` i status bazy.
+- `GET /health` zwraca `mcp.tools`, `mcp.writesEnabled`, `ok`, status bazy
+  oraz `revision` — pełny SHA wdrożonego commita albo `null` poza wdrożeniem.
 - Ekran zgody pokazuje zakresy; zapis jest częścią `alphavault.read` i nie wymaga osobnego checkboxa.
 
 ### 2.1. Scope
@@ -85,6 +86,10 @@ Zasady odczytu:
 
 - brak danych = `[]` albo `null`; bez tekstów zastępczych i domyślnych godzin,
 - czas źródłowy UTC + ISO 8601, prezentacja w `Europe/Warsaw`,
+- `get_events` obsługuje `limit` i `offset`; `total`, `returnedCount` i `nextOffset`
+  opisują stronicowanie po stabilnym sortowaniu czasu rozpoczęcia i ID,
+- zakresy dat `YYYY-MM-DD` obejmują cały dzień `Europe/Warsaw`; `from > to`
+  jest odrzucane,
 - screeny zwracają metadane; obraz tylko po `includeImages=true` (limit 2, 200 KB),
 - dane giełdowe i `raw_payload` nie są udostępniane w surowej postaci.
 
@@ -306,9 +311,20 @@ gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main `
   -f ref=main -f dry_run=false -f writes_enabled=true
 ```
 
+- Workflow przyjmuje wyłącznie `ref=main` albo pełny 40-znakowy SHA zawarty
+  w `main`. Osobny preflight bez sekretów wymaga udanego `ci.yml` dla tego
+  samego SHA, zdarzenia `push` na `main`; job wdrożeniowy checkoutuje ten
+  zweryfikowany SHA i zachowuje ochronę environment `alphavault-production`.
+- SHA trafia do chronionego `config.json` jako `MCP_BUILD_SHA`; `/health`
+  zwraca go w `revision`. Po rzeczywistym deployu health check porównuje
+  `revision` z zatwierdzonym SHA, stan bazy i liczbę narzędzi (79 albo 46).
+  `revision` jest deklarowaną rewizją, nie kryptograficzną atestacją plików runtime.
 - `writes_enabled` domyślnie `true`; `false` wyłącza 33 narzędzia zapisu (zostaje 46 odczytu).
 - `pilot_discord_ids` (CSV) opcjonalnie ogranicza zapis do wybranych kont.
-- Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie oraz braku `alphavault.write` w metadanych OAuth.
+- `dry_run=true` nie zapisuje katalogów ani `.htaccess` na hostingu; rsync działa
+  wyłącznie w trybie `--dry-run`.
+- Health check wymaga zgodności `revision`, poprawnej bazy, właściwej liczby
+  narzędzi, ustawień zapisu i braku `alphavault.write` w metadanych OAuth.
 - Wdrożenie nie dotyka `alphavault.pl` ani innych domen.
 
 ## 14. Testy
@@ -318,7 +334,8 @@ gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main `
 | `php tests/mcp-write.test.php` | rejestr 30 operacji, routing zgody, schematy 33 narzędzi (w tym `confirmed`), formuły i walidacja `apply()` bez DB |
 | `php tests/mcp.test.php` | tokeny, PKCE, revoke, rate limit, nagłówki, zatwierdzenie kodem i bez kodu |
 | `node tests/mcp.e2e.mjs` | OAuth, 79 narzędzi z `alphavault.read`, cykl create → update → close → delete → restore, idempotencja, revision, `confirmed`, pilot |
-| `node tests/mcp-tools.e2e.mjs` | pełne cykle wszystkich 33 narzędzi, propozycje, `confirmed` w rozmowie, odrzucenie, kosz, workflow analityczne |
+| `node tests/mcp-tools.e2e.mjs` | udane wywołanie każdego narzędzia z runtime `tools/list` (79/79), bezpieczne fixture'y DB CI, wydarzenia/paginacja, daty makro i DST, wszystkie 33 zapisy, propozycje i workflow analityczne |
+| `node tests/deploy-mcp-guard.test.mjs` | odmowa niepełnego/niezaweryfikowanego SHA, PR/dispatch-only, złej gałęzi lub błędnego repo; wymóg checkoutu zatwierdzonego SHA i health provenance |
 | `node tests/mcp-login.e2e.mjs` | logowanie i panel MCP |
 
 Bramką jest workflow `CI` (`PHP + API + UI`). Deploy jest poprawny dopiero po

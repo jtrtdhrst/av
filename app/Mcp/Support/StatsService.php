@@ -28,7 +28,7 @@ final class StatsService
             $fromTs = Dates::startOfLocalDay($fromKey)->getTimestamp();
             $closed = array_values(array_filter(
                 $closed,
-                static fn (array $trade): bool => (strtotime((string) ($trade['date'] ?? '')) ?: 0) >= $fromTs
+                static fn (array $trade): bool => (Dates::timestamp((string) ($trade['date'] ?? '')) ?? 0) >= $fromTs
             ));
         }
 
@@ -56,11 +56,9 @@ final class StatsService
         }
 
         $start = $this->startCapital($state);
-        if ($start <= 0) {
-            $start = 2000.0;
-        }
+        $hasStartingCapital = $start > 0;
         $sorted = $closed;
-        usort($sorted, static fn (array $a, array $b): int => (strtotime((string) ($a['date'] ?? '')) ?: 0) <=> (strtotime((string) ($b['date'] ?? '')) ?: 0));
+        usort($sorted, static fn (array $a, array $b): int => (Dates::timestamp((string) ($a['date'] ?? '')) ?? 0) <=> (Dates::timestamp((string) ($b['date'] ?? '')) ?? 0));
         $equity = $start;
         $peak = $start;
         $maxDd = 0.0;
@@ -109,6 +107,7 @@ final class StatsService
             'trades' => $n,
             'wins' => $metrics['wins'],
             'losses' => $metrics['losses'],
+            'breakeven' => $metrics['breakeven'],
             'winRate' => $metrics['winRate'],
             'net' => $metrics['net'],
             'grossProfit' => $metrics['grossProfit'],
@@ -119,7 +118,7 @@ final class StatsService
             'avgWin' => $metrics['avgWin'],
             'avgLoss' => $metrics['avgLoss'],
             'maxDrawdown' => $n > 0 ? Numbers::round($maxDd) : null,
-            'maxDrawdownPct' => $n > 0 ? Numbers::round($maxDdPct) : null,
+            'maxDrawdownPct' => $n > 0 && $hasStartingCapital ? Numbers::round($maxDdPct) : null,
             'fees' => $metrics['fees'],
             'withStopLoss' => $n > 0 ? Numbers::round($withSl / $n * 100) : null,
             'planAdherence' => $n > 0 ? Numbers::round($planned / $n * 100) : null,

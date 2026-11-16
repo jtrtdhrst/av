@@ -172,16 +172,16 @@ final class Metrics
             if (!Dates::isValidKey($to)) {
                 throw new \InvalidArgumentException('Pole ' . $toField . ' musi mieć format YYYY-MM-DD.');
             }
-            $toTs = Dates::startOfLocalDay($to)->modify('+1 day')->getTimestamp();
+            $toTs = Dates::startOfNextLocalDay($to)->getTimestamp();
         }
-        if ($fromTs !== null && $toTs !== null && $fromTs > $toTs) {
+        if ($fromTs !== null && $toTs !== null && $fromTs >= $toTs) {
             throw new \InvalidArgumentException('Pole from nie może być późniejsze niż to.');
         }
 
         return array_values(array_filter($trades, static function (array $trade) use ($fromTs, $toTs): bool {
             $raw = (string) ($trade['date'] ?? '');
-            $ts = strtotime($raw);
-            if ($ts === false) {
+            $ts = Dates::timestamp($raw);
+            if ($ts === null) {
                 return $fromTs === null && $toTs === null;
             }
             if ($fromTs !== null && $ts < $fromTs) {

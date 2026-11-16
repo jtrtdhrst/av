@@ -6,11 +6,12 @@
 #   LH_MCP_DEPLOY_PATH (e.g. ~/public_html/mcp.alphavault.pl),
 #   LH_MCP_APP_PATH    (e.g. ~/public_html/mcp.alphavault.pl/.app),
 #   MCP_APP_URL        (https://mcp.alphavault.pl),
+#   MCP_BUILD_SHA      (full commit SHA approved by CI on main),
 #   SESSION_SECRET, DB_*, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET,
 #   DISCORD_GUILD_ID, DISCORD_REQUIRED_ROLE_ID.
 #
 # Optional:
-#   LH_SSH_PORT (40022), DRY_RUN (false), MCP_WRITES_ENABLED (false),
+#   LH_SSH_PORT (40022), DRY_RUN (true), MCP_WRITES_ENABLED (false),
 #   MCP_PILOT_DISCORD_IDS (opcjonalna allowlista Discord ID dla zapisu),
 #   DISCORD_BOT_TOKEN (not required by MCP), ADMIN_DISCORD_IDS.
 
@@ -24,14 +25,19 @@ require_var() {
   if [ -z "${!name:-}" ]; then fail "Missing required environment variable: ${name}"; fi
 }
 
-for name in LH_SSH_HOST LH_SSH_USER LH_SSH_PRIVATE_KEY_PATH LH_SSH_KNOWN_HOSTS_PATH LH_MCP_DEPLOY_PATH LH_MCP_APP_PATH MCP_APP_URL; do
+for name in LH_SSH_HOST LH_SSH_USER LH_SSH_PRIVATE_KEY_PATH LH_SSH_KNOWN_HOSTS_PATH LH_MCP_DEPLOY_PATH LH_MCP_APP_PATH MCP_APP_URL MCP_BUILD_SHA; do
   require_var "$name"
 done
 
 LH_SSH_PORT="${LH_SSH_PORT:-40022}"
-DRY_RUN="${DRY_RUN:-false}"
+DRY_RUN="${DRY_RUN:-true}"
 MCP_WRITES_ENABLED="${MCP_WRITES_ENABLED:-false}"
 MCP_PILOT_DISCORD_IDS="${MCP_PILOT_DISCORD_IDS:-}"
+[[ "$MCP_BUILD_SHA" =~ ^[a-fA-F0-9]{40}$ ]] || fail "MCP_BUILD_SHA must be a full 40-character commit SHA."
+case "$DRY_RUN" in
+  true|false) ;;
+  *) fail "DRY_RUN musi mieć wartość true albo false." ;;
+esac
 APP_ENV="${APP_ENV:-production}"
 ALLOW_DEMO_LOGIN="${ALLOW_DEMO_LOGIN:-false}"
 MAX_STATE_BYTES="${MAX_STATE_BYTES:-12582912}"
@@ -102,9 +108,13 @@ ls -1t "$BACKUP_DIR"/*-mcp-app.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f 
 REMOTE
 fi
 
-log "Preparing remote directories..."
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p '$DEPLOY_PATH' '$APP_PATH/app' '$APP_PATH/bin' '$APP_PATH/config' '$APP_PATH/db' '$APP_PATH/logs' '$APP_PATH/vendor'; chmod 755 '$DEPLOY_PATH' '$APP_PATH'; chmod 700 '$APP_PATH/logs'"
-printf 'Require all denied\n' | ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "umask 022; cat > '$APP_PATH/.htaccess'; chmod 644 '$APP_PATH/.htaccess'"
+if [ "$DRY_RUN" != "true" ]; then
+  log "Preparing remote directories..."
+  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "mkdir -p '$DEPLOY_PATH' '$APP_PATH/app' '$APP_PATH/bin' '$APP_PATH/config' '$APP_PATH/db' '$APP_PATH/logs' '$APP_PATH/vendor'; chmod 755 '$DEPLOY_PATH' '$APP_PATH'; chmod 700 '$APP_PATH/logs'"
+  printf 'Require all denied\n' | ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "umask 022; cat > '$APP_PATH/.htaccess'; chmod 644 '$APP_PATH/.htaccess'"
+else
+  log "Dry run: skipping remote directory and .htaccess writes."
+fi
 
 RSYNC_FLAGS=(-rltz --delete --human-readable)
 if [ "$DRY_RUN" = "true" ]; then RSYNC_FLAGS+=(--dry-run --itemize-changes); fi
@@ -143,6 +153,7 @@ MCP_PUBLIC_KEY_PATH="$APP_PATH/keys/oauth-public.pem" \
 MCP_ENCRYPTION_KEY_PATH="$APP_PATH/keys/oauth-encryption.key" \
 MCP_ALLOWED_REDIRECT_HOSTS="${MCP_ALLOWED_REDIRECT_HOSTS:-chatgpt.com,chat.openai.com,platform.openai.com,claude.ai,grok.com,x.ai}" \
 MCP_LOG_FILE="$APP_PATH/logs/mcp.log" \
+MCP_BUILD_SHA="$MCP_BUILD_SHA" \
 APP_ENV="$APP_ENV" \
 ALLOW_DEMO_LOGIN="$ALLOW_DEMO_LOGIN" \
 MAX_STATE_BYTES="$MAX_STATE_BYTES" \
@@ -159,13 +170,17 @@ ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "php '$APP_PATH/bin/mcp-maintenance.php'"
 health_check() {
   local body
   body="$(curl -fsS --max-time 25 "$MCP_APP_URL/health" 2>/dev/null || true)"
-  printf '%s' "$body" | grep -q '"ok":true' || fail "MCP health check failed: $body"
-  printf '%s' "$body" | grep -q '"enabled":true' || fail "MCP is not enabled: $body"
-  if [ "$MCP_WRITES_ENABLED" = "true" ]; then
-    printf '%s' "$body" | grep -q '"writesEnabled":true' || fail "MCP writes expected enabled: $body"
-  else
-    printf '%s' "$body" | grep -q '"writesEnabled":false' || fail "MCP writes expected disabled: $body"
-  fi
+  MCP_HEALTH_BODY="$body" MCP_BUILD_SHA="$MCP_BUILD_SHA" MCP_WRITES_ENABLED="$MCP_WRITES_ENABLED" node -e '
+    const health = JSON.parse(process.env.MCP_HEALTH_BODY);
+    const expectedWrites = process.env.MCP_WRITES_ENABLED === "true";
+    const expectedTools = process.env.MCP_WRITES_ENABLED === "true" ? 79 : 46;
+    if (health.ok !== true) throw new Error("Top-level health is not OK.");
+    if (health.revision !== process.env.MCP_BUILD_SHA) throw new Error("Runtime revision does not match the validated SHA.");
+    if (health.db?.ok !== true) throw new Error("Database health is not OK.");
+    if (health.mcp?.enabled !== true) throw new Error("MCP is not enabled.");
+    if (health.mcp?.writesEnabled !== expectedWrites) throw new Error("MCP write setting does not match deployment input.");
+    if (health.mcp?.tools !== expectedTools) throw new Error(`Expected ${expectedTools} MCP tools, got ${health.mcp?.tools}.`);
+  ' || fail "MCP health provenance, database, or tool-count validation failed."
   local prm
   prm="$(curl -fsS --max-time 25 "$MCP_APP_URL/.well-known/oauth-protected-resource" 2>/dev/null || true)"
   printf '%s' "$prm" | grep -q '"resource":"https://mcp.alphavault.pl/mcp"' || fail "Protected Resource Metadata invalid: $prm"

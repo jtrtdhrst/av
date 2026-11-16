@@ -15,6 +15,11 @@ Aplikacja jest serwowana z tego samego originu co API. Frontend zapisuje cały s
 
 API: `/api/*` · logowanie: `/auth/*` · UI: `/` · dokumentacja: `/docs/`.
 
+Serwer MCP działa na osobnej domenie `https://mcp.alphavault.pl`; jego OAuth,
+narzędzia i publiczne `GET /health` opisuje [MCP.md](https://github.com/miloszspyrka-code/av/blob/main/docs/MCP.md). Pole health
+`revision` pokazuje SHA przekazane przez chroniony workflow jako
+`MCP_BUILD_SHA`; nie jest kryptograficzną atestacją integralności runtime.
+
 ## 2. Logowanie Discord
 
 ### 2.1. Przepływ

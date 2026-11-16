@@ -23,6 +23,7 @@ final class EventsService
             throw new \InvalidArgumentException('Pole category musi mieć wartość all, live, consultation albo unassigned.');
         }
         $limit = max(1, min(100, (int) ($filters['limit'] ?? 20)));
+        $offset = max(0, min(100000, (int) ($filters['offset'] ?? 0)));
         $from = (string) ($filters['from'] ?? '');
         $to = (string) ($filters['to'] ?? '');
         $fromTs = time() - 3600;
@@ -37,7 +38,10 @@ final class EventsService
             if (!Dates::isValidKey($to)) {
                 throw new \InvalidArgumentException('Pole to musi mieć format YYYY-MM-DD.');
             }
-            $toTs = Dates::startOfLocalDay($to)->modify('+1 day')->getTimestamp();
+            $toTs = Dates::startOfNextLocalDay($to)->getTimestamp();
+        }
+        if ($from !== '' && $to !== '' && $from > $to) {
+            throw new \InvalidArgumentException('Pole from nie może być późniejsze niż to.');
         }
 
         $raw = $this->events->listForApi(false);
@@ -49,7 +53,7 @@ final class EventsService
             if ($category !== 'all' && (string) ($event['category'] ?? '') !== $category) {
                 continue;
             }
-            $ts = strtotime((string) ($event['startAt'] ?? '')) ?: 0;
+            $ts = Dates::timestamp((string) ($event['startAt'] ?? '')) ?? 0;
             if ($ts < $fromTs) {
                 continue;
             }
@@ -58,11 +62,20 @@ final class EventsService
             }
             $items[] = $this->map($event);
         }
-        usort($items, static fn (array $a, array $b): int => strcmp((string) $a['startAt'], (string) $b['startAt']));
+        usort($items, static function (array $a, array $b): int {
+            $byTime = (Dates::timestamp((string) $a['startAt']) ?? 0) <=> (Dates::timestamp((string) $b['startAt']) ?? 0);
+
+            return $byTime !== 0 ? $byTime : strcmp((string) $a['id'], (string) $b['id']);
+        });
+        $page = array_slice($items, $offset, $limit);
 
         return [
-            'events' => array_slice($items, 0, $limit),
+            'events' => $page,
             'total' => count($items),
+            'returnedCount' => count($page),
+            'limit' => $limit,
+            'offset' => $offset,
+            'nextOffset' => ($offset + count($page)) < count($items) ? $offset + count($page) : null,
             'sync' => $this->sync($raw['sync'] ?? null),
         ];
     }
@@ -85,7 +98,7 @@ final class EventsService
             if (in_array((int) ($event['statusCode'] ?? 0), [3, 4], true)) {
                 continue;
             }
-            if ((strtotime((string) ($event['startAt'] ?? '')) ?: 0) < $now) {
+            if ((Dates::timestamp((string) ($event['startAt'] ?? '')) ?? 0) < $now) {
                 continue;
             }
 
@@ -103,7 +116,8 @@ final class EventsService
 
         return [
             'status' => $sync['status'] ?? 'never',
-            'lastSuccessAt' => $sync['lastSuccessAt'] ?? null,
+            'lastAttemptAt' => self::utcIso($sync['lastAttemptAt'] ?? null),
+            'lastSuccessAt' => self::utcIso($sync['lastSuccessAt'] ?? null),
             'eventsCount' => (int) ($sync['eventsCount'] ?? 0),
             'stale' => (bool) ($sync['stale'] ?? true),
             'lastError' => $sync['lastError'] ?? null,
@@ -118,7 +132,6 @@ final class EventsService
         } else {
             $description = null;
         }
-
         return [
             'id' => (string) ($event['id'] ?? ''),
             'name' => (string) ($event['name'] ?? ''),
@@ -132,10 +145,21 @@ final class EventsService
             'localTime' => $event['localTime'] ?? null,
             'weekday' => $event['weekday'] ?? null,
             'endAt' => $event['endAt'] ?? null,
+            'endLocal' => $event['endLocal'] ?? null,
             'durationMinutes' => $event['durationMinutes'] ?? null,
             'host' => $event['host'] ?? null,
             'userCount' => $event['userCount'] ?? null,
             'location' => $event['location'] ?? null,
+            'updatedAt' => self::utcIso($event['updatedAt'] ?? null),
         ];
+    }
+
+    private static function utcIso(mixed $value): ?string
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        return Dates::parseUtc($value)?->format('Y-m-d\TH:i:s\Z');
     }
 }

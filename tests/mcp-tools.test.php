@@ -20,7 +20,9 @@ use AlphaVault\Mcp\Analytics\SetupService;
 use AlphaVault\Mcp\Analytics\TaxService;
 use AlphaVault\Mcp\Support\Metrics;
 use AlphaVault\Mcp\Support\PropChallengeService;
+use AlphaVault\Mcp\Support\StatsService;
 use AlphaVault\Mcp\Support\TradeService;
+use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Tools\Prompts;
 
 $pass = 0;
@@ -129,6 +131,59 @@ $breakEvenSummary = Metrics::summarize([$trade(['result' => 0.0, 'r' => 0.0])]);
 check('Metrics: break-even osobno od zysku i straty', $breakEvenSummary['sampleSize'] === 1
     && $breakEvenSummary['wins'] === 0 && $breakEvenSummary['losses'] === 0
     && $breakEvenSummary['breakeven'] === 1 && $breakEvenSummary['net'] === 0.0);
+$dstRange = Metrics::range([
+    ['date' => '2026-10-25T21:59:59Z', 'result' => 1],
+    ['date' => '2026-10-25T23:00:00Z', 'result' => 1],
+], '2026-10-25', '2026-10-25');
+check('Metrics: granice dnia Europe/Warsaw obejmują DST i wykluczają następny dzień', count($dstRange) === 1);
+$springDstRange = Metrics::range([
+    ['date' => '2027-03-28T21:59:59Z', 'result' => 1],
+    ['date' => '2027-03-28T22:30:00Z', 'result' => 1],
+], '2027-03-28', '2027-03-28');
+check('Metrics: wiosenny dzień DST ma lokalną granicę 22:00Z', count($springDstRange) === 1);
+check(
+    'Dates: następna północ liczona w Europe/Warsaw, nie jako 24 h UTC',
+    Dates::startOfNextLocalDay('2026-10-25')->format('Y-m-d\TH:i:s\Z') === '2026-10-25T23:00:00Z'
+    && Dates::startOfNextLocalDay('2027-03-28')->format('Y-m-d\TH:i:s\Z') === '2027-03-28T22:00:00Z'
+);
+$reverseRangeRejected = false;
+try {
+    Metrics::range([], '2026-10-26', '2026-10-25');
+} catch (InvalidArgumentException) {
+    $reverseRangeRejected = true;
+}
+check('Metrics: odwrócony sąsiedni zakres jest odrzucany', $reverseRangeRejected);
+check(
+    'Dates: jawny offset parsowany jako chwila i prezentowany w Warszawie',
+    Dates::timestamp('2026-03-29T01:30:00+01:00') === (new DateTimeImmutable('2026-03-29T00:30:00Z'))->getTimestamp()
+    && Dates::localParts('2026-03-29T01:30:00+01:00')['time'] === '01:30'
+    && Dates::timestamp('2026-03-29T01:30:00+0100') === Dates::timestamp('2026-03-29T01:30:00+01:00')
+    && Dates::parseUtc('2026-03-29T01:30:00+99:99') === null
+    && Dates::parseUtc('tomorrow') === null
+);
+$tradeService = new TradeService();
+$emptySetupStats = $tradeService->setupStats(['trades' => []], 'Bez prób');
+check('Setup summary: brak prób zwraca null, nie sztuczne zera', $emptySetupStats['trades'] === 0
+    && $emptySetupStats['breakeven'] === 0 && $emptySetupStats['winRate'] === null
+    && $emptySetupStats['net'] === null && $emptySetupStats['avgR'] === null);
+$setupBreakEven = $tradeService->setupStats(['trades' => [$trade([
+    'result' => 0.0, 'r' => 0.0, 'setup' => 'Retest wybicia',
+])]], 'Retest wybicia');
+check('Setup summary: break-even widoczny oddzielnie', $setupBreakEven['trades'] === 1
+    && $setupBreakEven['wins'] === 0 && $setupBreakEven['breakeven'] === 1
+    && $setupBreakEven['net'] === 0.0);
+$noCapitalStats = (new StatsService($tradeService))->compute([
+    'trades' => [$trade(['result' => -20.0, 'r' => -1.0])],
+    'accounts' => [],
+], 'all');
+check('Stats: drawdown procentowy bez realnego kapitału jest null', $noCapitalStats['maxDrawdown'] === -20.0
+    && $noCapitalStats['maxDrawdownPct'] === null);
+$statsBreakEven = (new StatsService($tradeService))->compute([
+    'trades' => [$trade(['result' => 0.0, 'r' => 0.0])],
+    'accounts' => [],
+], 'all');
+check('Stats: break-even spójnie eksponowany', $statsBreakEven['breakeven'] === 1
+    && $statsBreakEven['wins'] === 0 && $statsBreakEven['losses'] === 0);
 
 // --- Day plan ---
 $plans = new DayPlanService();

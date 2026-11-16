@@ -487,8 +487,7 @@ async function mainWrites() {
   console.log('MCP E2E writes PASS');
 }
 
-runPhp(path.join(ROOT, 'tests', 'seed-mcp.php'));
-runPhp(path.join(ROOT, 'tests', 'mcp-user-service.php'));
+runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['assert-test-environment']);
 
 let server = null;
 let serverLog = '';
@@ -521,6 +520,8 @@ async function stopServer() {
 }
 
 try {
+  runPhp(path.join(ROOT, 'tests', 'seed-mcp.php'));
+  runPhp(path.join(ROOT, 'tests', 'mcp-user-service.php'));
   await startServer(false);
   await main();
   await stopServer();
@@ -531,6 +532,9 @@ try {
   console.error(serverLog);
   throw err;
 } finally {
-  await stopServer();
-  runPhp(path.join(ROOT, 'tests', 'cleanup-mcp.php'));
+  try {
+    await stopServer();
+  } finally {
+    runPhp(path.join(ROOT, 'tests', 'cleanup-mcp.php'));
+  }
 }

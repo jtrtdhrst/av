@@ -199,7 +199,7 @@ final class McpController
         $builder = Server::builder()
             ->setServerInfo(
                 name: 'alphavault-mcp',
-                version: '3.0.0',
+                version: $this->config->version,
                 description: 'AlphaVault — prywatny kontekst tradingowy, zapis danych panelu i scenariusze pracy.',
                 websiteUrl: 'https://alphavault.pl'
             )
@@ -292,8 +292,8 @@ final class McpController
             $writeTools = [
                 // --- Transakcje (4) ---
                 ['createTrade', 'create_trade', 'Nowa transakcja', 'Zapisuje ręczną transakcję w dzienniku: para, kierunek, wejście, wielkość, opcjonalnie SL, TP, opłata, setup, emocja, ocena, checklista, błędy, notatka, sesja, data i konto. Wynik i ryzyko liczy serwer. Nie składa zlecenia i nie dotyka giełdy. Zwraca tradeId i nową wersję stanu.', WriteSchemas::inputCreateTrade(), $writeOutput],
-                ['updateTrade', 'update_trade', 'Zmiana transakcji', 'Zmienia wybrane pola transakcji przez tradeId i jawny obiekt changes. Transakcja importowana z giełdy ma niezmienne dane wykonania — edytuj tylko ocenę, emocje, notatkę, checklistę, setup i błędy.', WriteSchemas::inputUpdateTrade(), $writeOutput],
-                ['closeTrade', 'close_trade', 'Zamknięcie pozycji', 'Zamyka ręczną otwartą transakcję ceną wyjścia albo wynikiem. Wynik, R i czas trwania liczy serwer. Odmawia dla transakcji importowanych z giełdy i dla już zamkniętych.', WriteSchemas::inputCloseTrade(), $writeOutput],
+                 ['updateTrade', 'update_trade', 'Zmiana transakcji', 'Zmienia wybrane pola transakcji przez tradeId i jawny obiekt changes. Wyniku, R, ceny wyjścia i czasu trwania nie zmieniaj przez update_trade — pola zamknięcia obsługuje close_trade. Wykonanie zamkniętej lub importowanej transakcji jest niezmienne.', WriteSchemas::inputUpdateTrade(), $writeOutput],
+                 ['closeTrade', 'close_trade', 'Zamknięcie pozycji', 'Zamyka ręczną otwartą transakcję ceną wyjścia albo wynikiem. Wynik, R, czas trwania i closedAt zapisuje serwer; brak exitPrice daje exit=null. Odmawia dla transakcji importowanych z giełdy i dla już zamkniętych.', WriteSchemas::inputCloseTrade(), $writeOutput],
                 ['deleteTrade', 'delete_trade', 'Usunięcie transakcji', 'Usuwa transakcję. Rekord trafia do kosza (trashId), więc można go przywrócić przez restore_deleted_record. Zapis natychmiastowy, audytowany.', WriteSchemas::inputDeleteTrade(), $writeOutput],
                 // --- Recenzje (3) ---
                 ['createTradeReview', 'create_trade_review', 'Nowa recenzja transakcji', 'Zapisuje recenzję transakcji: ocena, setup, emocja, błędy, checklista, notatka i rekomendacje. Nie zmienia pól finansowych transakcji. Jedna recenzja na transakcję.', WriteSchemas::inputCreateTradeReview(), $writeOutput],

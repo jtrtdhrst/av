@@ -125,7 +125,7 @@ final class WriteSchemas
     {
         return self::tool(['tradeId', 'changes', 'idempotencyKey'], self::baseWithRevision() + [
             'tradeId' => self::tradeId(),
-            'changes' => self::changes('Pola do zmiany. Transakcja importowana z giełdy dopuszcza tylko ocenę, emocje, notatkę, checklistę, setup i błędy. ' . 'Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.'),
+            'changes' => self::changes('Pola dziennika do zmiany. Wyniku, R, ceny wyjścia i czasu trwania nie zmieniaj przez update_trade — użyj close_trade. Pola wykonania zamkniętej lub importowanej transakcji są niezmienne; pozostają pola oceny i recenzji. Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.'),
         ]);
     }
 

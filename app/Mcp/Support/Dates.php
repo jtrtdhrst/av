@@ -24,14 +24,12 @@ final class Dates
 
     public static function dateKey(?string $iso): ?string
     {
-        if ($iso === null || trim($iso) === '') {
+        $date = self::parseUtc($iso);
+        if ($date === null) {
             return null;
         }
-        try {
-            return (new \DateTimeImmutable($iso))->setTimezone(self::tz())->format('Y-m-d');
-        } catch (\Throwable) {
-            return null;
-        }
+
+        return $date->setTimezone(self::tz())->format('Y-m-d');
     }
 
     public static function isValidKey(string $key): bool
@@ -49,16 +47,27 @@ final class Dates
         return (new \DateTimeImmutable($key . ' 00:00:00', self::tz()))->setTimezone(new \DateTimeZone('UTC'));
     }
 
+    public static function startOfNextLocalDay(string $key): \DateTimeImmutable
+    {
+        if (!self::isValidKey($key)) {
+            throw new \InvalidArgumentException('Data musi mieć format YYYY-MM-DD.');
+        }
+
+        return (new \DateTimeImmutable($key . ' 00:00:00', self::tz()))
+            ->modify('+1 day')
+            ->setTimezone(new \DateTimeZone('UTC'));
+    }
+
     public static function localParts(?string $iso): array
     {
         if ($iso === null || trim($iso) === '') {
             return ['date' => null, 'time' => null, 'offset' => null, 'weekday' => null];
         }
-        try {
-            $local = (new \DateTimeImmutable($iso))->setTimezone(self::tz());
-        } catch (\Throwable) {
+        $date = self::parseUtc($iso);
+        if ($date === null) {
             return ['date' => null, 'time' => null, 'offset' => null, 'weekday' => null];
         }
+        $local = $date->setTimezone(self::tz());
 
         return [
             'date' => $local->format('Y-m-d'),
@@ -71,5 +80,38 @@ final class Dates
     public static function nowMs(): int
     {
         return (int) floor(microtime(true) * 1000);
+    }
+
+    public static function timestamp(?string $iso): ?int
+    {
+        return self::parseUtc($iso)?->getTimestamp();
+    }
+
+    public static function parseUtc(?string $value): ?\DateTimeImmutable
+    {
+        $text = trim((string) $value);
+        if ($text === '') {
+            return null;
+        }
+        $dateOnly = preg_match('/^\d{4}-\d{2}-\d{2}$/', $text) === 1;
+        $isoDateTime = preg_match(
+            '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?$/i',
+            $text
+        ) === 1;
+        $databaseDateTime = preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,9})?$/', $text) === 1;
+        if (!$dateOnly && !$isoDateTime && !$databaseDateTime) {
+            return null;
+        }
+        try {
+            $date = new \DateTimeImmutable($text, new \DateTimeZone('UTC'));
+            $errors = \DateTimeImmutable::getLastErrors();
+            if (is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)) {
+                return null;
+            }
+
+            return $date->setTimezone(new \DateTimeZone('UTC'));
+        } catch (\Throwable) {
+            return null;
+        }
     }
 }

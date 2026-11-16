@@ -22,7 +22,9 @@ final class MacroService
 
         $fromTs = $this->timestamp($from, 'from');
         $toTs = $this->timestamp($to, 'to');
-        if ($fromTs !== null && $toTs !== null && $fromTs > $toTs) {
+        $toExclusive = $to !== '' && Dates::isValidKey($to);
+        if ($fromTs !== null && $toTs !== null
+            && ($fromTs > $toTs || ($toExclusive && $fromTs >= $toTs))) {
             throw new \InvalidArgumentException('Pole from nie może być późniejsze niż to.');
         }
         if ($impact !== null && ($impact < 1 || $impact > 3)) {
@@ -39,7 +41,7 @@ final class MacroService
             $params[] = gmdate('Y-m-d H:i:s', $fromTs);
         }
         if ($toTs !== null) {
-            $where[] = 'starts_at_utc <= ?';
+            $where[] = $toExclusive ? 'starts_at_utc < ?' : 'starts_at_utc <= ?';
             $params[] = gmdate('Y-m-d H:i:s', $toTs);
         }
         if ($currency !== '') {
@@ -118,7 +120,8 @@ final class MacroService
 
         return [
             'status' => (string) $row['last_status'],
-            'lastSuccessAt' => $row['last_success_at'],
+            'lastAttemptAt' => self::utcIso($row['last_attempt_at'] ?? null),
+            'lastSuccessAt' => self::utcIso($row['last_success_at'] ?? null),
             'eventsCount' => (int) $row['events_count'],
             'stale' => $stale,
         ];
@@ -129,11 +132,31 @@ final class MacroService
         if ($value === '') {
             return null;
         }
-        $ts = strtotime($value);
-        if ($ts === false) {
+        if (preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $value) === 1) {
+            if (!Dates::isValidKey($value)) {
+                throw new \InvalidArgumentException('Pole ' . $field . ' musi być poprawną datą ISO 8601 albo YYYY-MM-DD.');
+            }
+            $dayStart = Dates::startOfLocalDay($value);
+
+            return $field === 'to'
+                ? Dates::startOfNextLocalDay($value)->getTimestamp()
+                : $dayStart->getTimestamp();
+        }
+
+        $date = Dates::parseUtc($value);
+        if ($date === null) {
             throw new \InvalidArgumentException('Pole ' . $field . ' musi być poprawną datą ISO 8601 albo YYYY-MM-DD.');
         }
 
-        return $ts;
+        return $date->getTimestamp();
+    }
+
+    private static function utcIso(mixed $value): ?string
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        return Dates::parseUtc($value)?->format('Y-m-d\\TH:i:s\\Z');
     }
 }

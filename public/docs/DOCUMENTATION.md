@@ -812,7 +812,7 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
 ### 14.6. Serwer MCP
 
 - `mcp.alphavault.pl` ma osobny front controller `mcp/public/index.php` i `.app` w `~/public_html/mcp.alphavault.pl/.app`.
-- Wdrożenie: workflow `Deploy AlphaVault MCP` (`.github/workflows/deploy-mcp.yml`), uruchamiany z `main` z inputem `ref` (branch/tag do wdrożenia).
+- Wdrożenie: workflow `Deploy AlphaVault MCP` (`.github/workflows/deploy-mcp.yml`), uruchamiany z `main`; input `ref` przyjmuje `main` albo pełny SHA commita zawartego w `main`.
 - `scripts/deploy-mcp.sh` wykonuje backup, rsync, migrację, klucze OAuth i health check; `MCP_WRITES_ENABLED` przyjmuje `true|false` (domyślnie `true`).
 - Workflow nie dotyka `alphavault.pl` ani WordPressa; używa environment `alphavault-production`.
 - `/oauth/authorize` przyjmuje żądanie autoryzacji metodą `POST` (m.in. ChatGPT) i normalizuje je `303`
@@ -824,15 +824,21 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
   używa `Referrer-Policy: strict-origin-when-cross-origin` — przy `no-referrer` Chromium i Firefox
   zerują `Origin` formularzy `POST`, co wcześniej blokowało unieważnianie dostępu.
 
-MCP 3.1: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje:
+MCP 3.2: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-mcp.sh`, migracje:
 `db/schema.sql`, `db/migrations/20261114_mcp2.sql`, `db/migrations/20261115_mcp_approval.sql`
 oraz `db/migrations/20261116_mcp_idempotency_fingerprints.sql`,
 klucze OAuth i health check. `writes_enabled` domyślnie `true`; `false` ukrywa 33 narzędzia zapisu
 (zostaje 46 odczytu). `pilot_discord_ids` opcjonalnie ogranicza zapis do wybranych kont.
-Nie ma zakresu `alphavault.write`: token z `alphavault.read` od razu widzi wszystkie 79 narzędzi,
-więc wdrożenie nie wymaga ponownego OAuth. Health check wymaga `tools=79` i `writesEnabled=true`
-przy włączonym zapisie oraz braku `alphavault.write` w metadanych. Zakres `alphavault.health`
+Nie ma zakresu `alphavault.write`: token z `alphavault.read` widzi cały rejestr włączony
+konfiguracją (79 narzędzi z zapisem albo 46 tylko do odczytu), więc wdrożenie nie wymaga ponownego
+OAuth. Health check wymaga liczby narzędzi i `writesEnabled` zgodnych z ustawieniem wdrożenia oraz
+braku `alphavault.write` w metadanych. Zakres `alphavault.health`
 wymaga osobnego checkboxa na ekranie zgody. Deploy MCP nie dotyka `alphavault.pl` ani WordPressa.
+Preflight bez sekretów sprawdza, czy dokładny SHA ma udany `ci.yml` z `event=push` na `main`;
+job chroniony checkoutuje ten niezmienny SHA. `MCP_BUILD_SHA` trafia do `.app/config.json`,
+a publiczne `/health.revision` jest porównywane z zatwierdzoną rewizją, stanem bazy i liczbą
+narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptograficzną runtime.
+`dry_run=true` symuluje rsync i nie zapisuje katalogów ani `.htaccess` na hostingu.
 
 ## 15. Bezpieczeństwo
 
@@ -867,7 +873,8 @@ wymaga osobnego checkboxa na ekranie zgody. Deploy MCP nie dotyka `alphavault.pl
 | MCP analityka | `tests/mcp-tools.test.php` | Metrics, analityka, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38, odznaki, screeny | CI po zmianie |
 | MCP zapis | `tests/mcp-write.test.php` | 30 operacji, routing 18/12, 33 schematy, formuły check-inu i planu, kosz, reguły ryzyka | PASS |
 | MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, pilot | PASS |
-| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | dashboard bez scope zdrowotnego, transakcje konta poza analityką, break-even, payload-bound idempotency, 33 narzędzia zapisu, propozycje, kosz, konflikt wersji, 6 workflow | CI po zmianie |
+| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | każde narzędzie z rejestru ma udane wywołanie (79/79), fixture DB CI z fail-closed guardem i cleanupem, wydarzenia/paginacja, granice dat i DST, lifecycle transakcji, propozycje i workflow | CI po zmianie |
+| MCP deploy provenance | `tests/deploy-mcp-guard.test.mjs` | blokada niezaufanego refu, SHA spoza `main`, PR/dispatch-only i CI bez sukcesu; wymóg checkoutu zatwierdzonego SHA i health revision | CI po zmianie |
 | MCP login | `tests/mcp-login.e2e.mjs` | mock Discord: rola, brak roli, duplikat konta | PASS |
 | MCP panel | `tests/mcp-ui.e2e.mjs` | diff, kod do rozmowy, approve, reject, reload, trwałość | PASS |
 | Routing | `tests/router.unit.mjs` | slugi widoków, aliasy starych adresów, `viewFromHash`, `showView` | 18/18 PASS |

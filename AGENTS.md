@@ -294,14 +294,14 @@ Wymagane wartości:
 
 ### 6.7. Deploy MCP
 
-`mcp.alphavault.pl` wdraża workflow `Deploy AlphaVault MCP` (`.github/workflows/deploy-mcp.yml`), uruchamiany z `main` z inputem `ref`:
+`mcp.alphavault.pl` wdraża workflow `Deploy AlphaVault MCP` (`.github/workflows/deploy-mcp.yml`), uruchamiany z `main`; `ref` to wyłącznie `main` albo pełny SHA commita zawartego w `main`:
 
 ```powershell
-gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=<branch> -f dry_run=true
-gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=<branch> -f dry_run=false
+gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=main -f dry_run=true
+gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=main -f dry_run=false
 ```
 
-Workflow używa tych samych sekretów SSH/DB/Discord co `alphavault.pl`, uruchamia `composer install` i `scripts/deploy-mcp.sh`, wykonuje migrację, klucze OAuth, health check i nie dotyka innych domen. Deploy jest poprawny dopiero po zielonym runie, health checku `https://mcp.alphavault.pl/health` i discovery `/.well-known/oauth-protected-resource`.
+Preflight bez sekretów wymaga zielonego `ci.yml` dla dokładnego SHA (`push` na `main`); job wdrożeniowy checkoutuje tylko zweryfikowany SHA. Workflow używa tych samych sekretów SSH/DB/Discord co `alphavault.pl`, uruchamia `composer install` i `scripts/deploy-mcp.sh`, wykonuje migrację, klucze OAuth, health check i nie dotyka innych domen. Konfiguracja zawiera `MCP_BUILD_SHA`; `/health.revision` musi odpowiadać zatwierdzonemu SHA, a health check potwierdza DB i liczbę narzędzi. Deploy jest poprawny dopiero po zielonym runie, health checku `https://mcp.alphavault.pl/health` i discovery `/.well-known/oauth-protected-resource`. `dry_run=true` nie zapisuje zdalnych katalogów ani `.htaccess`.
 
 MCP 3.2: jedno połączenie OAuth z `alphavault.read` daje od razu wszystkie 79 narzędzi — 46 odczytu i 33 zapisu. Nie ma zakresu `alphavault.write` ani reconnectu po wdrożeniu. Wszystkie 30 operacji zapisu działa bezpośrednio (transakcje, recenzje, setupy, plan, check-in, screen, usunięcia, konta, wpłaty/wypłaty, reguły ryzyka, prop, zatwierdzenie planu, kosz); usunięcia są miękkie (`state.trash[]` + `restore_deleted_record`). 3 narzędzia obsługują opcjonalne propozycje z diffem (`propose_change`, `approve_proposal`, `reject_proposal`); `approve_proposal` wymaga `confirmed: true` tylko w tej ścieżce. Produkcja: `writes_enabled=true` jest domyślne; `pilot_discord_ids` opcjonalnie zawęża zapis, a puste = wszyscy. `reject_proposal` nie zmienia danych. Dane zdrowotne wymagają osobnego zakresu `alphavault.health` i zgody na ekranie OAuth.
 

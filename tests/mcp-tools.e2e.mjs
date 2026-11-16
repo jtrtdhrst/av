@@ -34,6 +34,7 @@ const LOCAL_ENV = {
   MCP_PUBLIC_KEY_PATH: path.join(ROOT, 'tests', 'mcp-keys', 'oauth-public.pem'),
   MCP_ENCRYPTION_KEY_PATH: path.join(ROOT, 'tests', 'mcp-keys', 'oauth-encryption.key'),
   MCP_LOG_FILE: path.join(ROOT, 'tests', 'mcp.log'),
+  MCP_BUILD_SHA: '0123456789abcdef0123456789abcdef01234567',
 };
 
 const dayKey = (offset = 0) =>
@@ -138,8 +139,9 @@ async function token(client, auth) {
 }
 
 let rpcId = 1;
+const successfulToolCalls = new Set();
 async function rpc(tokenValue, method, params = {}) {
-  return req('/mcp', {
+  const response = await req('/mcp', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -148,6 +150,13 @@ async function rpc(tokenValue, method, params = {}) {
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }),
   });
+  if (method === 'tools/call'
+    && !response.json?.error
+    && response.json?.result
+    && response.json.result.isError !== true) {
+    successfulToolCalls.add(String(params.name ?? ''));
+  }
+  return response;
 }
 
 async function call(tokenValue, name, args = {}) {
@@ -195,6 +204,43 @@ async function main() {
     ['alphavault.health', 'alphavault.read']
   );
   const at = tokA.access_token;
+  const health = await req('/health');
+  assert.equal(health.res.status, 200, health.text);
+  assert.equal(health.json.revision, LOCAL_ENV.MCP_BUILD_SHA);
+  assert.equal(health.json.mcp.tools, 79);
+  const toolList = await rpc(at, 'tools/list', {});
+  assert.equal(toolList.res.status, 200, toolList.text);
+  const registered = toolList.json.result.tools;
+  const registeredNames = registered.map((tool) => tool.name);
+  assert.equal(registeredNames.length, 79);
+  assert.equal(new Set(registeredNames).size, 79, 'rejestr MCP zawiera duplikaty nazw');
+  assert.equal(registered.filter((tool) => tool.annotations?.readOnlyHint === true).length, 46);
+  assert.equal(registered.filter((tool) => tool.annotations?.readOnlyHint === false).length, 33);
+
+  const profile = await call(at, 'get_profile', {});
+  assert.equal(profile.id, 'av_' + a.userId);
+  const connections = await call(at, 'get_connection_status', {});
+  assert.ok(Array.isArray(connections.connections));
+
+  const eventFrom = dayKey(1);
+  const eventTo = dayKey(4);
+  const eventPage1 = await call(at, 'get_events', {
+    from: eventFrom, to: eventTo, limit: 2, offset: 0,
+  });
+  assert.equal(eventPage1.total, 3, JSON.stringify(eventPage1));
+  assert.equal(eventPage1.returnedCount, 2);
+  assert.equal(eventPage1.nextOffset, 2);
+  assert.deepEqual(eventPage1.events.map((event) => event.id), ['mcp-e2e-001', 'mcp-e2e-002']);
+  assert.match(eventPage1.events[0].endLocal, /T\d{2}:\d{2}:45[+-]\d{2}:\d{2}$/);
+  assert.equal(Date.parse(eventPage1.events[0].endLocal), Date.parse(eventPage1.events[0].endAt));
+  const eventPage2 = await call(at, 'get_events', {
+    from: eventFrom, to: eventTo, limit: 2, offset: 2,
+  });
+  assert.equal(eventPage2.total, 3);
+  assert.equal(eventPage2.returnedCount, 1);
+  assert.equal(eventPage2.nextOffset, null);
+  assert.deepEqual(eventPage2.events.map((event) => event.id), ['mcp-e2e-003']);
+  await expectToolError(at, 'get_events', { from: eventTo, to: eventFrom }, /późniejs/);
 
   // =================================================================
   // 1. Plan dnia
@@ -522,6 +568,26 @@ async function main() {
   assert.equal(macroList.returnedCount, macroList.items.length);
   assert.ok(macroList.matchedCount >= macroList.returnedCount);
   assert.ok(macroList.storedCount >= macroList.matchedCount);
+  const sameDayMacro = await call(at, 'get_macro_calendar', { from: TODAY, to: TODAY, limit: 100 });
+  const sameDayFixture = sameDayMacro.items.find((item) => item.externalId === 'mcp-e2e-date-boundary');
+  assert.ok(sameDayFixture, 'zakres makro YYYY-MM-DD powinien objąć cały warszawski dzień');
+  assert.match(sameDayFixture.startLocal, /T14:30:00[+-]\d{2}:\d{2}$/);
+  const exactMacro = await call(at, 'get_macro_calendar', {
+    from: sameDayFixture.startAt, to: sameDayFixture.startAt, limit: 100,
+  });
+  assert.ok(exactMacro.items.some((item) => item.externalId === 'mcp-e2e-date-boundary'));
+  const sameDayContext = await call(at, 'get_day_plan_context', { date: TODAY });
+  assert.ok(sameDayContext.macro.some((item) => item.externalId === 'mcp-e2e-date-boundary'));
+  const autumnDstMacro = await call(at, 'get_macro_calendar', {
+    from: '2026-10-25', to: '2026-10-25', limit: 100, includePast: true,
+  });
+  assert.ok(autumnDstMacro.items.some((item) => item.externalId === 'mcp-e2e-dst-autumn'));
+  const springDstMacro = await call(at, 'get_macro_calendar', {
+    from: '2027-03-28', to: '2027-03-28', limit: 100, includePast: true,
+  });
+  assert.ok(springDstMacro.items.some((item) => item.externalId === 'mcp-e2e-dst-spring-late'));
+  assert.equal(springDstMacro.items.some((item) => item.externalId === 'mcp-e2e-dst-spring-next-day'), false);
+  await expectToolError(at, 'get_macro_calendar', { from: dayKey(1), to: TODAY }, /późniejs/);
   const macroDetails = await call(at, 'get_macro_event_details', { eventId: macroList.items[0].id });
   assert.equal(macroDetails.found, true);
   assert.equal(macroDetails.event.actual, null);
@@ -646,6 +712,19 @@ async function main() {
   assert.equal(tradeResult.record.result, null);
   assert.equal(stateA().trades.length, tradesBefore + 1, 'zapis bezpośredni musi zmienić stan');
   const tradeId = tradeResult.record.id;
+  const offsetTrade = await call(at, 'create_trade', {
+    pair: 'E2E/OFFSET', dir: 'long', entry: 100, size: 1, sl: 99,
+    date: '2026-03-29T00:30:00+01:00', idempotencyKey: idem('trade-offset'),
+  });
+  assert.equal(offsetTrade.record.date, '2026-03-28T23:30:00.000Z');
+  const offsetTradeRead = await call(at, 'get_trade', { id: offsetTrade.record.id });
+  assert.equal(offsetTradeRead.found, true);
+  assert.equal(offsetTradeRead.trade.localDate, '2026-03-29');
+  assert.equal(offsetTradeRead.trade.localTime, '00:30');
+  await expectToolError(at, 'create_trade', {
+    pair: 'E2E/RELATIVE-DATE', dir: 'long', entry: 100, size: 1,
+    date: 'tomorrow', idempotencyKey: idem('trade-relative-date'),
+  }, /data transakcji/i);
 
   const readTrade = await call(at, 'get_trade', { id: tradeId });
   assert.equal(readTrade.found, true);
@@ -653,12 +732,14 @@ async function main() {
   assert.equal(readTrade.trade.grade, 'B');
 
   const tradeUpdate = await call(at, 'update_trade', {
-    tradeId, expectedRevision: tradeResult.revision,
-    changes: { note: 'Poprawiona notatka', grade: 'A', setup: 'Pullback w trendzie' },
+    tradeId, expectedRevision: offsetTrade.revision,
+    changes: { note: 'Poprawiona notatka', grade: 'A', setup: 'Pullback w trendzie', emotion: 'Skupienie' },
     idempotencyKey: idem('trade-update'),
   });
   for (const field of ['grade', 'note', 'setup']) assert.ok(tradeUpdate.changes.includes(field), `${field} w diffie`);
   assert.equal(stateA().trades.find((row) => row.id === tradeId).note, 'Poprawiona notatka');
+  assert.equal(stateA().trades.find((row) => row.id === tradeId).emotion, 'Skupienie');
+  assert.match(stateA().trades.find((row) => row.id === tradeId).mentor, /Checklista niepełna \(5\/7\)/);
 
   await expectToolError(at, 'update_trade', {
     tradeId: 'ex1', changes: { entry: 1 }, idempotencyKey: idem('trade-update-ex'),
@@ -669,6 +750,15 @@ async function main() {
   await expectToolError(at, 'update_trade', {
     tradeId, changes: { nieznanePole: 1 }, idempotencyKey: idem('trade-update-field'),
   }, /edytowalne/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { result: null }, idempotencyKey: idem('trade-update-result'),
+  }, /edytowalne/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { exit: '105' }, idempotencyKey: idem('trade-update-exit'),
+  }, /edytowalne/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { emotion: 'Nieznana' }, idempotencyKey: idem('trade-update-emotion'),
+  }, /emocja/i);
 
   const closed = await call(at, 'close_trade', {
     tradeId, exitPrice: 110, comment: 'Zamknięcie wg planu', idempotencyKey: idem('trade-close'),
@@ -676,6 +766,20 @@ async function main() {
   assert.equal(closed.applied, 'direct');
   assert.equal(closed.record.result, 20);
   assert.equal(closed.record.r, 2);
+  assert.equal(closed.record.exit, '110');
+  assert.match(closed.record.closedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { result: null }, idempotencyKey: idem('trade-reopen'),
+  }, /edytowalne/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { entry: 101 }, idempotencyKey: idem('trade-closed-entry'),
+  }, /zamkniętej transakcji/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { session: 'Asia' }, idempotencyKey: idem('trade-closed-session'),
+  }, /zamkniętej transakcji/i);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { plan: false }, idempotencyKey: idem('trade-closed-plan'),
+  }, /zamkniętej transakcji/i);
   await expectToolError(at, 'close_trade', {
     tradeId, exitPrice: 111, idempotencyKey: idem('trade-close-repeat'),
   }, /zamkni/i);
@@ -799,6 +903,8 @@ async function main() {
   assert.equal(checkin.record.score, 77);
   const checkinHistory = await call(at, 'get_checkin_history', { limit: 60 });
   assert.equal(checkinHistory.items.find((row) => row.date === checkinDate).score, 77);
+  await expectToolError(at, 'get_checkin_history', { from: TODAY, to: WEEK_AGO }, /późniejs/);
+  await expectToolError(at, 'list_trades', { from: TODAY, to: WEEK_AGO }, /późniejs/);
 
   const checkinUpdate = await call(at, 'update_checkin', {
     date: checkinDate, changes: { mood: 'Spokój', energy: 3 }, idempotencyKey: idem('checkin-update'),
@@ -896,6 +1002,7 @@ async function main() {
     tradeId: excludedTradeId, exitPrice: 100, idempotencyKey: idem('excluded-trade-close'),
   });
   assert.equal(breakEven.record.result, 0);
+  assert.match(breakEven.record.closedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   assert.match(breakEven.record.mentor, /zero \(break-even\)/);
   assert.doesNotMatch(breakEven.record.mentor, /zyskiem|minusie/i);
   assert.equal((await call(at, 'get_trade', { id: excludedTradeId })).trade.result, 0);
@@ -1017,6 +1124,8 @@ async function main() {
   });
   assert.equal(gateProposal.applied, 'proposal', JSON.stringify(gateProposal).slice(0, 250));
   assert.equal(gateProposal.status, 'pending');
+  const pendingProposals = await call(at, 'list_pending_proposals', {});
+  assert.ok(pendingProposals.items.some((row) => row.proposalId === gateProposal.proposalId && row.status === 'pending'));
   await expectToolError(at, 'approve_proposal', {
     proposalId: gateProposal.proposalId, expectedDiffHash: 'a'.repeat(64),
     confirmed: true, idempotencyKey: idem('gate-hash'),
@@ -1178,6 +1287,13 @@ async function main() {
     wf6Stats.trades
   );
 
+  const missingTools = registeredNames.filter((name) => !successfulToolCalls.has(name));
+  const unexpectedTools = [...successfulToolCalls].filter((name) => !registeredNames.includes(name));
+  assert.deepEqual(
+    { missing: missingTools, unexpected: unexpectedTools },
+    { missing: [], unexpected: [] },
+    'każde zarejestrowane narzędzie MCP musi mieć udane wywołanie w E2E'
+  );
   console.log('MCP tools E2E PASS');
 }
 
@@ -1211,17 +1327,49 @@ async function stopServer() {
   await new Promise((resolve) => setTimeout(resolve, 400));
 }
 
-runPhp(path.join(ROOT, 'tests', 'seed-mcp.php'));
-runPhp(path.join(ROOT, 'tests', 'mcp-user-service.php'));
+const environmentGuard = spawnSync(PHP, [...PHP_ARGS, path.join(ROOT, 'tests', 'mcp-helper.php'), 'assert-test-environment'], {
+  cwd: ROOT,
+  env: { ...process.env, ALPHA_VAULT_CONFIG: CONFIG, ...LOCAL_ENV },
+  encoding: 'utf8',
+});
+assert.equal(environmentGuard.status, 0, `${environmentGuard.stdout}\n${environmentGuard.stderr}`);
+const blockedOutsideCi = spawnSync(PHP, [...PHP_ARGS, path.join(ROOT, 'tests', 'mcp-helper.php'), 'assert-test-environment'], {
+  cwd: ROOT,
+  env: { ...process.env, ALPHA_VAULT_CONFIG: CONFIG, ...LOCAL_ENV, CI: 'false' },
+  encoding: 'utf8',
+});
+assert.notEqual(blockedOutsideCi.status, 0, 'fixture helper must fail closed outside GitHub Actions CI');
+assert.match(
+  `${blockedOutsideCi.stdout}\n${blockedOutsideCi.stderr}`,
+  /isolated GitHub Actions CI database/i
+);
+const spoofedCi = spawnSync(PHP, [...PHP_ARGS, path.join(ROOT, 'tests', 'mcp-helper.php'), 'assert-test-environment'], {
+  cwd: ROOT,
+  env: { ...process.env, ALPHA_VAULT_CONFIG: CONFIG, ...LOCAL_ENV, CI: 'true', GITHUB_ACTIONS: 'false' },
+  encoding: 'utf8',
+});
+assert.notEqual(spoofedCi.status, 0, 'CI=true alone must not authorize fixture database access');
+assert.match(`${spoofedCi.stdout}\n${spoofedCi.stderr}`, /isolated GitHub Actions CI database/i);
 
 try {
+  runPhp(path.join(ROOT, 'tests', 'seed-mcp.php'));
+  runPhp(path.join(ROOT, 'tests', 'mcp-user-service.php'));
+  runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['seed-events']);
+  runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['seed-macro', TODAY]);
   await startServer();
   await main();
 } catch (err) {
   console.error(serverLog);
   throw err;
 } finally {
-  await stopServer();
-  if (fs.existsSync(PATCH_FILE)) fs.unlinkSync(PATCH_FILE);
-  runPhp(path.join(ROOT, 'tests', 'cleanup-mcp.php'));
+  try {
+    await stopServer();
+  } finally {
+    if (fs.existsSync(PATCH_FILE)) fs.unlinkSync(PATCH_FILE);
+    try {
+      runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['cleanup-events']);
+    } finally {
+      runPhp(path.join(ROOT, 'tests', 'cleanup-mcp.php'));
+    }
+  }
 }

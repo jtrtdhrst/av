@@ -117,6 +117,9 @@ jobs:
           ALPHA_VAULT_CONFIG: tests/config.test.json
         run: php tests/mcp-migration-upgrade.test.php
 
+      - name: MCP deploy provenance guard
+        run: node tests/deploy-mcp-guard.test.mjs
+
       - name: Role recheck tests
         env:
           ALPHA_VAULT_CONFIG: tests/config.test.json

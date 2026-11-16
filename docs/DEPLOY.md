@@ -336,13 +336,26 @@ Plik `integrations/mt5/AlphaVault.mq5` kompiluje się w MetaEditorze. Wymaga:
 
 - Osobny front controller: `mcp/public/index.php`; aplikacja w `~/public_html/mcp.alphavault.pl/.app`.
 - Wdrożenie wyłącznie przez GitHub Actions: workflow `Deploy AlphaVault MCP` (`.github/workflows/deploy-mcp.yml`).
-- Uruchomienie z `main` z refem do wdrożenia:
+- Uruchomienie wyłącznie z `main`; `ref` może wskazywać `main` albo pełny SHA
+  commita zawartego w `main`:
 
   ```powershell
-  gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=<branch> -f dry_run=true
-  gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=<branch> -f dry_run=false
+  gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=main -f dry_run=true
+  gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main -f ref=main -f dry_run=false
   ```
 
+- Preflight bez dostępu do sekretów rozwiązuje ref do pełnego SHA, wymaga
+  repozytorium `miloszspyrka-code/av` i
+  udanego `ci.yml` dla dokładnego SHA z `event=push` na `main`. PR-only,
+  ręczne CI dispatch, branch/tag niezawarty w `main` lub SHA bez zielonego CI
+  blokują wdrożenie. Job chroniony checkoutuje wyłącznie zweryfikowany SHA.
+- SHA jest przekazywany do `MCP_BUILD_SHA` w `.app/config.json`; publiczne
+  `/health` zwraca `revision`. Health check porównuje rewizję z SHA z preflightu,
+  sprawdza `db.ok` i liczbę narzędzi (`79` przy zapisie, `46` bez zapisu).
+  `revision` identyfikuje zadeklarowany commit, ale nie jest kryptograficzną
+  atestacją integralności plików runtime.
+- `dry_run=true` wykonuje odczytowe połączenie SSH i symulację rsync, ale nie
+  tworzy zdalnych katalogów ani nie zapisuje `.htaccess`.
 - MCP 2.0 używa Composer (`league/oauth2-server`, `mcp/sdk`); deploy uruchamia `composer install`, jeśli `vendor/autoload.php` nie istnieje na runnerze.
 - Migracje MCP są addytywne: `db/schema.sql` tworzy tabele `mcp_*`, `db/migrations/20261114_mcp2.sql` dodaje `payload_hash` propozycji i rozszerza `mcp_proposals.kind`, `db/migrations/20261115_mcp_approval.sql` dodaje `diff_hash` oraz kolumny kodu jednorazowego i idempotencji decyzji, a `db/migrations/20261116_mcp_idempotency_fingerprints.sql` dodaje fingerprinty i ustawia klucze idempotencji jako case-sensitive. Stare bezpośrednie wpisy bez fingerprintu pozostają odrzucane do wygaśnięcia TTL; stare decyzje propozycji są odtwarzane tylko po zgodności statusu, diffu i użytego kodu.
 - CI odtwarza schemat sprzed migracji 20261116, wykonuje upgrade i ponawia migrator, aby sprawdzić kolumny i collation na ścieżce aktualizacji istniejącej bazy.
@@ -350,6 +363,6 @@ Plik `integrations/mt5/AlphaVault.mq5` kompiluje się w MetaEditorze. Wymaga:
 - Wszystkie 30 operacji zapisu działa bezpośrednio; usunięcia są miękkie (kosz + `restore_deleted_record`). 3 narzędzia obsługują opcjonalne propozycje (`propose_change`, `approve_proposal`, `reject_proposal`). Kod z panelu (`POST /api/mcp/proposals/{id}/approval-code`) jest opcjonalny.
 - `MCP_PILOT_DISCORD_IDS` (CSV) opcjonalnie ogranicza zapis do wybranych kont Discord; puste = wszyscy z `alphavault.read`. Allowlista jest egzekwowana przy każdym wywołaniu zapisu.
 - Workflow sprawdza sekrety, uruchamia `php -l` i `scripts/deploy-mcp.sh`: backup, rsync, migracja, klucze OAuth, health check.
-- `writes_enabled` domyślnie `true`; `false` wyłącza 33 narzędzia zapisu. Health check wymaga `tools=79` i `writesEnabled=true` przy włączonym zapisie oraz braku `alphavault.write` w metadanych OAuth.
+- `writes_enabled` domyślnie `true`; `false` wyłącza 33 narzędzia zapisu. Health check wymaga zgodności `revision`, właściwej liczby narzędzi i `writesEnabled` zgodnego z inputem, poprawnej bazy oraz braku `alphavault.write` w metadanych OAuth.
 - Workflow nie dotyka `alphavault.pl` ani WordPressa; environment `alphavault-production`.
 - Diagnostyka: workflow `MCP logs` (`mcp-logs.yml`) wypisuje ostatnie linie `.app/logs/mcp.log` i `php-error.log`; uruchamiaj z `main`.
