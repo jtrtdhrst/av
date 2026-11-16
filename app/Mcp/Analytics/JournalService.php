@@ -45,13 +45,16 @@ final class JournalService
                 'review' => null,
                 'trade' => $this->trades->sanitize($trade, false),
                 'reason' => 'review_not_created',
-                'hint' => 'Recenzji nie ma w dzienniku. Możesz przygotować propozycję recenzji (propose_trade_review) albo update_trade_proposal dla pól dziennika.',
+                'hint' => 'Recenzji nie ma w dzienniku. Na wyraźną prośbę użytkownika użyj create_trade_review. Podgląd zmian bez zapisu: propose_change(operation=review.create). Pola dziennika edytuje update_trade.',
             ];
         }
         $dateKey = Dates::dateKey((string) ($trade['date'] ?? ''));
         $plan = $dateKey !== null ? $this->plans->planFor($state, $dateKey) : null;
         $compliance = $this->plans->alignment($state, $trade, $plan);
-        $setupName = (string) ($review['setup'] ?? ($trade['setup'] ?? ''));
+        $reviewSetupName = trim((string) ($review['setup'] ?? ''));
+        $tradeSetupName = trim((string) ($trade['setup'] ?? ''));
+        // Pusta wartość w recenzji nie może ukryć setupu zapisanego przy transakcji.
+        $setupName = $reviewSetupName !== '' ? $reviewSetupName : $tradeSetupName;
         $setup = $setupName !== '' ? $this->setups->find($state, $setupName) : null;
 
         return [
@@ -72,8 +75,11 @@ final class JournalService
             'setupCompliance' => [
                 'tradeSetup' => $trade['setup'] ?? null,
                 'reviewSetup' => $review['setup'] ?? null,
+                'effectiveSetup' => $setupName !== '' ? $setupName : null,
+                'setupSource' => $reviewSetupName !== '' ? 'review' : ($tradeSetupName !== '' ? 'trade' : 'none'),
                 'setupExists' => $setup !== null,
-                'matchesTrade' => $setupName !== '' && (string) ($trade['setup'] ?? '') === $setupName,
+                // Brak setupu w recenzji to brak potwierdzenia, nie automatyczna zgodność.
+                'matchesTrade' => $reviewSetupName !== '' && $tradeSetupName !== '' && $reviewSetupName === $tradeSetupName,
                 'rules' => $setup !== null ? array_values(array_map('strval', is_array($setup['rules'] ?? null) ? $setup['rules'] : [])) : [],
             ],
             'recommendations' => $this->recommendationsFromReview($review),
@@ -226,7 +232,7 @@ final class JournalService
             'checklistCompleted' => $checklist,
             'errorsCount' => count($errors),
             'assessment' => match ($grade) {
-                'A' => 'Decyzja zgodna z planem i checklistą.',
+                'A' => 'Ocena A w zapisanej recenzji; zgodność z planem wymaga osobnej weryfikacji w planCompliance.',
                 'B' => 'Decyzja poprawna, ale z lukami w wykonaniu.',
                 'C' => 'Decyzja poza regułami; wpis wymaga analizy.',
                 default => null,
