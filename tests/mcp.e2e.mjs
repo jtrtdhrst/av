@@ -442,6 +442,7 @@ async function mainWrites() {
   const deleteProposal = await call(tok.access_token, 'delete_trade', {
     tradeId, idempotencyKey: 'idem-e2e-' + crypto.randomBytes(8).toString('hex'),
   });
+  assert.ok(deleteProposal.json?.result, 'delete_trade: ' + deleteProposal.text);
   const deleteBody = deleteProposal.json.result.structuredContent;
   assert.equal(deleteBody.applied, 'proposal', deleteProposal.text);
   assert.equal(deleteBody.status, 'pending');
