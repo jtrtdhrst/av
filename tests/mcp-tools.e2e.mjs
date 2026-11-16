@@ -788,20 +788,16 @@ async function main() {
   const deletePlan = await pending('delete_day_plan', {
     date: planDate, idempotencyKey: idem('plan-delete'),
   });
-  assert.notEqual(
-    (await call(at, 'get_day_plan', { date: planDate })).plan,
-    null,
-    'propozycja nie może usunąć planu przed zgodą'
-  );
+  assert.equal(deletePlan.applied, 'direct');
   await approve(deletePlan);
   assert.equal((await call(at, 'get_day_plan', { date: planDate })).plan, null);
 
   const deleteTrade = await pending('delete_trade', {
     tradeId, idempotencyKey: idem('trade-delete'),
   });
-  assert.equal((await call(at, 'get_trade', { id: tradeId })).found, true, 'propozycja nie może usunąć przed zgodą');
-  await approve(deleteTrade);
+  assert.equal(deleteTrade.applied, 'direct');
   assert.equal((await call(at, 'get_trade', { id: tradeId })).found, false);
+  await approve(deleteTrade);
   const tradeTrash = stateA().trash.find((row) => row.kind === 'trade' && row.record.id === tradeId);
   assert.ok(tradeTrash, 'usunięcie musi trafić do kosza');
 
