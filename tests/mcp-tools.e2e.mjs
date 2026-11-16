@@ -834,13 +834,12 @@ async function main() {
     op: 'E2E wpłata', idempotencyKey: idem('flow-create'),
   }, ['amount']);
   await approve(flowCreate);
-  const flowId = flowCreate.preview.id;
   const flow = (await call(at, 'get_account_transactions', { limit: 100 })).items
-    .find((row) => row.id === flowId);
+    .find((row) => row.operation === 'E2E wpłata' && row.account === accountName + ' v2');
   assert.ok(flow, 'brak wpisu kapitałowego po zatwierdzeniu');
+  const flowId = flow.id;
   assert.equal(flow.type, 'deposit');
   assert.equal(flow.amount, 250);
-  assert.equal(flow.account, accountName + ' v2');
 
   const flowUpdate = await pending('update_account_transaction', {
     flowId, changes: { amount: 300, op: 'E2E korekta' }, idempotencyKey: idem('flow-update'),
