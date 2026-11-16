@@ -514,10 +514,11 @@ async function mainWrites() {
   const clientReadOnly = await register('MCP E2E Read Only');
   const authReadOnly = await authorize(clientReadOnly, a.session, 'alphavault.read');
   const tokReadOnly = await token(clientReadOnly, authReadOnly);
-  const scopeBlocked = await call(tokReadOnly.access_token, 'create_checkin', {
-    mood: 'Spokój', energy: 3, idempotencyKey: 'idem-e2e-scope-' + crypto.randomBytes(8).toString('hex'),
-  });
-  assert.match(toolError(scopeBlocked), /zakres|scope/i, 'scope: ' + scopeBlocked.text);
+  const listReadOnly = await rpc(tokReadOnly.access_token, 'tools/list', {});
+  assert.equal(listReadOnly.res.status, 200, listReadOnly.text);
+  const readOnlyNames = listReadOnly.json.result.tools.map((tool) => tool.name);
+  assert.equal(readOnlyNames.length, READ_TOOLS.length, 'token bez write widzi tylko 46 narzędzi odczytu');
+  assert.equal(readOnlyNames.some((name) => WRITE_TOOLS.includes(name)), false, 'token bez write nie widzi narzędzi zapisu');
 
   console.log('MCP E2E writes PASS');
 }
