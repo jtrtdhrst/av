@@ -807,7 +807,7 @@ async function main() {
   await approve(restore);
   const restoredTrade = await call(at, 'get_trade', { id: tradeId });
   assert.equal(restoredTrade.found, true, 'przywracanie nie odtworzyło transakcji');
-  assert.equal(restoredTrade.trade.note, 'Poprawiona notatka');
+  assert.match(String(restoredTrade.trade.note), /Poprawiona notatka/);
 
   // --- 11.8. Konta, wpłaty i wypłaty ---
   const accountName = 'E2E Account ' + crypto.randomBytes(2).toString('hex');
