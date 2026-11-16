@@ -68,7 +68,11 @@ jobs:
             const { assertMcpDeployContext, validateMcpDeploy } = await import(
               `file://${process.env.GITHUB_WORKSPACE}/scripts/validate-mcp-deploy.mjs`
             );
-            assertMcpDeployContext(context);
+            assertMcpDeployContext({
+              ref: context.ref,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
             const deploySha = await validateMcpDeploy({
               github,
               owner: context.repo.owner,

@@ -170,7 +170,15 @@ assert.match(validateJob, /^    permissions:\r?\n      contents: read\r?\n      
 assert.match(deployJob, /^    permissions:\r?\n      contents: read$/m);
 
 const validateScript = validateJob.match(/^          script: \|\r?\n([\s\S]*)$/m)?.[1] ?? '';
-assert.match(validateScript, /assertMcpDeployContext\(context\)/);
+assert.doesNotMatch(
+  validateScript,
+  /assertMcpDeployContext\(context\)/,
+  'github context must be mapped to flat fields before validation'
+);
+assert.match(
+  validateScript,
+  /assertMcpDeployContext\(\{\s*ref: context\.ref,\s*owner: context\.repo\.owner,\s*repo: context\.repo\.repo,?\s*\}\)/
+);
 assert.match(validateScript, /validateMcpDeploy\(/);
 assert.match(deployJob, /ref: \$\{\{ needs\.validate\.outputs\.deploy_sha \}\}/);
 assert.match(deployJob, /MCP_BUILD_SHA: \$\{\{ needs\.validate\.outputs\.deploy_sha \}\}/);
