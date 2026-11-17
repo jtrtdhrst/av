@@ -1094,7 +1094,7 @@ try {
   log('nowa transakcja: checklista 0 i brak oceny', emptyForm.checklist === '0/7' && emptyForm.grades === 0, emptyForm.checklist + ' / ' + emptyForm.grades);
   log('nowa transakcja: limit i ryzyko osobno', emptyForm.risk.includes('Limit') && emptyForm.risk.includes('Ryzyko'), emptyForm.risk.slice(0, 100));
 
-  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+  await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
   const manualSlChecklist = await page.evaluate(() => {
     const checkedAfterClick = AV.ui.ntChecks['SL przed wejściem'] === true;
     AV.renderChecklist();
@@ -1111,7 +1111,7 @@ try {
       manualSlChecklist.checkedInList && !manualSlChecklist.hasAutoLabel,
     JSON.stringify(manualSlChecklist)
   );
-  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+  await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
 
   const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
   await page.evaluate(() => {
