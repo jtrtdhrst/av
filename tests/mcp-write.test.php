@@ -853,6 +853,16 @@ $screenDiff = RecordDiff::stateBetween(
     ['trades' => [['id' => 'screen-diff', 'screens' => ['before' => 'data:image/png;base64,AAEC']]]],
     ['trades' => [['id' => 'screen-diff', 'screens' => ['before' => 'data:image/png;base64,AQID']]]]
 );
+$orderedScreenSummary = RecordDiff::redactValue([
+    'screens' => ['before' => 'data:image/png;base64,AAEC', 'after' => 'data:image/png;base64,AQID'],
+])['screens'];
+$reorderedScreenSummary = RecordDiff::redactValue([
+    'screens' => ['after' => 'data:image/png;base64,AQID', 'before' => 'data:image/png;base64,AAEC'],
+])['screens'];
+check(
+    'Screen summary: hash nie zależy od kolejności kluczy mapy',
+    ($orderedScreenSummary['sha256'] ?? null) === ($reorderedScreenSummary['sha256'] ?? null)
+);
 check(
     'State diff: screen ma tylko hash i rozmiar, bez payloadu base64',
     count($screenDiff) === 1

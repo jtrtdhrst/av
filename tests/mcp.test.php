@@ -567,12 +567,89 @@ try {
         $userB
     );
     $sparseAfter = $db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ?', [$userB]);
+    $sparsePersistedState = json_decode((string) $sparseAfter['state'], true);
     check(
         '14b. MCP no-op na rzadkim stanie nie dopisuje kontenerów ani rewizji',
         (int) $noOpWrite['revision'] === 1
         && $noOpWrite['changes'] === []
         && (int) $sparseAfter['revision'] === 1
-        && json_decode((string) $sparseAfter['state'], true) === $sparseState
+        && is_array($sparsePersistedState)
+        && \AlphaVault\Mcp\Support\RecordDiff::sameValue($sparsePersistedState, $sparseState)
+    );
+
+    // 14c. Zatwierdzenie screenów po round-trip mapy kluczy przez MySQL JSON.
+    $screenBefore = 'data:image/png;base64,AAEC';
+    $screenAfter = 'data:image/png;base64,AQID';
+    $screenTradeId = 'write-op-screen-order';
+    $screenState = ['trades' => [[
+        'id' => $screenTradeId,
+        'pair' => 'BTC/USDT',
+        'dir' => 'l',
+        'entry' => '100',
+        'exit' => 'otwarta',
+        'sl' => '95',
+        'tp' => '110',
+        'size' => '1',
+        'result' => null,
+        'r' => null,
+        'date' => gmdate('c'),
+        'source' => 'Ręcznie',
+        'note' => 'screen order',
+        'screens' => ['before' => $screenBefore],
+    ]]];
+    $screenStateJson = json_encode($screenState, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $db->execute(
+        'UPDATE user_states SET state = ?, revision = 2, bytes = ? WHERE user_id = ?',
+        [$screenStateJson, strlen((string) $screenStateJson), $userB]
+    );
+    $screenArgs = ['tradeId' => $screenTradeId, 'position' => 'after', 'dataUrl' => $screenAfter];
+    $screenEngine = new WriteEngine($db, $config);
+    $screenPreview = $screenEngine->preview($userB, $screenState, 'screenshot.add', $screenArgs);
+    $screenProposal = $service->create(
+        $userB,
+        'test-client',
+        'write_op',
+        $screenPreview['target'],
+        $screenPreview['before'],
+        [
+            'op' => 'screenshot.add',
+            'args' => $screenArgs,
+            'plannedState' => $screenPreview['state'],
+            'plannedPreview' => [
+                'before' => $screenPreview['before'],
+                'after' => $screenPreview['after'],
+                'target' => $screenPreview['target'],
+            ],
+        ],
+        'idem-write-op-screen-order',
+        null,
+        $screenPreview['after'],
+        2,
+        \AlphaVault\Mcp\Support\RecordDiff::stateBetween($screenState, $screenPreview['state'])
+    );
+    $screenCode = $service->issueApprovalCode($userB, $screenProposal['proposalId'])['code'];
+    $screenApproval = $service->approveWithCode(
+        $userB,
+        $screenProposal['proposalId'],
+        $screenProposal['diffHash'],
+        $screenCode,
+        'idem-write-op-screen-decision',
+        'test-client'
+    );
+    $screenSavedRow = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userB]);
+    $screenSavedState = json_decode((string) $screenSavedRow['state'], true);
+    $screenSavedTrade = null;
+    foreach (($screenSavedState['trades'] ?? []) as $trade) {
+        if (($trade['id'] ?? '') === $screenTradeId) {
+            $screenSavedTrade = $trade;
+            break;
+        }
+    }
+    check(
+        '14c. screenshot.add zatwierdza snapshot mimo zmiany kolejności kluczy JSON',
+        ($screenApproval['status'] ?? '') === 'approved'
+        && ($screenSavedTrade['screens']['before'] ?? null) === $screenBefore
+        && ($screenSavedTrade['screens']['after'] ?? null) === $screenAfter
     );
 
     // 15. Wygaśnięcie propozycji.

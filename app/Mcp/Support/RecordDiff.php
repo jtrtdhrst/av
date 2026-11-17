@@ -241,13 +241,29 @@ final class RecordDiff
 
     private static function screenSummary(mixed $value): array
     {
-        $json = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $json = json_encode(self::sortObjectKeys($value), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $json = $json === false ? '' : $json;
 
         return [
             'sha256' => hash('sha256', $json),
             'bytes' => self::screenByteCount($value),
         ];
+    }
+
+    private static function sortObjectKeys(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        if (array_is_list($value)) {
+            return array_map(self::sortObjectKeys(...), $value);
+        }
+        ksort($value, SORT_STRING);
+        foreach ($value as $key => $child) {
+            $value[$key] = self::sortObjectKeys($child);
+        }
+
+        return $value;
     }
 
     private static function screenByteCount(mixed $value): int

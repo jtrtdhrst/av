@@ -215,7 +215,8 @@ Podgląd liczy ta sama funkcja co zapis (`WriteEngine::apply()`). Propozycja
 utrwala wygenerowany podgląd, pełny planowany stan i jego hash; zatwierdzenie
 stosuje ten zamrożony snapshot, nie uruchamia ponownie operacji. `diff` i
 `diffHash` obejmują także skutki uboczne w stanie, a zawartość screenów jest
-reprezentowana wyłącznie przez hash i rozmiar. Zgodna powtórka klucza zwraca
+reprezentowana wyłącznie przez hash i rozmiar; hash mapy screenów nie zależy
+od kolejności kluczy JSON. Zgodna powtórka klucza zwraca
 pierwotny status, diff, hash i podgląd. `revision` rośnie tylko przy realnym
 zapisie. Powtórzenie propozycji `write_op` z tym samym `idempotencyKey`, ale
 innym podanym `expectedRevision` względem jej `baseRevision`, zwraca
