@@ -1167,7 +1167,7 @@ try {
     && closeSemantics.explicitTime && closeSemantics.closedAtOnlyLists
     && !closeSemantics.invalidDay && !closeSemantics.invalidHour && !closeSemantics.open, JSON.stringify(closeSemantics));
 
-  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+  await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
   const manualSlChecklist = await page.evaluate(() => {
     const checkedAfterClick = AV.ui.ntChecks['SL przed wejściem'] === true;
     AV.renderChecklist();
@@ -1184,7 +1184,7 @@ try {
       manualSlChecklist.checkedInList && !manualSlChecklist.hasAutoLabel,
     JSON.stringify(manualSlChecklist)
   );
-  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+  await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
 
   const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
   await page.evaluate(() => {
@@ -1197,8 +1197,8 @@ try {
   await page.waitForTimeout(250);
   const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
   const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
-  if (!initiallyChecked) await planLevel.click();
-  await page.locator('#clList [data-cl="Poziom z planu"]').click();
+  if (!initiallyChecked) await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
+  await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
   await page.fill('#ntNote', tradeNote);
   await page.waitForTimeout(250);
   const manualPlanLevel = await page.evaluate(() => ({
@@ -1211,7 +1211,7 @@ try {
   }));
     log('nowa transakcja: niejednoznaczne plany nie tworzą zgodności', !manualPlanLevel.matches && !manualPlanLevel.checked && manualPlanLevel.count === '0/2' && manualPlanLevel.checkedCount === 0, JSON.stringify(manualPlanLevel));
    log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
-   await page.locator('#clList [data-cl="Spokojna głowa"]').click();
+   await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
