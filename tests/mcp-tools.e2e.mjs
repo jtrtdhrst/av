@@ -825,7 +825,7 @@ async function main() {
   });
   assert.deepEqual(
     tradeUpdate.changes.slice().sort(),
-    ['emotion', 'grade', 'note', 'setup'].sort(),
+    ['emotion', 'grade', 'mae', 'mfe', 'note', 'setup'].sort(),
     'diff transakcji zawiera wyłącznie zmienione pola'
   );
   assert.equal(stateA().trades.find((row) => row.id === tradeId).note, 'Poprawiona notatka');
