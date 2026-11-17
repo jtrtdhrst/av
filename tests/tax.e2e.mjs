@@ -143,6 +143,13 @@ try {
   await page.click('.navg button[data-v="tax"]');
   await page.waitForTimeout(300);
 
+  const taxDiag = await page.evaluate(() => ({
+    trades: (AV.state.trades || []).filter((x) => String(x.date || '').slice(0, 4) === '2026')
+      .map((x) => ({ id: x.id, source: x.source, account: x.account })),
+    forex: AV.taxData(AV.state).forex,
+    isForex: (AV.state.trades || []).filter((x) => x.source === 'MT5').map((x) => AV.isForexTrade(x, AV.state))
+  }));
+  console.log('DIAG tax forex:', JSON.stringify(taxDiag));
   const t = await readTax();
   assert.equal(t.year, 'Podatki · rok 2026');
   assert.equal(t.deadline, '30 kwietnia 2027');
