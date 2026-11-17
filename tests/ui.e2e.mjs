@@ -1694,7 +1694,7 @@ try {
 
   // Przywróć stan demo bezpośrednio w bazie: nowy backend blokuje
   // usuwanie transakcji przez validateTransition przy zwykłym PUT /api/state.
-  execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+  execFileSync('php', [path.join(ROOT, 'restore-api-fixture.php'), String(fixtureUserId)], {
     env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
     input: JSON.stringify({ state: JSON.parse(backup) }),
     stdio: ['pipe', 'pipe', 'pipe']
