@@ -1219,6 +1219,12 @@ try {
    await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
+  const diagView = await page.evaluate(() => ({
+    view: AV.currentView,
+    nowaOn: document.getElementById('nowa')?.classList.contains('on'),
+    entryVisible: !!document.getElementById('ntEntry')?.offsetParent
+  }));
+  log('diag: form view przed wpisem', diagView.nowaOn && diagView.entryVisible, JSON.stringify(diagView));
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
   await page.fill('#ntSize', '1');
