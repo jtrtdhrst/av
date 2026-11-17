@@ -1607,9 +1607,13 @@ try {
     log('zamknięcie nie pokazuje sukcesu po błędzie zapisu',
       rejectedClose.closed === false && rejectedClose.result == null && !!rejectedClose.saveError,
       JSON.stringify(rejectedClose));
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
       AV.apiFetch = AV._testOriginalApiFetch;
       delete AV._testOriginalApiFetch;
+      // The simulated 503 left the local revision behind the server; resync
+      // before retrying so the successful save is not rejected with 409.
+      const response = await AV.apiFetch('/api/state');
+      if (response.ok) AV.api.revision = (await response.json()).revision;
     });
     await page.click('#ctSave');
     await page.waitForFunction((id) => {
