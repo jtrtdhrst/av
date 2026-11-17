@@ -927,7 +927,7 @@ async function main() {
     tradeId, changes: { plan: false }, idempotencyKey: idem('trade-closed-plan'),
   }, /zamkniętej transakcji/i);
   const closeReview = await call(at, 'update_trade', {
-    tradeId, expectedRevision: closed.revision,
+    tradeId, expectedRevision: preservedMfeClosed.revision,
     changes: { grade: 'A', note: 'Recenzja po zamknięciu' },
     idempotencyKey: idem('trade-closed-review'),
   });
