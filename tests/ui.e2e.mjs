@@ -1219,6 +1219,11 @@ try {
   await page.fill('#ntSl', '99');
   await page.click('#saveTrade');
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
+  const lastTradeDiag = await page.evaluate(() => {
+    const t = AV.state.trades[AV.state.trades.length - 1];
+    return { note: t?.note, pair: t?.pair, formNote: document.getElementById('ntNote')?.value };
+  });
+  log('diag: saved trade note', lastTradeDiag.note === tradeNote, JSON.stringify(lastTradeDiag) + ' expected=' + tradeNote);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
     const row = Array.from(document.querySelectorAll('#tbody tr')).find((tr) => tr.dataset.id === id);
