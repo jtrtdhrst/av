@@ -1451,7 +1451,7 @@ try {
   }, tradeNote);
   if (tradeAccount.id) {
     await page.click('.navg button[data-v="ust"]');
-    if (tradeAccount.include) await page.locator(`#accBody [data-acc-inc="${tradeAccount.id}"]`).click();
+    if (tradeAccount.include) await page.evaluate((id) => document.querySelector(`#accBody [data-acc-inc="${id}"]`)?.click(), tradeAccount.id);
      const excluded = await page.evaluate((name) => {
       const account = AV.state.accounts.find((a) => a.name === name);
       return { include: !!account?.include, account: account?.name };
@@ -1511,7 +1511,7 @@ try {
       excludedEmptyState);
     if (tradeAccount.include) {
       await page.click('.navg button[data-v="ust"]');
-      await page.locator(`#accBody [data-acc-inc="${tradeAccount.id}"]`).click();
+      await page.evaluate((id) => document.querySelector(`#accBody [data-acc-inc="${id}"]`)?.click(), tradeAccount.id);
       const restoredAccount = await page.evaluate((name) => AV.state.accounts.find((a) => a.name === name)?.include, tradeAccount.name);
       await page.click('.navg button[data-v="trans"]');
       log('konto: przywrócono przełącznik statystyk po regresji', restoredAccount === true, tradeAccount.name);
@@ -1521,7 +1521,10 @@ try {
   }
   if (addedId) {
     await page.evaluate((id) => AV.closeTradeModal(id), addedId);
+    await page.waitForSelector('#ctExit', { timeout: 10000 });
     await page.fill('#ctExit', '105');
+    const hasResultField = await page.locator('#ctResult').count();
+    if (hasResultField) await page.fill('#ctResult', '5');
     await page.click('#ctSave');
     const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, addedId);
     log('zamknięcie pozycji', closed === 5, String(closed));
