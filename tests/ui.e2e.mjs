@@ -1511,8 +1511,20 @@ try {
       excludedEmptyState);
     if (tradeAccount.include) {
       await page.click('.navg button[data-v="ust"]');
-      await page.evaluate((id) => document.querySelector(`#accBody [data-acc-inc="${id}"]`)?.click(), tradeAccount.id);
-      const restoredAccount = await page.evaluate((name) => AV.state.accounts.find((a) => a.name === name)?.include, tradeAccount.name);
+      await page.waitForSelector(`#accBody [data-acc-inc="${tradeAccount.id}"]`, { timeout: 10000 });
+      const restoredAccount = await page.evaluate((id) => {
+        const selector = `#accBody [data-acc-inc="${id}"]`;
+        const accountId = id;
+        // Toggle until the account is included again (idempotent restore).
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const el = document.querySelector(selector);
+          if (!el) break;
+          const current = AV.state.accounts.find((a) => String(a.id) === String(accountId));
+          if (current?.include) break;
+          el.click();
+        }
+        return AV.state.accounts.find((a) => String(a.id) === String(accountId))?.include;
+      }, tradeAccount.id);
       await page.click('.navg button[data-v="trans"]');
       log('konto: przywrócono przełącznik statystyk po regresji', restoredAccount === true, tradeAccount.name);
     }
@@ -1520,11 +1532,13 @@ try {
     log('dziennik: wpis widoczny przy koncie poza statystykami', false, 'nie znaleziono konta przypisanego do testowej transakcji');
   }
   if (addedId) {
-    // Settle any pending pushes from the account-toggle section so the close
-    // save uses an up-to-date revision and is not reverted on a 409.
+    // Settle pending pushes and resync revision after the account-toggle
+    // section so the close save is not reverted by a stale-revision 409.
     await page.evaluate(async () => {
       clearTimeout(AV._pushTimer);
       await AV.waitForPushIdle();
+      const response = await AV.apiFetch('/api/state');
+      if (response.ok) AV.api.revision = (await response.json()).revision;
     });
     await page.evaluate((id) => AV.closeTradeModal(id), addedId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
