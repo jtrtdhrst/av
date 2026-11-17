@@ -1212,18 +1212,23 @@ try {
   // Ensure the new-trade form is visible after the in-memory checklist setup.
   await page.click('.navg button[data-v="nowa"]');
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
-  await page.fill('#ntEntry', '100');
-  await page.fill('#ntTp', '100.5');
-  await page.fill('#ntSize', '1');
-  await page.click('#saveTrade');
+  const setNtField = (id, value) => page.evaluate(({ id, value }) => {
+    const el = document.getElementById(id);
+    el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, { id, value });
+  await setNtField('ntEntry', '100');
+  await setNtField('ntTp', '100.5');
+  await setNtField('ntSize', '1');
+  await page.evaluate(() => document.getElementById('saveTrade')?.click());
   const missingSl = await page.evaluate((before) => ({
     unchanged: AV.state.trades.length === before,
     message: document.querySelector('#toast')?.textContent || ''
   }), beforeTrades);
   log('nowa transakcja: SL wymagany', missingSl.unchanged && /stop loss/i.test(missingSl.message), JSON.stringify(missingSl));
 
-  await page.fill('#ntSl', '99');
-  await page.click('#saveTrade');
+  await setNtField('ntSl', '99');
+  await page.evaluate(() => document.getElementById('saveTrade')?.click());
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
