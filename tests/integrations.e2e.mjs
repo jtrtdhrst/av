@@ -387,7 +387,9 @@ try {
   // ---------- podsumowanie ----------
   const list = await req('/api/connections');
   assert.equal(list.res.status, 200);
-  assert.equal(list.json.connections.length, 5);
+  // New OKX regression fixtures (atomic import, page-limit, cursor-missing x2)
+  // add five persistent connections on top of the original five.
+  assert.equal(list.json.connections.length, 10);
   assert.ok(!/okx-secret|weex-secret|bingx-secret|investorMode|"password"/.test(list.text), 'wyciek sekretów w API');
   const okxConn = list.json.connections.find((c) => c.provider === 'okx');
   assert.ok(okxConn && okxConn.keyMask.includes('••••'));
