@@ -91,9 +91,9 @@ final class MtEa
         $lots = Normalizer::num($raw['lots'] ?? $raw['volume'] ?? null);
         $openPrice = Normalizer::num($raw['openPrice'] ?? $raw['open_price'] ?? null);
         $closePrice = Normalizer::num($raw['closePrice'] ?? $raw['close_price'] ?? null);
-        $profit = Normalizer::num($raw['profit'] ?? null) ?? 0.0;
-        $commission = Normalizer::num($raw['commission'] ?? null) ?? 0.0;
-        $swap = Normalizer::num($raw['swap'] ?? null) ?? 0.0;
+        $profit = Normalizer::num($raw['profit'] ?? null);
+        $commission = Normalizer::num($raw['commission'] ?? null);
+        $swap = Normalizer::num($raw['swap'] ?? null);
 
         if ($ticket === '' || $symbol === '' || $closeMs === null || $lots === null || $lots <= 0) {
             return null;
@@ -109,7 +109,10 @@ final class MtEa
         if ($pair === '') {
             return null;
         }
-        $openMs = $openMs ?? $closeMs;
+        $result = $profit !== null && $commission !== null && $swap !== null
+            ? round($profit + $commission + $swap, 8)
+            : null;
+        $fee = $commission !== null && $swap !== null ? round(abs($commission + $swap), 8) : null;
 
         return [
             'extId' => 'ea:' . $ticket,
@@ -119,9 +122,11 @@ final class MtEa
             'entry' => Normalizer::price($openPrice),
             'exit' => Normalizer::price($closePrice),
             'size' => Normalizer::size($lots),
-            'result' => round($profit + $commission + $swap, 8),
-            'fee' => round(abs($commission + $swap), 8),
-            'durationMin' => max(0, (int) round(($closeMs - $openMs) / 60000)),
+            'result' => $result,
+            'fee' => $fee,
+            'durationMin' => $openMs !== null && $closeMs >= $openMs
+                ? (int) round(($closeMs - $openMs) / 60000)
+                : null,
             'source' => 'MetaTrader',
             'account' => 'MetaTrader',
         ];

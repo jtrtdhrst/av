@@ -8,8 +8,8 @@ namespace AlphaVault\Mcp\Tools;
  *
  * Wszystkie narzędzia zapisu przyjmują `idempotencyKey` (8-120 znaków) oraz
  * opcjonalny `expectedRevision` (optimistic lock na `user_states.revision`).
- * Operacje wysokiego ryzyka przyjmują te same argumenty, ale zamiast zapisu
- * tworzą propozycję `write_op` do zatwierdzenia przez człowieka.
+ * Operacje zapisują bezpośrednio po wywołaniu; `propose_change` jest opcjonalnym
+ * podglądem diffu, a `approve_proposal` wymaga jawnego `confirmed: true`.
  */
 final class WriteSchemas
 {
@@ -55,9 +55,13 @@ final class WriteSchemas
         return ['type' => 'number', 'description' => 'Liczba dodatnia. Przecinek dziesiętny jest akceptowany.'];
     }
 
-    private static function changes(string $description): array
+    private static function changes(string $description, array $properties = []): array
     {
-        return ['type' => 'object', 'additionalProperties' => true, 'description' => $description];
+        $schema = ['type' => 'object', 'additionalProperties' => true, 'description' => $description];
+        if ($properties !== []) {
+            $schema['properties'] = $properties;
+        }
+        return $schema;
     }
 
     private static function strings(int $maxItems, int $maxLength): array
@@ -100,12 +104,12 @@ final class WriteSchemas
 
     public static function inputCreateTrade(): array
     {
-        return self::tool(['pair', 'dir', 'entry', 'size', 'idempotencyKey'], self::baseWithRevision() + [
+        return self::tool(['pair', 'dir', 'entry', 'size', 'sl', 'idempotencyKey'], self::baseWithRevision() + [
             'pair' => ['type' => 'string', 'minLength' => 2, 'maxLength' => 20, 'description' => 'Instrument, np. BTC/USDT.'],
             'dir' => ['type' => 'string', 'enum' => ['long', 'short', 'l', 's']],
             'entry' => self::money(),
             'size' => self::money(),
-            'sl' => ['type' => 'number', 'description' => 'Stop loss po właściwej stronie wejścia.'],
+            'sl' => ['type' => 'number', 'exclusiveMinimum' => 0, 'description' => 'Wymagany stop loss po właściwej stronie ceny wejścia.'],
             'tp' => ['type' => 'number'],
             'fee' => ['type' => 'number', 'minimum' => 0],
             'setup' => self::text(100, 'Nazwa setupu z Playbooka albo Bez setupu.'),
@@ -125,7 +129,13 @@ final class WriteSchemas
     {
         return self::tool(['tradeId', 'changes', 'idempotencyKey'], self::baseWithRevision() + [
             'tradeId' => self::tradeId(),
-            'changes' => self::changes('Pola dziennika do zmiany. Wyniku, R, ceny wyjścia i czasu trwania nie zmieniaj przez update_trade — użyj close_trade. Pola wykonania zamkniętej lub importowanej transakcji są niezmienne; pozostają pola oceny i recenzji. Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.'),
+            'changes' => self::changes(
+                'Pola dziennika do zmiany. Wyniku, R, ceny wyjścia i czasu trwania nie zmieniaj przez update_trade — użyj close_trade. MAE/MFE przyjmują nieujemną liczbę lub null (wyczyszczenie). Pola wykonania zamkniętej lub importowanej transakcji są niezmienne; pozostają pola oceny i recenzji. Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.',
+                [
+                    'mae' => ['type' => ['number', 'null'], 'minimum' => 0],
+                    'mfe' => ['type' => ['number', 'null'], 'minimum' => 0],
+                ]
+            ),
         ]);
     }
 
@@ -136,7 +146,7 @@ final class WriteSchemas
             'exitPrice' => ['type' => 'number', 'description' => 'Cena wyjścia. Wynik, R i czas liczy serwer.'],
             'result' => ['type' => 'number', 'description' => 'Wynik USDT, jeśli znany. Bez niego liczony z ceny wyjścia.'],
             'comment' => self::text(500),
-            'mfe' => ['type' => 'number'],
+            'mfe' => ['type' => ['number', 'null'], 'minimum' => 0, 'description' => 'Nieujemny MFE albo null, gdy pomiaru brak.'],
         ]);
     }
 
@@ -232,7 +242,12 @@ final class WriteSchemas
                 'items' => [
                     'anyOf' => [
                         ['type' => 'string', 'maxLength' => 40],
-                        self::object(['value' => ['type' => 'string', 'maxLength' => 40], 'note' => ['type' => 'string', 'maxLength' => 200]], false),
+                        self::object([
+                            'type' => ['type' => 'string', 'maxLength' => 20],
+                            'price' => ['anyOf' => [['type' => 'string', 'maxLength' => 40], ['type' => 'number']]],
+                            'value' => ['anyOf' => [['type' => 'string', 'maxLength' => 40], ['type' => 'number']]],
+                            'note' => ['type' => 'string', 'maxLength' => 200],
+                        ], false),
                     ],
                 ],
             ],
@@ -251,18 +266,19 @@ final class WriteSchemas
     {
         return self::tool(['changes', 'idempotencyKey'], self::baseWithRevision() + [
             'date' => self::date(),
+            'planId' => self::text(128),
             'changes' => self::changes('Pola planu: market, markets, bias, why, levels, ifMain, thenMain, ifAlt, thenAlt, risk, maxTrades, until, notDo.'),
         ]);
     }
 
     public static function inputApproveDayPlan(): array
     {
-        return self::tool(['idempotencyKey'], self::baseWithRevision() + ['date' => self::date()]);
+        return self::tool(['idempotencyKey'], self::baseWithRevision() + ['date' => self::date(), 'planId' => self::text(128)]);
     }
 
     public static function inputDeleteDayPlan(): array
     {
-        return self::tool(['idempotencyKey'], self::baseWithRevision() + ['date' => self::date()]);
+        return self::tool(['idempotencyKey'], self::baseWithRevision() + ['date' => self::date(), 'planId' => self::text(128)]);
     }
 
     // ------------------------------------------------------------------
@@ -472,8 +488,8 @@ final class WriteSchemas
             'proposalId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
             'expectedDiffHash' => ['type' => 'string', 'minLength' => 64, 'maxLength' => 64],
             'confirmed' => ['type' => 'boolean', 'description' => 'Ustaw true wyłącznie po wyraźnym „tak” użytkownika w rozmowie. Agent nie zatwierdza sam.'],
-            'confirmationCode' => ['type' => 'string', 'minLength' => 8, 'maxLength' => 12, 'description' => 'Opcjonalny kod z panelu AlphaVault. Zatwierdzanie w rozmowie go nie wymaga.'],
             'idempotencyKey' => self::idem(),
+            'confirmationCode' => ['type' => 'string', 'minLength' => 8, 'maxLength' => 12, 'description' => 'Opcjonalny kod z panelu AlphaVault. Zatwierdzanie w rozmowie go nie wymaga.'],
         ]);
     }
 

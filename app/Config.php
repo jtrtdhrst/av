@@ -257,7 +257,7 @@ final class Config
             quotesTtl: max(0, min(3600, $parseInt($env('QUOTES_TTL'), 60))),
             quotesCacheFile: (string) $env('QUOTES_CACHE', $root . '/cache/quotes.json'),
             mcp: $mcp,
-            version: '4.0.0',
+            version: '4.2.0',
         );
     }
 }

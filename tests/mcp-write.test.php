@@ -57,10 +57,25 @@ foreach ($schemaMethods as $method) {
 }
 check('Schematy: idempotencyKey i zamknięty kontrakt', $schemaProblems === [], implode(', ', $schemaProblems));
 check(
-    'Schematy: approve_proposal wymaga confirmed i hash',
+    'Schematy: approve_proposal wymaga confirmed i hash, kod panelu jest opcjonalny',
     in_array('confirmed', WriteSchemas::inputApproveProposal()['required'], true)
     && in_array('expectedDiffHash', WriteSchemas::inputApproveProposal()['required'], true)
     && !in_array('confirmationCode', WriteSchemas::inputApproveProposal()['required'], true)
+);
+check('Schemat: utworzenie transakcji wymaga SL', in_array('sl', WriteSchemas::inputCreateTrade()['required'], true));
+$tradeMetricSchemas = WriteSchemas::inputUpdateTrade()['properties']['changes']['properties'] ?? [];
+check(
+    'Schematy: MAE/MFE nieujemne albo null',
+    ($tradeMetricSchemas['mae']['type'] ?? null) === ['number', 'null']
+    && ($tradeMetricSchemas['mae']['minimum'] ?? null) === 0
+    && ($tradeMetricSchemas['mfe']['type'] ?? null) === ['number', 'null']
+    && ($tradeMetricSchemas['mfe']['minimum'] ?? null) === 0
+);
+$closeMfeSchema = WriteSchemas::inputCloseTrade()['properties']['mfe'] ?? [];
+check(
+    'Schemat: zamknięcie przyjmuje wyłącznie numeryczne MFE albo null',
+    ($closeMfeSchema['type'] ?? null) === ['number', 'null']
+    && ($closeMfeSchema['minimum'] ?? null) === 0
 );
 
 // --- Rejestr operacji i routing zapisu --------------------------------
@@ -127,22 +142,154 @@ check('Check-in: edycja nieznanego pola', $errorOf($mood['state'], 'checkin.upda
 // Plan dnia
 $planState = $apply($base(), 'plan.create', [
     'date' => $dayKey(-3), 'markets' => ['BTC', 'ETH'], 'bias' => 'long',
-    'levels' => ['68000', ['value' => '67500', 'note' => 'retest']],
+    'levels' => [
+        '68000',
+        ['value' => '67500', 'note' => 'retest'],
+        ['type' => 'resistance', 'price' => '69000'],
+        ['type' => 'liquidity', 'price' => 67000],
+        ['type' => 'POI', 'value' => '66000'],
+        ['type' => 'Płynność', 'value' => '65500'],
+    ],
     'risk' => '0.5%', 'maxTrades' => 2, 'until' => '20:00',
 ])['state'];
 $plan = $planState['plans'][$dayKey(-3)];
+check('Plan: własne id i data', $plan['id'] !== '' && $plan['date'] === $dayKey(-3));
 check('Plan: market wynika z markets', $plan['market'] === 'BTC');
-check('Plan: levels znormalizowane', $plan['levels'][0] === ['value' => '68000', 'note' => ''] && $plan['levels'][1]['note'] === 'retest');
+check(
+    'Plan: levels price/value i typy round-trip',
+    $plan['levels'][0]['price'] === '68000' && $plan['levels'][0]['value'] === '68000'
+    && $plan['levels'][1]['note'] === 'retest'
+    && $plan['levels'][2]['type'] === 'Opór'
+    && $plan['levels'][3]['type'] === 'Liquidity'
+    && $plan['levels'][4]['type'] === 'POI'
+    && $plan['levels'][5]['type'] === 'Liquidity'
+);
 check('Plan: szkic bez approvedAt', !array_key_exists('approvedAt', $plan));
-check('Plan: duplikat daty', $errorOf($planState, 'plan.create', ['date' => $dayKey(-3)]) === 'plan_exists');
+$secondPlan = $apply($planState, 'plan.create', ['date' => $dayKey(-3), 'market' => 'SOL']);
+$secondId = $secondPlan['result']['id'];
+check(
+    'Plan: wiele planów na datę z unikalnym id i kluczem',
+    $secondId !== $plan['id']
+    && isset($secondPlan['state']['plans'][$dayKey(-3) . '#' . $secondId])
+    && $secondPlan['state']['plans'][$dayKey(-3) . '#' . $secondId]['date'] === $dayKey(-3)
+);
+$proposalPreview = $engine->preview(1, $base(), 'plan.create', ['market' => 'SOL']);
+$proposalTarget = $proposalPreview['target'];
+$proposalTargetParts = array_pad(explode('#', substr($proposalTarget, 5), 2), 2, '');
+$proposalReplay = $engine->apply(1, $base(), 'plan.create', ['market' => 'SOL'], $proposalTarget);
+check(
+    'Plan: replay propozycji zachowuje id z podglądu',
+    $proposalTargetParts[1] !== ''
+    && ($proposalPreview['after']['id'] ?? '') === $proposalTargetParts[1]
+    && $proposalReplay['target'] === $proposalTarget
+    && ($proposalReplay['result']['id'] ?? '') === $proposalTargetParts[1]
+    && ($proposalReplay['state']['plans'][$proposalTargetParts[0]]['id'] ?? '') === $proposalTargetParts[1]
+);
+$invalidPreparedTarget = '';
+try {
+    $engine->apply(1, $base(), 'plan.create', ['market' => 'SOL'], 'plan:' . $dayKey(0) . '#invalid');
+} catch (WriteException $err) {
+    $invalidPreparedTarget = $err->errorCode;
+}
+check('Plan: odrzuca nieprawidłowy target propozycji', $invalidPreparedTarget === 'invalid_proposal_target');
+$invalidDateTarget = '';
+try {
+    $engine->apply(1, $base(), 'plan.create', [], 'plan:2026-02-30#pl_abcdef123456');
+} catch (WriteException $err) {
+    $invalidDateTarget = $err->errorCode;
+}
+check('Plan: odrzuca niepoprawną datę w target propozycji', $invalidDateTarget === 'invalid_proposal_target');
+$mismatchedDateTarget = '';
+try {
+    $engine->apply(
+        1,
+        $base(),
+        'plan.create',
+        ['date' => $dayKey(0)],
+        'plan:' . $dayKey(-1) . '#pl_abcdef123456'
+    );
+} catch (WriteException $err) {
+    $mismatchedDateTarget = $err->errorCode;
+}
+check('Plan: odrzuca target z inną datą niż args', $mismatchedDateTarget === 'invalid_proposal_target');
+$collisionState = $base();
+$collisionDate = $dayKey(-4);
+$collisionState['plans'][$collisionDate] = [
+    'id' => $proposalTargetParts[1],
+    'date' => $collisionDate,
+];
+$collisionError = '';
+try {
+    $engine->apply(1, $collisionState, 'plan.create', ['market' => 'SOL'], $proposalTarget);
+} catch (WriteException $err) {
+    $collisionError = $err->errorCode;
+}
+check('Plan: odrzuca zajęte ID z targetu propozycji', $collisionError === 'plan_id_conflict');
+$preparedPlanDate = $dayKey(-5);
+$preparedPlanId = 'pl_abcdef123456';
+$preparedPlan = $engine->apply(
+    1,
+    $base(),
+    'plan.create',
+    ['market' => 'SOL'],
+    'plan:' . $preparedPlanDate . '#' . $preparedPlanId
+);
+check(
+    'Plan: zatwierdzana propozycja zachowuje id i datę podglądu',
+    $preparedPlan['target'] === 'plan:' . $preparedPlanDate . '#' . $preparedPlanId
+    && $preparedPlan['result']['id'] === $preparedPlanId
+    && count($preparedPlan['state']['plans']) === 1
+    && ($preparedPlan['state']['plans'][$preparedPlanDate]['id'] ?? '') === $preparedPlanId
+);
+$legacyPlanDate = $dayKey(-6);
+$legacyPlanTarget = $engine->apply(
+    1,
+    $base(),
+    'plan.create',
+    ['date' => $legacyPlanDate, 'market' => 'BTC'],
+    'plan:' . $legacyPlanDate
+);
+$legacyPlanId = (string) ($legacyPlanTarget['result']['id'] ?? '');
+check(
+    'Plan: target legacy plan:<date> zachowuje datę i przygotowuje ID',
+    preg_match('/^pl_[a-f0-9]{12}$/', $legacyPlanId) === 1
+    && $legacyPlanTarget['target'] === 'plan:' . $legacyPlanDate . '#' . $legacyPlanId
+    && ($legacyPlanTarget['state']['plans'][$legacyPlanDate]['id'] ?? '') === $legacyPlanId
+);
+check('Plan: update nie zgaduje przy duplikacie', $errorOf($secondPlan['state'], 'plan.update', ['date' => $dayKey(-3), 'changes' => ['risk' => '1%']]) === 'plan_id_required');
+check('Plan: approve nie zgaduje przy duplikacie', $errorOf($secondPlan['state'], 'plan.approve', ['date' => $dayKey(-3)]) === 'plan_id_required');
+check('Plan: delete nie zgaduje przy duplikacie', $errorOf($secondPlan['state'], 'plan.delete', ['date' => $dayKey(-3)]) === 'plan_id_required');
 check('Plan: until walidacja', $errorOf($base(), 'plan.create', ['date' => $dayKey(-4), 'until' => '25:00']) === 'invalid_until');
-$planUpdated = $apply($planState, 'plan.update', ['date' => $dayKey(-3), 'changes' => ['risk' => '0.25%']]);
-check('Plan: update zachowuje rynki', $planUpdated['state']['plans'][$dayKey(-3)]['markets'] === ['BTC', 'ETH'] && $planUpdated['state']['plans'][$dayKey(-3)]['risk'] === '0.25%');
+$planUpdated = $apply($secondPlan['state'], 'plan.update', ['date' => $dayKey(-3), 'planId' => $secondId, 'changes' => ['risk' => '0.25%']]);
+check(
+    'Plan: update celuje w planId',
+    $planUpdated['state']['plans'][$dayKey(-3)]['markets'] === ['BTC', 'ETH']
+    && $planUpdated['state']['plans'][$dayKey(-3) . '#' . $secondId]['risk'] === '0.25%'
+);
+$marketsUpdated = $apply($planState, 'plan.update', [
+    'date' => $dayKey(-3), 'planId' => $plan['id'], 'changes' => ['markets' => ['SOL']],
+]);
+$replacedMarketPlan = $marketsUpdated['state']['plans'][$dayKey(-3)];
+check(
+    'Plan: zmiana markets aktualizuje też rynek główny',
+    $replacedMarketPlan['markets'] === ['SOL'] && $replacedMarketPlan['market'] === 'SOL'
+);
 check('Plan: update blokuje approvedAt', $errorOf($planState, 'plan.update', ['date' => $dayKey(-3), 'changes' => ['approvedAt' => 1]]) === 'field_not_editable');
-$planApproved = $apply($planUpdated['state'], 'plan.approve', ['date' => $dayKey(-3)]);
-check('Plan: approve ustawia approvedAt', is_int($planApproved['result']['approvedAt']));
+$planApproved = $apply($planUpdated['state'], 'plan.approve', ['date' => $dayKey(-3), 'planId' => $secondId]);
+check(
+    'Plan: approve aktualizuje tylko planId',
+    is_int($planApproved['result']['approvedAt'])
+    && !isset($planApproved['state']['plans'][$dayKey(-3)]['approvedAt'])
+);
 check('Plan: approve diff tylko approvedAt', array_column($planApproved['changes'], 'field') === ['approvedAt']);
 check('Plan: approve bez planu', $errorOf($base(), 'plan.approve', ['date' => $dayKey(-9)]) === 'plan_missing');
+$planDeleted = $apply($planApproved['state'], 'plan.delete', ['date' => $dayKey(-3), 'planId' => $secondId]);
+check(
+    'Plan: delete usuwa wskazany rekord do kosza',
+    count($planDeleted['state']['plans']) === 1
+    && $planDeleted['state']['plans'][$dayKey(-3)]['id'] === $plan['id']
+    && $planDeleted['state']['trash'][0]['record']['id'] === $secondId
+);
 
 // Recenzje
 $reviewState = $withAccount();
@@ -173,29 +320,129 @@ check(
     'Transakcja: tworzenie',
     $trade['result']['source'] === 'Ręcznie' && $trade['result']['exit'] === 'otwarta'
     && $trade['result']['sl'] === '95' && $trade['result']['result'] === null
+    && $trade['result']['mae'] === null && $trade['result']['mfe'] === null
 );
 $offsetTrade = $apply($withAccount(), 'trade.create', [
-    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1,
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'sl' => 95,
     'date' => '2026-03-29T01:30:00+01:00', 'account' => 'WEEX',
 ]);
 check('Transakcja: jawny offset konwertowany do UTC', $offsetTrade['result']['date'] === '2026-03-29T00:30:00.000Z');
 check('Transakcja: nieistniejąca data odrzucona', $errorOf($withAccount(), 'trade.create', [
-    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'date' => '2026-02-30T12:00:00Z',
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'sl' => 95, 'date' => '2026-02-30T12:00:00Z',
 ]) === 'invalid_date');
 check('Transakcja: względne wyrażenie daty odrzucone', $errorOf($withAccount(), 'trade.create', [
-    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'date' => 'tomorrow',
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'sl' => 95, 'date' => 'tomorrow',
 ]) === 'invalid_date');
 $freeTrade = $apply($withAccount(), 'trade.create', [
-    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'fee' => 0, 'date' => '2026-01-02',
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'sl' => 95, 'fee' => 0, 'date' => '2026-01-02',
 ]);
 check('Transakcja: fee 0 dozwolone', (float) $freeTrade['result']['fee'] === 0.0, (string) ($freeTrade['result']['fee'] ?? 'brak'));
+check('Transakcja: zapis bez SL odrzucony', $errorOf($withAccount(), 'trade.create', [
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1,
+]) === 'stop_loss_required');
 check('Transakcja: setup spoza Playbooka', $errorOf($withAccount(), 'trade.create', [
-    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'setup' => 'Nie ma takiego',
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'sl' => 95, 'setup' => 'Nie ma takiego',
 ]) === 'unknown_setup');
 check('Transakcja: konto spoza listy', $errorOf($withAccount(), 'trade.create', [
-    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'account' => 'Nie ma',
+    'pair' => 'BTC/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1, 'sl' => 95, 'account' => 'Nie ma',
 ]) === 'unknown_account');
 $tradeId = $trade['result']['id'];
+$closedTrade = $apply($trade['state'], 'trade.close', ['tradeId' => $tradeId, 'exitPrice' => 110]);
+check(
+    'Transakcja: zamknięcie liczy PnL i R z rzeczywistego SL',
+    $closedTrade['result']['result'] === 20.0 && $closedTrade['result']['r'] === 2.0
+);
+$adjustedRisk = $apply($trade['state'], 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['sl' => 90],
+]);
+check(
+    'Transakcja: zmiana SL przed zamknięciem przelicza ryzyko i nie tworzy R',
+    $adjustedRisk['result']['risk'] === 20.0 && $adjustedRisk['result']['r'] === null
+);
+$closedAdjusted = $apply($adjustedRisk['state'], 'trade.close', ['tradeId' => $tradeId, 'exitPrice' => 110]);
+check(
+    'Transakcja: zamknięcie po zmianie SL liczy R z nowego ryzyka',
+    $closedAdjusted['result']['result'] === 20.0 && $closedAdjusted['result']['r'] === 1.0
+);
+check(
+    'Transakcja: zamknięta pozycja nie pozwala zmienić SL',
+    $errorOf($closedTrade['state'], 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['sl' => 90],
+    ]) === 'closed_trade_execution_readonly'
+);
+check(
+    'Transakcja: odrzuca SL po złej stronie po zmianie wejścia',
+    $errorOf($trade['state'], 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['entry' => 90],
+    ]) === 'invalid_stop_loss'
+);
+check(
+    'Transakcja: odrzuca SL po złej stronie po zmianie kierunku',
+    $errorOf($trade['state'], 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['dir' => 'short'],
+    ]) === 'invalid_stop_loss'
+);
+$legacyNoStop = $trade['state'];
+$legacyNoStop['trades'][0]['sl'] = 'brak';
+$legacyNoStop['trades'][0]['risk'] = 0;
+$legacyEdited = $apply($legacyNoStop, 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['note' => 'Historyczna notatka'],
+]);
+$legacyClosed = $apply($legacyEdited['state'], 'trade.close', [
+    'tradeId' => $tradeId, 'result' => 20,
+]);
+check(
+    'Transakcja historyczna bez SL: adnotacja działa, ryzyko i R pozostają nieznane',
+    $legacyEdited['result']['risk'] === null
+    && $legacyClosed['result']['risk'] === null
+    && $legacyClosed['result']['r'] === null
+    && $legacyClosed['result']['exit'] === null
+);
+$importedState = $trade['state'];
+$importedState['trades'][0]['source'] = 'CSV';
+check(
+    'Transakcja importowana: R nie podlega edycji MCP',
+    $errorOf($importedState, 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['r' => 1],
+    ]) === 'field_not_editable'
+);
+check(
+    'Transakcja: tekst z doklejonymi znakami nie jest liczbą',
+    $errorOf($trade['state'], 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['entry' => '100abc'],
+    ]) === 'bad_number'
+);
+$clearedMetrics = $apply($trade['state'], 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['mae' => null, 'mfe' => null],
+]);
+check(
+    'Transakcja: MAE/MFE można wyczyścić tylko przez null',
+    $clearedMetrics['result']['mae'] === null && $clearedMetrics['result']['mfe'] === null
+);
+check(
+    'Transakcja: nie można usunąć wymaganego SL',
+    $errorOf($trade['state'], 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['sl' => null],
+    ]) === 'stop_loss_required'
+);
+$invalidMetricValues = ['', 'brak', '—', -0.25];
+$invalidMetricCodes = array_map(
+    static fn (mixed $value): string => $errorOf($trade['state'], 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['mfe' => $value],
+    ]),
+    $invalidMetricValues
+);
+check(
+    'Transakcja: tekstowe placeholdery nie czyszczą MFE',
+    $invalidMetricCodes === ['bad_number', 'bad_number', 'bad_number', 'bad_number'],
+    implode(',', $invalidMetricCodes)
+);
+check(
+    'Transakcja: zamknięcie odrzuca tekstowe MFE',
+    $errorOf($trade['state'], 'trade.close', [
+        'tradeId' => $tradeId, 'result' => 0, 'mfe' => '1',
+    ]) === 'bad_number'
+);
 $mentorUpdate = $apply($trade['state'], 'trade.update', [
     'tradeId' => $tradeId,
     'changes' => ['grade' => 'A', 'checklist' => 5, 'checkTotal' => 7, 'emotion' => 'Skupienie'],

@@ -50,7 +50,7 @@ Dokument zawiera m.in. `prop.challenges` (konfiguracje challenge'ów) i `prop.se
 ## Dane makro
 
 - `macro_events.external_id` to SHA-1 z `source|currency|nazwa|data ISO`; unikalny klucz pozwala robić UPSERT bez duplikatów.
-- `source` rozróżnia `forexfactory` (bieżący tydzień) i `tradingview` (następny tydzień).
+- `source` rozróżnia `forexfactory` (bieżące okno niedziela–niedziela UTC) i `tradingview` (pełne tygodnie +1…+3, poniedziałek–poniedziałek UTC).
 - `starts_at_utc` służy do okien i sortowania; `starts_at_iso` zachowuje oryginalny offset źródła.
 - `impact`: 3 = ★★★, 2 = ★★. Publikacje Low/Holiday nie są zapisywane.
 - Brak wydarzenia w udanym feedzie → `is_deleted=1`; powrót → `is_deleted=0`.

@@ -4,8 +4,8 @@
 
 | Pole | Wartość |
 | --- | --- |
-| Wersja | 3.1 |
-| Data | 2026-11-12 |
+| Wersja | 3.2 |
+| Data | 2026-11-16 |
 | Backend | PHP 8.3 |
 | Baza | MySQL / MariaDB |
 | Frontend | HTML/CSS/JS (bez frameworka) |
@@ -232,34 +232,37 @@ Pełny kontrakt: [docs/API.md](docs/API.md). Specyfikacja: [docs/openapi.yaml](d
 
 Oura używa OAuth2 z jednorazowym `state` i PKCE S256 (`code_verifier` w `wearable_oauth_states`). Tokeny są szyfrowane AES-256-GCM wyłącznie kluczem `WEARABLES_ENCRYPTION_KEY` (brak fallbacku na `SESSION_SECRET`), a `WEARABLES_ENCRYPTION_KEY_PREVIOUS` obsługuje rotację. Odświeżanie respektuje `refresh_token_expires_at` i jest serializowane blokadą `GET_LOCK` na użytkowniku i dostawcy; nowy refresh token jest zapisywany atomowo. Apple Watch używa kodu parowania i tokenu urządzenia. Połączenie zapisuje metryki w `wearable_daily_metrics`, a `GET /api/wearables` liczy gotowość z dostępnych składników (sen 40%, HRV 25%, tętno 10%, regeneracja 15%, Body Battery 10%) i łączy ją z check-inem w proporcji 70/30. Odłączenie najpierw próbuje wycofać dostęp u dostawcy, a potem usuwa tokeny i metryki w transakcji. Garmin i Whoop są wyłączone na razie: `Wearables::PROVIDERS` zawiera tylko `apple` i `oura`, więc ich endpointy zwracają 404, a kafelki nie renderują się.
 
-### 6.2. MCP 3.1 - panel, zapis, propozycje i zgoda w rozmowie
+### 6.2. MCP 3.2 - panel, zapis, propozycje i zgoda w rozmowie
 
 Panel MCP jest dostępny w widoku `#/mentor-ai`. Endpointy panelu:
 
-- `GET /api/mcp` — status, scope, oczekujące propozycje, audyt; wymaga sesji.
+- `GET /api/mcp` — konfiguracja MCP widoczna dla panelu, scope, oczekujące propozycje i audyt; wymaga sesji. Pill odzwierciedla globalną konfigurację panelu i nie sprawdza zdalnej dostępności serwera ani kwalifikacji konta do allowlisty pilota.
 - `POST /api/mcp/proposals/decide` — `{id, action}`; sesja, `requireSameOrigin`, rate limit 60/min.
 - `POST /api/mcp/proposals/{id}/approval-code` — opcjonalny jednorazowy kod do zatwierdzenia;
   TTL 10 min, rate limit 10/min, w bazie tylko SHA-256. Nie jest wymagany do zapisu z rozmowy.
 
-MCP (`mcp.alphavault.pl`) ma własny OAuth 2.1 i rejestr 79 narzędzi: 46 odczytu oraz 33 zapisu
-(30 bezpośrednich, 3 obsługujące opcjonalne propozycje). Jedno
-połączenie z zakresem `alphavault.read` daje od razu wszystkie 79 narzędzi; nie ma osobnego zakresu
-`alphavault.write` ani reconnectu po wdrożeniu. Narzędzia zapisu przechodzą przez `WriteEngine`,
-który waliduje argumenty, liczy formuły panelu i zapisuje stan w transakcji MySQL z
-`SELECT ... FOR UPDATE`, kontrolą `expectedRevision` i idempotencją (`mcp_idempotency`, 24 h);
-fingerprint `{op, args, expectedRevision}` wiąże klucz z payloadem, a inna treść zwraca 409;
-klucze są porównywane case-sensitive. Zgodna decyzja legacy bez fingerprintu jest odtwarzana
-tylko po walidacji statusu, diffu i użytego kodu.
-Operacje wysokiego ryzyka tworzą wiersz `mcp_proposals` typu `write_op` z `{op, args}`; podgląd
-i wykonanie korzystają z tej samej funkcji, więc diff nie może się rozjechać. Zapis następuje po
-`approve_proposal` z `confirmed: true`, ustawionym wyłącznie po jednoznacznym „tak” użytkownika
-w rozmowie i zgodnym `diffHash`; kod z panelu jest opcjonalny. Usunięcia trafiają do `state.trash[]`
-i wracają przez `restore_deleted_record`. Brak danych = puste tablice, brak metryki = `null`.
-Dane giełdowe są niezmienne. Zakres `alphavault.health` jest osobny i wymaga zgody na ekranie OAuth
-oraz połączonego urządzenia. Dashboard bez tego dostępu używa wyłącznie check-inu i nie zwraca
-zdrowotnych wartości ani składowych pochodnych, nawet z historycznego `state.health`.
-Bez check-inu wynik dashboardu jest pusty (`score: null`), nie generuje wartości domyślnej.
-`account.include` filtruje analitykę, nie listy i szczegóły transakcji.
+MCP (`mcp.alphavault.pl`) ma własny OAuth 2.1; przy włączonym zapisie rejestr zawiera 79 narzędzi:
+46 odczytu oraz 33 zapisu (30 bezpośrednich, 3 obsługujące opcjonalne propozycje). Jedno
+połączenie z zakresem `alphavault.read` daje wtedy wszystkie 79 narzędzi; przy wyłączonym zapisie
+pozostaje 46 odczytu. Nie ma osobnego zakresu `alphavault.write` ani reconnectu po zmianie flagi.
+Narzędzia zapisu przechodzą przez `WriteEngine`, który waliduje argumenty, liczy formuły panelu
+i zapisuje stan w transakcji MySQL z `SELECT ... FOR UPDATE`, kontrolą `expectedRevision` oraz
+idempotencją (`mcp_idempotency`, 24 h). Fingerprint `{op, args, expectedRevision}` wiąże klucz
+z payloadem; inna treść zwraca 409, a klucze są case-sensitive. Zgodna decyzja legacy bez
+fingerprintu jest odtwarzana tylko po walidacji statusu, diffu i użytego kodu.
+Każda z 30 operacji zapisu działa bezpośrednio i nie wymaga osobnego potwierdzenia.
+`propose_change` opcjonalnie tworzy wiersz `mcp_proposals` typu `write_op` z `{op, args}`;
+podgląd i wykonanie korzystają z tej samej funkcji. `approve_proposal` wymaga `confirmed: true`
+i zgodnego `diffHash`; klient powinien wysłać flagę po jednoznacznym „tak” użytkownika.
+Serwer weryfikuje flagę i diff, ale nie analizuje treści rozmowy; kod z panelu jest opcjonalny.
+Usunięcia trafiają do `state.trash[]` i wracają przez `restore_deleted_record`.
+Brak danych = puste tablice, brak metryki = `null`. Dane giełdowe są niezmienne.
+Zakres `alphavault.health` wymaga osobnej zgody OAuth i aktywnego urządzenia. Odmowa jedynego
+scope’u zdrowotnego kończy autoryzację bez tokenu i nie rozszerza dostępu do `alphavault.read`.
+Bez niego dashboard używa wyłącznie check-inu i nie zwraca wartości ani składowych zdrowotnych,
+także z historycznego `state.health`; bez check-inu `readiness.score` jest `null`.
+Wynik gotowości z check-inu nie wymaga scope’u urządzeń. `account.include` filtruje analitykę,
+nie listy ani szczegóły transakcji.
 Szczegóły: [docs/MCP.md](docs/MCP.md).
 
 ## 7. Discord Scheduled Events — pełny przepływ
@@ -491,10 +494,12 @@ Monitoring nie zapisuje tokenów ani treści wydarzeń. `/api/health` udostępni
 
 ### 9.6. Kalendarz makro
 
-- `bin/sync-macro-events.php` pobiera bieżący tydzień z `ff_calendar_thisweek.json` (ForexFactory) i następny tydzień z `economic-calendar.tradingview.com` (TradingView).
+- `bin/sync-macro-events.php` pobiera bieżący tydzień ForexFactory z `ff_calendar_thisweek.json` w zachowanym oknie niedziela 00:00–następna niedziela 00:00 UTC oraz poprzedni pełny tydzień i pełne tygodnie +1, +2 i +3 z `economic-calendar.tradingview.com` (TradingView), liczone od poniedziałku 00:00 UTC. Końce obu okien są wyłączne.
 - Zapisuje tylko publikacje ★★ i ★★★; Low/Holiday oraz szum (aukcje, wystąpienia) są pomijane.
-- UPSERT po `external_id`, soft delete po udanym pobraniu danego feedu.
+- UPSERT po `external_id`, soft delete po udanym pobraniu danego feedu wyłącznie w jego oknie; pusty, poprawny feed czyści tylko własny zakres.
+- Przy nakładaniu okien ForexFactory ma priorytet: rekordy TradingView w oknie FF są zastępowane, a TV poza tym oknem pozostaje aktywne.
 - Błąd ForexFactory → `status=error`, dane nietknięte. Błąd TradingView → `status=partial`, bieżący tydzień nadal się zapisuje.
+- `GET /api/macro-events` udostępnia poprzedni pełny tydzień i filtruje wydarzenia od 14 dni wstecz do około 35 dni naprzód; górna granica jest limitem odpowiedzi, a przyszłe dane z feedów kończą się po pełnym tygodniu TradingView +3. Błąd feedu zwraca `partial`/`lastError` i zachowuje ostatnie dobre dane.
 - `stale=true` po 1800 s od ostatniego sukcesu.
 - Log: `~/public_html/alphavault.pl/.app/logs/macro-sync.log`.
 
@@ -605,13 +610,13 @@ Routing jest po stronie przeglądarki: jeden `public/index.html`, widoki przeł�
 | `gieldy` | `#/gieldy` | Giełdy i API |
 | `ust` | `#/konto` | Konto i zasady |
 
-Widok `#/mentor-ai` to strona integracji MCP: adres `https://mcp.alphavault.pl/mcp` z kopiowaniem, przepływ „jak to działa”, zakładki ChatGPT/Claude/Grok z krokami konfiguracji, karty korzyści i bezpieczeństwa oraz nota o dostępności integracji. Claude korzysta z callbacku `https://claude.ai/api/mcp/auth_callback`, który musi być dopuszczony w allowliście OAuth. Karta wskazuje tryb tylko do odczytu i linkuje do polityki prywatności §13.2. Połączenie wymaga ekranu zgody na domenie MCP; token unieważnia się w `/oauth/connected`. Pill statusu czyta `/api/mcp` i pokazuje `MCP · TYLKO ODCZYT`, `MCP · ZAPIS` albo `MCP · WYŁĄCZONY`; nie jest statyczny. Widok nie zawiera czatu ani analiz.
+Widok `#/mentor-ai` to strona integracji MCP: adres `https://mcp.alphavault.pl/mcp` z kopiowaniem, przepływ „jak to działa”, zakładki ChatGPT/Claude/Grok z krokami konfiguracji, karty korzyści i bezpieczeństwa oraz nota o dostępności integracji. Claude korzysta z callbacku `https://claude.ai/api/mcp/auth_callback`, który musi być dopuszczony w allowliście OAuth. Karta wyjaśnia, że zakres zapisu zależy od konfiguracji serwera, i linkuje do polityki prywatności §13.2. Połączenie wymaga ekranu zgody na domenie MCP; token unieważnia się w `/oauth/connected`. Pill odczytuje `/api/mcp` i pokazuje skonfigurowany zakres (`MCP · TYLKO ODCZYT`, `MCP · ZAPIS`); nie sprawdza dostępności `mcp.alphavault.pl`. Widok nie zawiera czatu ani analiz.
 
-Plan dnia (`#/plan`) trzyma dane w `user_states.state.plans[YYYY-MM-DD]`. Kliknięcie rynku lub biasu, dodanie/usunięcie poziomu, zatwierdzenie i "Skopiuj z wczoraj" zapisują szkic i wysyłają `PUT /api/state`; zatwierdzenie czeka na odpowiedź serwera i pokazuje wynik ("Zapisano w bazie" albo błąd). Zatwierdzenie wymaga rynku, kierunku, uzasadnienia i co najmniej jednego poziomu. Tekst planu ma autosave z debounce 700 ms. `renderPlan()` nie nadpisuje formularza, gdy fokus jest wewnątrz edytora, więc render po notowaniach nie kasuje wpisywanej treści.
+Plan dnia (`#/plan`) pozwala zapisać wiele niezależnych planów dla jednej daty, każdy z własnym `id`, rynkiem i poziomami. Pierwszy zachowuje klucz `YYYY-MM-DD`, kolejne używają `YYYY-MM-DD#<id>`; selektor planu przełącza edytowany rekord, a planów z różnych dat nie łączy. Poziomy obejmują opór, wsparcie, płynność i POI. Zmiany rynku, biasu i poziomów, zatwierdzenie oraz „Skopiuj z wczoraj” zapisują stan przez `PUT /api/state`; zatwierdzenie czeka na odpowiedź serwera i pokazuje wynik („Zapisano w bazie” albo błąd). Zatwierdzenie wymaga rynku, kierunku, uzasadnienia i co najmniej jednego poziomu. Tekst planu ma autosave z debounce 700 ms. `renderPlan()` nie nadpisuje formularza, gdy fokus jest wewnątrz edytora, więc render po notowaniach nie kasuje wpisywanej treści.
 
-Dziennik (`#/nowa-transakcja`) startuje z pustymi polami i checklistą 0/N. Ryzyko pozycji jest liczone jako `abs(entry - SL) * size` i pokazywane obok limitu `maxRisk`; przekroczenie limitu wymaga świadomego potwierdzenia. Wpisy ręczne mają `mae = null`, `mfe = null` — statystyki MAE/MFE korzystają wyłącznie z importów. Przy zerze transakcji statystyki pokazują „—”, a etykiety checklisty wynikają z liczby punktów użytkownika.
+Dziennik (`#/dziennik`) pokazuje transakcje; formularz nowej transakcji (`#/nowa-transakcja`) startuje z pustymi polami i checklistą 0/N. Checklista jest ręczną oceną bez minimalnego progu zapisu; dokładny wybór punktów jest utrwalany i odtwarzany przy edycji, także gdy użytkownik zmienił konfigurację checklisty. Starsze rekordy bez `checklistItems` zachowują liczbowy wynik, ale UI nie dopisuje im zmyślonych zaznaczeń: zapis innych pól nie zmienia checklisty, a ręczna zmiana punktów zapisuje nowy jawny wybór. Wymagany jest stop loss, natomiast relacja R:R jest dobierana do setupu i nie ma stałego minimum. Ryzyko pozycji jest liczone jako `abs(entry - SL) * size` i pokazywane obok limitu `maxRisk`; przekroczenie limitu wymaga świadomego potwierdzenia. Po zapisie formularz otwiera dziennik i czyści jego filtry. Dziennik pokazuje wszystkie wpisy niezależnie od ustawienia „W statystykach” na koncie; to ustawienie steruje tylko statystykami. Ręczne transakcje UI i MCP rozpoczynają z `mae = null`, `mfe = null`; niezmierzone metryki z importu także pozostają `null`, a statystyki ich nie uśredniają. MCP może wpisać nieujemne wartości lub jawnie wyczyścić je do `null`; pominięte MFE przy zamknięciu nie usuwa wcześniejszego pomiaru. Koszt wcześniejszego wyjścia jest liczony tylko wtedy, gdy dostępne są MFE i niezerowe R. CSV pomija wiersz bez PnL i bez kompletnych danych do jego wyliczenia, zachowując jawny wynik zero jako break-even. Przy zerze transakcji statystyki pokazują „—”, a etykiety checklisty wynikają z liczby punktów użytkownika.
 
-Zgodność z planem jest liczona po dacie transakcji, parze i kierunku (`AV.planMatchesTrade`), a nie po samym setupie. Badge „Plan dnia ✓” pojawia się tylko dla zatwierdzonego planu, a badge „LIVE” tylko wtedy, gdy live trwa. `buildEmpty()` nie dziedziczy demo-seedu (data dołączenia, postęp kursu, sesje, streak, połączenia); `cleanLegacyDemoSeed()` czyści te wartości w istniejących stanach. Tożsamość w panelu pochodzi z `/api/me` (`username`, `globalName`, `joinedAt`), bez zastępczego handle.
+Zgodność z planem jest liczona po dacie transakcji, parze i kierunku (`AV.planMatchesTrade`), a nie po samym setupie; gdy wiele planów pasuje do rynku, UI nie wybiera arbitralnie jednego. Badge „Plan dnia ✓” pojawia się tylko dla zatwierdzonego, jednoznacznie dopasowanego planu, a badge „LIVE” tylko wtedy, gdy live trwa. `buildEmpty()` nie dziedziczy demo-seedu (data dołączenia, postęp kursu, sesje, streak, połączenia); `cleanLegacyDemoSeed()` czyści te wartości w istniejących stanach. Tożsamość w panelu pochodzi z `/api/me` (`username`, `globalName`, `joinedAt`), bez zastępczego handle.
 
 Zasady:
 
@@ -655,12 +660,15 @@ Zasady:
 
 ### 11.3a. Pulpit, plan dnia, kalkulator, statystyki i makro
 
-- `renderDashBalance()` — suma sald kont włączonych do statystyk (`AV.totalCapital`), wynik od kapitału startowego, konto główne; karta `#dashBal` prowadzi do `#/konto`.
-- `renderAccounts()` — kapitał startowy i saldo są edytowalne w tabeli (`[data-acc-start]`, `[data-acc-balance]`); zapis przez `AV.saveNow()`.
+- `renderDashBalance()` — suma sald kont włączonych do statystyk (`AV.totalCapital`), wynik od kapitału startowego i konto główne; karta `#dashBal` rozwija listę kont i prowadzi do `#/konto`. Puste saldo nie wyświetla fikcyjnego −100%.
+- `renderAccounts()` — kapitał startowy („Kapitał startowy”) i saldo są edytowalne w tabeli (`[data-acc-start]`, `[data-acc-balance]`); zapis przez `AV.saveNow()`.
 - `renderPlan()` — `#planMarketSelect` (wszystkie instrumenty + „Inny rynek…” i `#planMarketCustom`) oraz przyciski `#planBias`; `readPlanForm()` czyta select jako źródło prawdy.
+- `#planSelect` wybiera jeden z wielu niezależnych planów tej samej daty; każdy plan ma osobny identyfikator, rynek, bias, scenariusze i poziomy (opór, wsparcie, płynność, POI). Gdy kilka planów nie pozwala jednoznacznie określić wspólnego limitu, pulpit nie porównuje liczby transakcji ani ryzyka z arbitralnym limitem.
 - Kalkulator: `#cPortfolio` ustawia saldo, dźwignię i `settings.maxRisk`; `#cMM` pokazuje limit; `#cRR` + `#cRRCustom` sterują sugestią SL/TP; stan w `state.calc`.
-- `renderPnlCal(daily)` — niezależny od `#statSeg` zakres 7/30/miesiąc, nawigacja `[data-pcnav]`, numer dnia w komórce.
-- `renderCalendar()` — `#calSeg` obsługuje −1/0/1/2/3 tygodnie, `#calRange` pokazuje zakres; źródło danych nadal ogranicza się do okna synchronizacji makro.
+- Ręczna checklista transakcji jest dobrowolna i nie blokuje zapisu przy niepełnym wyniku; dokładne zaznaczenia są odtwarzane podczas edycji. Zapis wymaga SL, a R:R może być dowolne zgodne z setupem.
+- Zapis nowej transakcji resetuje filtry dziennika i przełącza widok na dziennik.
+- `renderStats()` używa niezależnego zakresu ogólnych statystyk (7/30/90 dni lub wszystko); `renderPnlCal(daily)` ma własny zakres 7/30 dni/miesiąc i własną nawigację `[data-pcnav]`.
+- `renderCalendar()` — `#calSeg` obsługuje −1/0/1/2/3 tygodnie, `#calRange` pokazuje zakres; API obejmuje poprzedni pełny tydzień i filtruje dane od 14 dni wstecz do około 35 dni naprzód. Ostrzeżenie pokazuje błędy `partial`/`error` bez czyszczenia ostatnich dobrych danych.
 
 ### 11.4. Odświeżanie
 | Timer | Akcja |
@@ -811,7 +819,7 @@ Workflow `deploy-alphavault.yml` z `rollback=true` przywraca ostatni backup `pub
 
 - `mcp.alphavault.pl` ma osobny front controller `mcp/public/index.php` i `.app` w `~/public_html/mcp.alphavault.pl/.app`.
 - Wdrożenie: workflow `Deploy AlphaVault MCP` (`.github/workflows/deploy-mcp.yml`), uruchamiany z `main`; input `ref` przyjmuje `main` albo pełny SHA commita zawartego w `main`.
-- `scripts/deploy-mcp.sh` wykonuje backup, rsync, migrację, klucze OAuth i health check; `MCP_WRITES_ENABLED` przyjmuje `true|false` (domyślnie `true`).
+- `scripts/deploy-mcp.sh` wykonuje backup, rsync, migrację, klucze OAuth i health check; `MCP_WRITES_ENABLED` przyjmuje `true|false` (domyślnie `true`), a sam skrypt bez inputu ma bezpieczny fallback `false`.
 - Workflow nie dotyka `alphavault.pl` ani WordPressa; używa environment `alphavault-production`.
 - `/oauth/authorize` przyjmuje żądanie autoryzacji metodą `POST` (m.in. ChatGPT) i normalizuje je `303`
   do `GET`; decyzja na ekranie zgody nie wymaga kontroli `Origin` (sesja `SameSite=Lax` + token CSRF
@@ -826,7 +834,8 @@ MCP 3.2: `Deploy AlphaVault MCP` uruchamia `composer install`, `scripts/deploy-m
 `db/schema.sql`, `db/migrations/20261114_mcp2.sql`, `db/migrations/20261115_mcp_approval.sql`
 oraz `db/migrations/20261116_mcp_idempotency_fingerprints.sql`,
 klucze OAuth i health check. `writes_enabled` domyślnie `true`; `false` ukrywa 33 narzędzia zapisu
-(zostaje 46 odczytu). `pilot_discord_ids` opcjonalnie ogranicza zapis do wybranych kont.
+(zostaje 46 odczytu). `pilot_discord_ids` opcjonalnie ogranicza zapis do wybranych kont; allowlista
+jest egzekwowana przy każdym wywołaniu zapisu, niezależnie od widoczności rejestru.
 Nie ma zakresu `alphavault.write`: token z `alphavault.read` widzi cały rejestr włączony
 konfiguracją (79 narzędzi z zapisem albo 46 tylko do odczytu), więc wdrożenie nie wymaga ponownego
 OAuth. Health check wymaga liczby narzędzi i `writesEnabled` zgodnych z ustawieniem wdrożenia oraz
@@ -860,18 +869,18 @@ narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptogra
 | Suita | Plik | Zakres | Wynik CI |
 | --- | --- | --- | --- |
 | Discord DB/sync | `tests/discord-events.test.php` | DST, UPSERT, soft delete, klasyfikacja, Stage/EXTERNAL | 24/24 PASS |
-| Makro DB/sync | `tests/macro-events.test.php` | normalizacja FF/TradingView, UTC, UPSERT, soft delete, okno źródła | 21/21 PASS |
+| Makro DB/sync | `tests/macro-events.test.php` | normalizacja FF/TradingView, zachowane okno ForexFactory niedziela–niedziela i jego priorytet przy nakładaniu, UTC, UPSERT, pusty/odfiltrowany feed, soft delete, cold-start z poprzednim pełnym tygodniem i tygodniami TradingView +1–+3, API −14/+35 dni, `sync()` partial/error i zachowanie ostatnich dobrych danych | wynik w CI |
 | Rola / cron | `tests/role-guard.test.php` + `tests/role-recheck.e2e.mjs` | decyzje login, fail-open, 404, 429, lock, revoke sesji | 18/18 PASS |
 | Prop challenge | `tests/prop.unit.mjs` | szablony, limity, static/trailing, daty, statystyki | 27/27 PASS |
 | Prop parity | `tests/prop-parity.mjs` + `tests/prop-parity.php` | PHP ↔ JS: te same fixtures i metryki | PASS |
 | MCP migracja upgrade | `tests/mcp-migration-upgrade.test.php` | odtworzenie schematu sprzed 20261116, dodanie kolumn/fingerprintów, kolacje case-sensitive i ponowienie migracji | CI po zmianie |
-| MCP propozycje | `tests/mcp.test.php` | gotowość z brakującymi metrykami, case-sensitive klucze propozycji/decyzji, kod jednorazowy, idempotencja decyzji powiązana z akcją i payloadem, break-even, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | CI po zmianie |
+| MCP propozycje | `tests/mcp.test.php` | gotowość z brakującymi metrykami, wymagany SL, case-sensitive klucze propozycji/decyzji, kod jednorazowy, idempotencja decyzji powiązana z akcją i payloadem, zatwierdzenie po `confirmed` bez kodu, break-even, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | CI po zmianie |
 | MCP dashboard health | `tests/mcp-tools.e2e.mjs` | metryki aktywnego Oura widoczne wyłącznie dla tokenu z `alphavault.health`; bez scope'u brak metryk, także przy aktywnym połączeniu | CI po zmianie |
 | MCP konto/analityka | `tests/mcp-tools.test.php`, `tests/mcp-tools.e2e.mjs` | jawne `include=false` filtruje analitykę, legacy konta bez konfiguracji zachowują statystyki, listy i szczegóły pozostają pełne | CI po zmianie |
-| MCP analityka | `tests/mcp-tools.test.php` | Metrics, analityka, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38, odznaki, screeny | CI po zmianie |
-| MCP zapis | `tests/mcp-write.test.php` | 30 operacji, routing 18/12, 33 schematy, formuły check-inu i planu, kosz, reguły ryzyka | PASS |
-| MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, pilot | PASS |
-| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | każde narzędzie z rejestru ma udane wywołanie (79/79), fixture DB CI z fail-closed guardem i cleanupem, wydarzenia/paginacja, granice dat i DST, lifecycle transakcji, propozycje i workflow | CI po zmianie |
+| MCP analityka | `tests/mcp-tools.test.php` | Metrics, puste MAE/MFE jako `null`, break-even, dopasowanie rynku bez kolizji prefiksów, filtry kont, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38, odznaki, screeny | CI po zmianie |
+| MCP zapis | `tests/mcp-write.test.php` | 30 operacji bezpośrednich, 33 schematy, formuły check-inu i planu, wiele planów z jedną datą, wybór `planId`, stabilne ID propozycji, round-trip poziomów, wymagany SL, ścisła walidacja MAE/MFE, blokada `r` dla importów, kosz, reguły ryzyka | CI po zmianie |
+| MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, approve bez kodu, idempotencja decyzji, pilot | CI po zmianie |
+| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | dashboard Oura ze scope’em zdrowotnym, odmowa health-only bez rozszerzenia scope’u, każde narzędzie z rejestru ma udane wywołanie (79/79), fixture DB CI z fail-closed guardem i cleanupem, wydarzenia/paginacja, granice dat i DST, include=false, lifecycle transakcji, walidacja MAE/MFE i zachowanie pominiętego MFE przy zamknięciu, propozycje i workflow | CI po zmianie |
 | MCP deploy provenance | `tests/deploy-mcp-guard.test.mjs` | blokada niezaufanego refu, SHA spoza `main`, PR/dispatch-only i CI bez sukcesu; wymóg checkoutu zatwierdzonego SHA i health revision | CI po zmianie |
 | MCP login | `tests/mcp-login.e2e.mjs` | mock Discord: rola, brak roli, duplikat konta | PASS |
 | MCP panel | `tests/mcp-ui.e2e.mjs` | diff, kod do rozmowy, approve, reject, reload, trwałość | PASS |
@@ -879,13 +888,13 @@ narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptogra
 | Notowania | `tests/quotes.test.php` | cache, TTL, fallback, cząstkowe pobranie, uszkodzony cache | 14/14 PASS |
 | Daty demo | `tests/demo-state.test.php` | przesunięcie fixture na dziś, idempotencja, plany jako punkt zaczepienia, błędne dane | 15/15 PASS |
 | API | `tests/api.e2e.mjs` | health, sesja, CSRF, stan, events, macro, admin, eksport, prop | 23/23 PASS |
-| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro z nawigacją tygodni, pusty stan, zapisy, komentarz i dashboard break-even, plan dnia z reloadem z MySQL, saldo portfela, portfel/MM i R:R w kalkulatorze, kalendarz PnL, Akademia, 8 odznak, nagłówek | CI po zmianie |
+| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro do +3 ze stanami partial/error/stale, wiele planów i poziomy z reloadem, saldo i kalkulator, legacy checklist także po zmianie konfiguracji, wymagany SL i elastyczne R:R, CSV bez fikcyjnych PnL/metryk, niezależne listy dziennika/statystyk/PnL, brakujące MAE/MFE i koszt wczesnego wyjścia, MCP status/fallback, Akademia i odznaki | CI po zmianie |
 | UI empty | `tests/ui-empty.e2e.mjs` | puste pola po sukcesie z `[]` | 12/12 PASS |
 | PWA mobile | `tests/pwa.e2e.mjs` | manifest, SW, instalacja, powiadomienie, deep link, 10 s, push, offline, brak przepełnienia 15 widoków przy 390 i 1024 px | PASS |
 | Urządzenia | `tests/wearables.e2e.mjs` | OAuth2 + PKCE Oura, rotacja tokenów i klucza, statusy, Apple, UI, bezpieczeństwo, wyłączenie Garmin/Whoop | PASS |
 | Konfiguracja urządzeń | `tests/wearables-config.test.php` | lista dostawców, brak fallbacku klucza, start OAuth 503, gotowość po ustawieniu klucza | 5/5 PASS |
 | Dokumentacja | `tests/docs.test.mjs` | linki, sekcje, spójność kopii publicznych | PASS |
-| Integracje giełd/API | `tests/integrations.e2e.mjs` | OKX, BingX, WEEX, MetaApi, EA, mocki | 20/20 PASS |
+| Integracje giełd/API | `tests/integrations.e2e.mjs` | OKX, BingX, WEEX, MetaApi, EA, mocki; niezmierzone MAE/MFE pozostają `null` | wynik w CI |
 | Integracje UI | `tests/ui-integrations.e2e.mjs` | formularze, dziennik, licznik transakcji, chip nagłówka | 13/13 PASS |
 | Live Discord | `discord-sync-live-test.yml` | realne API → MySQL, 2 synchronizacje | 3/3, bez duplikatów |
 | Prod health/docs | `curl` + deploy verify | `/api/health`, `/docs/`, `.app` deny | PASS |

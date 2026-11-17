@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Testy integracyjne MCP 2.0: propozycje, idempotencja, konflikt rewizji,
+ * Testy integracyjne MCP 3.2: propozycje, idempotencja, konflikt rewizji,
  * ochrona danych giełdowych i izolacja użytkowników.
  *
  * Uruchom: php tests/mcp.test.php (wymaga tests/config.test.json i migracji).
@@ -21,10 +21,12 @@ use AlphaVault\Mcp\Proposals\ProposalException;
 use AlphaVault\Mcp\Proposals\ProposalService;
 use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Support\DashboardService;
+use AlphaVault\Mcp\Support\DayPlanRecords;
 use AlphaVault\Mcp\Support\EventsService;
 use AlphaVault\Mcp\Support\PropChallengeService;
 use AlphaVault\Mcp\Support\StatsService;
 use AlphaVault\Mcp\Support\TradeService;
+use AlphaVault\Mcp\Write\WriteEngine;
 
 [$config, $db] = require __DIR__ . '/../app/bootstrap.php';
 
@@ -141,6 +143,12 @@ try {
         && $partialHealth['hrvScore'] === null && $partialHealth['heartRateScore'] === null
         && $partialHealth['hasDeviceData'] === true && !str_contains((string) $partialHealth['description'], 'HRV'));
 
+    $missingStopLoss = expectError(fn () => $builder->createTrade($userA, [
+        'pair' => 'SOL/USDT', 'dir' => 'long', 'entry' => 100, 'size' => 1,
+        'idempotencyKey' => 'idem-trade-no-sl',
+    ], 'test-client'));
+    check('0c. propozycja transakcji wymaga SL', $missingStopLoss === 'stop_loss_required', $missingStopLoss);
+
     // 1. Propozycja transakcji nie zmienia stanu przed zatwierdzeniem.
     $proposal = $builder->createTrade($userA, [
         'pair' => 'sol/usdt', 'dir' => 'long', 'entry' => 100, 'size' => 2,
@@ -162,7 +170,7 @@ try {
     // 3. Konflikt idempotencji.
     $conflict = expectError(fn () => $builder->createTrade($userA, [
         'pair' => 'sol/usdt', 'dir' => 'short', 'entry' => 100, 'size' => 2,
-        'setup' => 'Bez setupu', 'idempotencyKey' => 'idem-trade-1',
+        'sl' => 105, 'setup' => 'Bez setupu', 'idempotencyKey' => 'idem-trade-1',
     ], 'test-client'));
     check('3. ten sam klucz i inny payload = konflikt', $conflict === 'idempotency_conflict', $conflict);
 
@@ -181,11 +189,13 @@ try {
         && (string) ($lastTrade['pair'] ?? '') === 'SOL/USDT'
         && (string) ($lastTrade['dir'] ?? '') === 'l'
         && (string) ($lastTrade['source'] ?? '') === 'Ręcznie'
-        && (int) $afterRow['revision'] === 6, json_encode($lastTrade, JSON_UNESCAPED_UNICODE));
+        && array_key_exists('mae', $lastTrade) && $lastTrade['mae'] === null
+        && array_key_exists('mfe', $lastTrade) && $lastTrade['mfe'] === null
+        && (int) $afterRow['revision'] === 6, json_encode(['revision' => $afterRow['revision'] ?? null, 'trade' => $lastTrade], JSON_UNESCAPED_UNICODE));
 
     // 5. Konflikt rewizji.
     $stale = $builder->createTrade($userA, [
-        'pair' => 'ADA/USDT', 'dir' => 'short', 'entry' => 1, 'size' => 10, 'idempotencyKey' => 'idem-trade-stale',
+        'pair' => 'ADA/USDT', 'dir' => 'short', 'entry' => 1, 'size' => 10, 'sl' => 1.1, 'idempotencyKey' => 'idem-trade-stale',
     ], 'test-client');
     $db->execute('UPDATE user_states SET revision = revision + 1 WHERE user_id = ?', [$userA]);
     $staleError = expectError(fn () => $service->approve($userA, $stale['proposalId'], $userA));
@@ -254,7 +264,118 @@ try {
     $service->approve($userA, $plan['proposalId'], $userA);
     $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
     $saved = json_decode((string) $row['state'], true);
-    check('10. plan zapisany bez approvedAt', ($saved['plans'][$today]['market'] ?? '') === 'BTC' && ($saved['plans'][$today]['approvedAt'] ?? null) === null && ($saved['plans'][$today]['risk'] ?? '') === '2%', json_encode($saved['plans'][$today] ?? null));
+    check(
+        '10. plan zapisany bez approvedAt i poziomy round-trip',
+        ($saved['plans'][$today]['market'] ?? '') === 'BTC'
+        && ($saved['plans'][$today]['approvedAt'] ?? null) === null
+        && ($saved['plans'][$today]['risk'] ?? '') === '2%'
+        && ($saved['plans'][$today]['levels'][0]['type'] ?? '') === 'Wsparcie'
+        && ($saved['plans'][$today]['levels'][0]['price'] ?? '') === '60000'
+        && ($saved['plans'][$today]['levels'][0]['value'] ?? '') === '60000',
+        json_encode($saved['plans'][$today] ?? null)
+    );
+
+    $primaryPlanId = (string) $saved['plans'][$today]['id'];
+    $saved['plans'][$today . '#plan-eth'] = [
+        'id' => 'plan-eth', 'date' => $today, 'market' => 'ETH', 'markets' => ['ETH'],
+        'bias' => 'long', 'approvedAt' => null,
+    ];
+    $multiJson = json_encode($saved, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $db->execute(
+        'UPDATE user_states SET state = ?, bytes = ?, revision = revision + 1 WHERE user_id = ?',
+        [$multiJson, strlen($multiJson), $userA]
+    );
+    $legacyProposal = $service->create(
+        $userA,
+        'test-client',
+        'day_plan',
+        'plan:' . $today,
+        $saved['plans'][$today],
+        array_merge($saved['plans'][$today], ['why' => 'Stara niejednoznaczna propozycja']),
+        'idem-legacy-plan'
+    );
+    $legacyApprovalError = expectError(fn () => $service->approve($userA, $legacyProposal['proposalId'], $userA));
+    check('10a. zatwierdzenie starej propozycji nie wybiera planu', $legacyApprovalError === 'plan_id_required', $legacyApprovalError);
+    $ambiguousPlan = expectError(fn () => $builder->saveDayPlan($userA, [
+        'date' => $today, 'why' => 'Nie wybieraj niejawnie', 'idempotencyKey' => 'idem-plan-ambiguous',
+    ], 'test-client'));
+    check('10b. propozycja planu wymaga planId przy duplikacie', $ambiguousPlan === 'plan_id_required', $ambiguousPlan);
+    $targetedPlan = $builder->saveDayPlan($userA, [
+        'date' => $today, 'planId' => $primaryPlanId, 'why' => 'Zmiana wskazanego planu',
+        'idempotencyKey' => 'idem-plan-targeted',
+    ], 'test-client');
+    $service->approve($userA, $targetedPlan['proposalId'], $userA);
+    $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $saved = json_decode((string) $row['state'], true);
+    check(
+        '10c. zatwierdzenie propozycji zachowuje drugi plan',
+        count($saved['plans']) === 2
+        && ($saved['plans'][$today]['id'] ?? '') === $primaryPlanId
+        && ($saved['plans'][$today]['why'] ?? '') === 'Zmiana wskazanego planu'
+        && ($saved['plans'][$today . '#plan-eth']['id'] ?? '') === 'plan-eth',
+        json_encode(array_keys($saved['plans']))
+    );
+
+    $collisionPlanDate = (new DateTimeImmutable('2 days ago', Dates::tz()))->format('Y-m-d');
+    $collisionPlanProposal = $service->create(
+        $userA,
+        'test-client',
+        'day_plan',
+        'plan:' . $collisionPlanDate . '#' . $primaryPlanId,
+        null,
+        array_merge($saved['plans'][$today], ['id' => $primaryPlanId, 'date' => $collisionPlanDate]),
+        'idem-day-plan-id-conflict'
+    );
+    $collisionPlanError = expectError(
+        fn () => $service->approve($userA, $collisionPlanProposal['proposalId'], $userA)
+    );
+    check('10c1. propozycja nie może ponownie użyć ID planu z innej daty', $collisionPlanError === 'plan_id_conflict');
+
+    // 10d. write_op dla plan.create zapisuje dokładne ID z podglądu.
+    $proposalDate = (new DateTimeImmutable('yesterday', Dates::tz()))->format('Y-m-d');
+    $writeArgs = ['date' => $proposalDate, 'market' => 'SOL', 'bias' => 'long'];
+    $writeEngine = new WriteEngine($db, $config);
+    $preview = $writeEngine->preview($userA, $saved, 'plan.create', $writeArgs);
+    $writePlanProposal = $service->create(
+        $userA,
+        'test-client',
+        'write_op',
+        $preview['target'],
+        $preview['before'],
+        ['op' => 'plan.create', 'args' => $writeArgs],
+        'idem-write-op-plan-create',
+        null,
+        $preview['after']
+    );
+    $writePlanCode = $service->issueApprovalCode($userA, $writePlanProposal['proposalId'])['code'];
+    $service->approveWithCode(
+        $userA,
+        $writePlanProposal['proposalId'],
+        $writePlanProposal['diffHash'],
+        $writePlanCode,
+        'idem-write-op-plan-decision',
+        'test-client'
+    );
+    $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $saved = json_decode((string) $row['state'], true);
+    [$targetDate, $targetId] = array_pad(explode('#', substr($preview['target'], 5), 2), 2, '');
+    $savedPlan = null;
+    foreach (DayPlanRecords::forDate($saved, $proposalDate) as $record) {
+        if ($record['id'] === $targetId) {
+            $savedPlan = $record['plan'];
+            break;
+        }
+    }
+    check(
+        '10d. plan.create zatwierdza id wskazane w podglądzie i target',
+        str_starts_with($preview['target'], 'plan:' . $proposalDate . '#')
+        && $targetId !== ''
+        && $targetId === ($preview['after']['id'] ?? null)
+        && $savedPlan !== null
+        && ($savedPlan['market'] ?? '') === 'SOL'
+        && $targetDate === $proposalDate,
+        json_encode(['target' => $preview['target'], 'saved' => $savedPlan])
+    );
 
     // 11. Check-in i score.
     $checkin = $builder->saveCheckin($userA, ['mood' => 'Spokój', 'energy' => 4, 'note' => 'Dobry sen', 'idempotencyKey' => 'idem-checkin-1'], 'test-client');
@@ -315,10 +436,10 @@ try {
         && ($caseRejectA['status'] ?? '') === 'rejected'
         && ($caseRejectB['status'] ?? '') === 'rejected');
 
-    // 17. Zatwierdzenie przez MCP wymaga kodu z panelu.
+    // 17. Podanie nieaktywnego kodu nie pozwala ominąć jego wydania z panelu.
     $codeProposal = $builder->saveCheckin($userA, ['mood' => 'Spokój', 'energy' => 3, 'idempotencyKey' => 'idem-code-checkin-1'], 'test-client');
-    $missingCode = expectError(fn () => $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], 'ABCD-EFGH', 'idem-decision-1', 'test-client'));
-    check('17. brak kodu blokuje zatwierdzenie', $missingCode === 'confirmation_required', $missingCode);
+    $inactiveCode = expectError(fn () => $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], 'ABCD-EFGH', 'idem-decision-1', 'test-client'));
+    check('17. nieaktywny kod blokuje zatwierdzenie', $inactiveCode === 'confirmation_required', $inactiveCode);
 
     // 18. Kod jednorazowy: błędny kod i limit prób.
     $issued = $service->issueApprovalCode($userA, $codeProposal['proposalId']);
@@ -366,7 +487,7 @@ try {
         && $reusedCode === 'proposal_closed'
         && (int) $todayCheckin['energy'] === 3, json_encode([$approvedByMcp, $replayed, $reusedCode]));
 
-    // 20b. Zatwierdzenie w rozmowie (confirmed) bez kodu.
+    // 20b. Warstwa narzędzi wymaga confirmed; usługa akceptuje tę ścieżkę bez kodu.
     $chatProposal = $builder->saveCheckin($userA, ['mood' => 'Nuda', 'energy' => 3, 'idempotencyKey' => 'idem-chat-checkin-1'], 'test-client');
     $chatApproved = $service->approveWithCode($userA, $chatProposal['proposalId'], $chatProposal['diffHash'], null, 'idem-chat-decision-1', 'test-client');
     $db->execute('UPDATE mcp_proposals SET decision_hash = NULL WHERE id = ?', [$chatProposal['proposalId']]);
@@ -381,7 +502,8 @@ try {
     $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
     $chatState = json_decode((string) $row['state'], true);
     $chatCheckin = $chatState['checkins'][0] ?? null;
-    check('20b. confirmed bez kodu zatwierdza', ($chatApproved['status'] ?? '') === 'approved'
+    check('20b. confirmed bez kodu zatwierdza i legacy replay jest idempotentny',
+        ($chatApproved['status'] ?? '') === 'approved'
         && ($legacyChatReplay['duplicate'] ?? false) === true
         && ($chatCheckin['mood'] ?? '') === 'Nuda', json_encode([$chatApproved, $chatCheckin]));
 
@@ -522,10 +644,23 @@ try {
     check('27. lista propozycji bez hasha kodu', $pendingShapeOk && count($pendingItems) > 0, 'pending=' . count($pendingItems));
 
     // 30. Audyt.
-    $actions = array_column($service->auditLog($userA, 100), 'action');
+    $auditRows = $service->auditLog($userA, 100);
+    $actions = array_column($auditRows, 'action');
+    $chatApprovalAudit = false;
+    foreach ($auditRows as $auditRow) {
+        if ((string) ($auditRow['action'] ?? '') !== 'mcp.proposal.approve') {
+            continue;
+        }
+        $details = json_decode((string) ($auditRow['detail_json'] ?? ''), true);
+        if (is_array($details) && ($details['confirmed'] ?? false) === true) {
+            $chatApprovalAudit = true;
+            break;
+        }
+    }
     check('30. audyt zawiera utworzenie, kod i zatwierdzenie', in_array('mcp.proposal.create', $actions, true)
         && in_array('mcp.proposal.code', $actions, true)
-        && in_array('mcp.proposal.approve', $actions, true), implode(', ', array_unique($actions)));
+        && in_array('mcp.proposal.approve', $actions, true)
+        && $chatApprovalAudit, implode(', ', array_unique($actions)));
 } catch (\Throwable $err) {
     $fail++;
     echo 'FAIL  wyjątek testu  · ' . $err->getMessage() . "\n";

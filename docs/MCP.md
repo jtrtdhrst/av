@@ -1,8 +1,9 @@
-# AlphaVault MCP 3.2 — OAuth 2.1, 79 narzędzi, zapis bezpośredni i kosz
+# AlphaVault MCP 3.2 — OAuth 2.1, do 79 narzędzi, zapis bezpośredni i kosz
 
 > Serwer MCP działa na `https://mcp.alphavault.pl` i udostępnia dane wyłącznie
-> zalogowanego użytkownika. Zakres `alphavault.read` daje od razu wszystkie
-> 79 narzędzi: 46 odczytu i 33 zapisu. Wszystkie 30 operacji zapisu działa
+> zalogowanego użytkownika. Przy włączonym zapisie zakres `alphavault.read` daje
+> od razu wszystkie 79 narzędzi: 46 odczytu i 33 zapisu. Przy wyłączonym pozostaje
+> 46 narzędzi odczytu. Wszystkie 30 operacji zapisu działa
 > bezpośrednio; usunięcia są miękkie (kosz + `restore_deleted_record`).
 > 3 narzędzia obsługują opcjonalne propozycje z diffem (`propose_change`,
 > `approve_proposal`, `reject_proposal`). Nie ma osobnego zakresu zapisu ani
@@ -48,11 +49,14 @@ Pliki:
 
 | Scope | Znaczenie |
 | --- | --- |
-| `alphavault.read` | wszystkie 79 narzędzi: 46 odczytu i 33 zapisu, w tym lista i status propozycji |
-| `alphavault.health` | dane zdrowotne (sen, HRV, urządzenia); bez niego pole `health` jest `null` |
+| `alphavault.read` | 46 narzędzi odczytu; przy `MCP_WRITES_ENABLED=true` również 33 narzędzia zapisu (79 łącznie), jeśli konto spełnia ewentualną allowlistę pilota |
+| `alphavault.health` | dane fizjologiczne z urządzeń (sen, HRV, metryki); bez niego pole `health` jest `null`; wymaga osobnego checkboxa |
 
-Nie ma zakresu `alphavault.write`. Token z `alphavault.read` od razu widzi
-i wywołuje narzędzia zapisu; nie trzeba ponownie łączyć klienta po wdrożeniu.
+Nie ma zakresu `alphavault.write`. Przy włączonym zapisie token `alphavault.read`
+od razu widzi i wywołuje wszystkie 79 narzędzi; przy wyłączonym pozostaje 46 narzędzi
+odczytu. Zmiana flagi nie wymaga ponownego łączenia klienta.
+`readiness.score` może być nadal wyliczony z check-inu bez `alphavault.health`;
+metryki urządzenia i `health.physiologyScore` wymagają tego zakresu.
 
 ### 2.2. Feature flags
 
@@ -82,6 +86,14 @@ produkcyjną. Allowlista służy wyłącznie do pilotażu.
 | podatki i kalkulator | `get_tax_summary`, `get_calculator_result` |
 | propozycje | `list_pending_proposals`, `get_proposal_status` |
 
+`get_day_plan` przyjmuje `date` oraz opcjonalne `market` i `planId`. Odpowiedź zawiera `plans` ze wszystkimi planami danej daty oraz `plan` wybrany jednoznacznie po filtrach; każdy rekord ma stabilne `id` i wyliczone `status` (`draft`/`approved`). Jeśli filtry nie wskazują dokładnie jednego planu, `plan` ma wartość `null`.
+
+Poziomy w `levels` są zwracane z polami `type`, `price`, `value` i `note`. Przy zapisie można podać cenę jako `price` lub zgodnościowo jako `value`; odpowiedź udostępnia znormalizowaną cenę w obu polach, zachowując typ i notatkę. Kanoniczny typ płynności to `Liquidity` (etykieta UI: „Płynność”); historyczne `Płynność` jest akceptowane i normalizowane. Pozostałe typy to wsparcie, opór i POI.
+
+`get_day_plan_compliance` i `get_day_plan_context` przyjmują opcjonalne `planId` i `market`; selektory działają dla pojedynczego `date`, a zgodność także dla zakresu `from`/`to`. Różnice formatowania rynku (np. `BTCUSDT` i `BTC/USDT`) są normalizowane. Niepasujący filtr zgodności zwraca pusty wynik, nie zgodność wszystkich transakcji bez planu. Przy niejednoznacznym wyborze planu `get_day_plan_context` zwraca `plan: null` oraz pełną listę `plans`. `get_dashboard` zachowuje pole `plan` dla zgodności wstecznej (wypełnione wyłącznie przy dokładnie jednym planie) i dodaje `plans`. `get_trade_journal_context` również zwraca `plans`; `compliance.planAmbiguous=true` oznacza, że transakcji nie da się jednoznacznie przypisać do jednego z wielu planów.
+
+`get_trade_journal_context.checklist.selectedPoints` zwraca zapisane wybory checklisty, gdy transakcja ma pole `checklistItems` (w tym wpisy UI zapisane z nową wersją). Starsze transakcje i rekordy utworzone przez MCP, które przechowują tylko liczby `checklist`/`checkTotal`, zwracają pustą listę `selectedPoints`; bez tego pola nie da się wiarygodnie odtworzyć, które konkretne punkty zaznaczono.
+
 Zasady odczytu:
 
 - brak danych = `[]` albo `null`; bez tekstów zastępczych i domyślnych godzin,
@@ -102,14 +114,14 @@ Wykonuje się od razu, w transakcji, i zwraca nowy `revision`.
 | Narzędzie | Operacja |
 | --- | --- |
 | `create_trade` | `trade.create` |
-| `update_trade` | `trade.update` (pola dziennika; dane giełdowe zablokowane) |
-| `close_trade` | `trade.close` (wynik i R liczone serwerowo) |
+| `update_trade` | `trade.update` (pola dziennika; MAE/MFE: nieujemna liczba albo `null` do wyczyszczenia; SL wymagany i nie można go usunąć; dane giełdowe zablokowane) |
+| `close_trade` | `trade.close` (wynik i R liczone serwerowo; pominięte `mfe` zachowuje zapisany pomiar, jawne nieujemne `mfe` aktualizuje, a `null` czyści) |
 | `create_trade_review` | `review.create` |
 | `update_trade_review` | `review.update` |
 | `create_setup` | `setup.create` |
 | `update_setup` | `setup.update` |
-| `create_day_plan` | `plan.create` (szkic, bez zatwierdzenia) |
-| `update_day_plan` | `plan.update` |
+| `create_day_plan` | `plan.create` (szkic, bez zatwierdzenia; może dodać kolejny plan dla tej samej daty) |
+| `update_day_plan` | `plan.update` (wybór przez `date` i `planId`, gdy data ma wiele planów) |
 | `create_checkin` | `checkin.create` (score z formuły panelu) |
 | `update_checkin` | `checkin.update` |
 | `add_trade_screenshot` | `screenshot.add` (PNG/JPEG/WebP data URL) |
@@ -136,6 +148,8 @@ operacją — wtedy `approve_proposal` wykona ją po `confirmed: true`.
 | `delete_trade_screenshot` | `screenshot.delete` |
 | `restore_deleted_record` | `restore.record` |
 
+Plany dnia nie są unikalne per data: można utworzyć kilka niezależnych planów dla tego samego dnia, każdy z własnym ID, rynkiem, biasem i poziomami. `update_day_plan`, `approve_day_plan` i `delete_day_plan` przyjmują `planId`; można go pominąć tylko wtedy, gdy data wskazuje dokładnie jeden plan. Przy wielu planach brak `planId` zwraca `plan_id_required`; ID, które nadal nie rozstrzyga wyboru, zwraca `plan_id_ambiguous`. Poziomy (maks. 12) można odczytać i odesłać w tej samej postaci; `update_day_plan` bez zmian `levels` zachowuje dotychczasową listę.
+
 ### 4.3. Propozycje i decyzje (3)
 
 | Narzędzie | Działanie |
@@ -145,7 +159,9 @@ operacją — wtedy `approve_proposal` wykona ją po `confirmed: true`.
 | `reject_proposal` | odrzucenie propozycji |
 
 `propose_change` przyjmuje `operation` z listy 30 operacji i `args` zgodne z
-danym narzędziem. Stosuj je, gdy chcesz pokazać diff bez tworzenia wpisu.
+danym narzędziem. Stosuj je, gdy chcesz pokazać diff bez tworzenia wpisu. Dla
+`plan.create` zatwierdzony plan zachowuje ID wygenerowane w podglądzie i wskazane
+przez `target`; odpowiedź propozycji oraz zapisany rekord pozostają spójne.
 
 ## 5. Kontrakt zapisu
 
@@ -287,6 +303,8 @@ obsługiwane dla starszych wierszy.
 | `auth_required` | — | brak konta AlphaVault dla tokenu |
 | `revision_conflict` | 409 | stan zmienił się od odczytu |
 | `idempotency_conflict` | 409 | klucz użyty z inną treścią |
+| `plan_id_required` | 400 (zapis bezpośredni) / 409 (propozycja) | data ma wiele planów; podaj `planId` |
+| `plan_id_ambiguous` | 409 | `planId` nie wskazuje jednoznacznego planu |
 | `bad_request` | 400 | niepoprawne argumenty |
 | `not_found` / `*_missing` | 404 | brak rekordu |
 | `field_not_editable` | 400 | pole spoza kontraktu MCP |
@@ -331,10 +349,11 @@ gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main `
 
 | Test | Zakres |
 | --- | --- |
-| `php tests/mcp-write.test.php` | rejestr 30 operacji, routing zgody, schematy 33 narzędzi (w tym `confirmed`), formuły i walidacja `apply()` bez DB |
-| `php tests/mcp.test.php` | tokeny, PKCE, revoke, rate limit, nagłówki, zatwierdzenie kodem i bez kodu |
-| `node tests/mcp.e2e.mjs` | OAuth, 79 narzędzi z `alphavault.read`, cykl create → update → close → delete → restore, idempotencja, revision, `confirmed`, pilot |
-| `node tests/mcp-tools.e2e.mjs` | udane wywołanie każdego narzędzia z runtime `tools/list` (79/79), bezpieczne fixture'y DB CI, wydarzenia/paginacja, daty makro i DST, wszystkie 33 zapisy, propozycje i workflow analityczne |
+| `php tests/mcp-write.test.php` | rejestr 30 operacji bezpośrednich, routing zgody, schematy 33 narzędzi, wiele planów, `planId`, wymagany SL, ścisła walidacja MAE/MFE, blokada `r` dla importów i round-trip poziomów |
+| `php tests/mcp-tools.test.php` | statusy i selektory planów, dokładne dopasowanie rynku bez kolizji prefiksów, puste metryki API jako `null`, filtry kont i analityka |
+| `php tests/mcp.test.php` | propozycje i kod jednorazowy, wymagany SL, idempotencja decyzji, konflikt rewizji, zgodność ID `plan.create` z targetem, ochrona danych giełdowych, `target_missing`, izolacja i audyt |
+| `node tests/mcp.e2e.mjs` | OAuth, 79 narzędzi, gdy zapisy włączone, w przeciwnym razie 46 odczytu; cykl create → update → close → delete → restore, idempotencja, revision, `confirmed`, pilot |
+| `node tests/mcp-tools.e2e.mjs` | JSON-RPC: health-only consent, pełne cykle 33 narzędzi, selektory `planId`/`market`, MAE/MFE, pominięte vs jawne `null` przy zamknięciu, propozycje, kosz i workflow analityczne; odizolowane fixture'y i paginacja |
 | `node tests/deploy-mcp-guard.test.mjs` | odmowa niepełnego/niezaweryfikowanego SHA, PR/dispatch-only, złej gałęzi lub błędnego repo; wymóg checkoutu zatwierdzonego SHA i health provenance |
 | `node tests/mcp-login.e2e.mjs` | logowanie i panel MCP |
 
@@ -344,7 +363,8 @@ zielonym runie i health checku `https://mcp.alphavault.pl/health`.
 ## 15. Prywatność i granice
 
 - Serwer nie przyjmuje `user_id`; tożsamość wynika wyłącznie z tokenu.
-- Jedno połączenie OAuth daje od razu wszystkie 79 narzędzi; nie ma drugiego zakresu ani reconnectu po wdrożeniu.
+- Przy włączonym zapisie jedno połączenie OAuth daje wszystkie 79 narzędzi; nie ma drugiego zakresu ani reconnectu po zmianie flagi.
+- Odmowa jedynego żądanego scope’u `alphavault.health` kończy autoryzację `access_denied`; serwer nigdy nie zastępuje odmówionego zakresu szerszym `alphavault.read`.
 - Wszystkie operacje zapisu działają bezpośrednio; usunięcia trafiają do kosza i wracają przez `restore_deleted_record`.
 - `confirmed: true` dotyczy tylko opcjonalnej ścieżki `propose_change` → `approve_proposal` i jest ustawiane wyłącznie po wyraźnym „tak” użytkownika w rozmowie.
 - Dane zdrowotne wymagają `alphavault.health` i aktywnego połączenia urządzenia. Bez dostępu

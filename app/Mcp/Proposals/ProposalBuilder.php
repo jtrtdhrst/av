@@ -4,7 +4,10 @@ declare(strict_types=1);
 namespace AlphaVault\Mcp\Proposals;
 
 use AlphaVault\Db;
+use AlphaVault\Mcp\Analytics\DayPlanService;
 use AlphaVault\Mcp\Support\Dates;
+use AlphaVault\Mcp\Support\DayPlanLevels;
+use AlphaVault\Mcp\Support\DayPlanRecords;
 use AlphaVault\Mcp\Support\Numbers;
 use AlphaVault\Mcp\Support\PropChallengeService;
 
@@ -43,6 +46,9 @@ final class ProposalBuilder
 
         $entry = $this->positiveNumber($args['entry'] ?? null, 'entry');
         $size = $this->positiveNumber($args['size'] ?? null, 'size');
+        if (!array_key_exists('sl', $args) || $args['sl'] === null || $args['sl'] === '') {
+            throw new ProposalException('stop_loss_required', 'Stop loss jest wymagany przy zapisie transakcji.', 400);
+        }
         $sl = null;
         $tp = null;
         if (array_key_exists('sl', $args) && $args['sl'] !== null && $args['sl'] !== '') {
@@ -92,7 +98,7 @@ final class ProposalBuilder
         $note = mb_substr(trim((string) ($args['note'] ?? '')), 0, 2000);
         $date = $this->tradeDate((string) ($args['date'] ?? ''));
         $account = $this->account($state, $args['account'] ?? null);
-        $plan = $this->planForToday($state, $setup);
+        $plan = $this->planForToday($state, $setup, $pair, $date);
 
         $decimals = $this->decimals($entry);
         $trade = [
@@ -101,8 +107,8 @@ final class ProposalBuilder
             'exit' => 'otwarta',
             'result' => null,
             'r' => null,
-            'mae' => 0,
-            'mfe' => 0,
+            'mae' => null,
+            'mfe' => null,
             'durationMin' => 0,
             'fee' => 0,
             'source' => 'Ręcznie',
@@ -132,7 +138,7 @@ final class ProposalBuilder
     public function closeTrade(int $userId, array $args, string $clientName): array
     {
         $key = $this->idempotencyKey($args);
-        $this->rejectFields($args, ['tradeId', 'exitPrice', 'idempotencyKey']);
+        $this->rejectFields($args, ['tradeId', 'exitPrice', 'mfe', 'idempotencyKey']);
         $tradeId = trim((string) ($args['tradeId'] ?? ''));
         if ($tradeId === '') {
             throw new ProposalException('bad_request', 'Pole tradeId jest wymagane.', 400);
@@ -165,7 +171,9 @@ final class ProposalBuilder
             'exit' => $this->formatNumber($exit, $this->decimals($entry)),
             'result' => $result,
             'r' => $r,
-            'mfe' => max((float) ($trade['mfe'] ?? 0), abs($r)),
+            'mfe' => array_key_exists('mfe', $args)
+                ? $this->nonNegativeMetric($args['mfe'], 'mfe')
+                : $this->storedMetric($trade['mfe'] ?? null),
             'durationMin' => max(1, (int) round((time() - $openedAt) / 60)),
             'mentor' => $result > 0
                 ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
@@ -248,7 +256,7 @@ final class ProposalBuilder
     {
         $key = $this->idempotencyKey($args);
         $this->rejectFields($args, [
-            'date', 'market', 'markets', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt',
+            'date', 'planId', 'market', 'markets', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt',
             'scenarioA', 'scenarioB', 'riskPercent', 'maxTrades', 'until', 'notDo', 'rulesNotToDo', 'idempotencyKey',
         ]);
         $date = trim((string) ($args['date'] ?? Dates::todayKey()));
@@ -262,8 +270,26 @@ final class ProposalBuilder
         }
 
         $state = $this->state($userId);
-        $before = is_array($state['plans'][$date] ?? null) ? $state['plans'][$date] : null;
-        $after = $before ?? ['date' => $date, 'approvedAt' => null];
+        $records = DayPlanRecords::forDate($state, $date);
+        $requestedId = trim((string) ($args['planId'] ?? ''));
+        if ($requestedId !== '') {
+            $records = array_values(array_filter($records, static fn (array $record): bool => $record['id'] === $requestedId));
+            if ($records === []) {
+                throw new ProposalException('plan_missing', 'planId nie istnieje dla daty ' . $date . '.', 404);
+            }
+            if (count($records) > 1) {
+                throw new ProposalException('plan_id_ambiguous', 'planId nie identyfikuje jednoznacznie planu na ' . $date . '.', 409);
+            }
+            $before = $records[0]['plan'];
+            $planId = $records[0]['id'];
+        } elseif (count($records) > 1) {
+            throw new ProposalException('plan_id_required', 'Na ' . $date . ' jest wiele planów. Podaj planId, aby wskazać właściwy rekord.', 409);
+        } else {
+            $before = null;
+            $planId = DayPlanRecords::uniqueId($state);
+        }
+        $after = $before ?? ['id' => $planId, 'date' => $date, 'approvedAt' => null];
+        $after['id'] = $planId;
         $after['date'] = $date;
 
         if (array_key_exists('market', $args)) {
@@ -344,7 +370,7 @@ final class ProposalBuilder
         // approvedAt nigdy nie jest ustawiane przez agenta.
         $after['approvedAt'] = $before['approvedAt'] ?? null;
 
-        return $this->proposals->create($userId, $clientName, 'day_plan', 'plan:' . $date, $before, $after, $key, $this->fingerprint($args));
+        return $this->proposals->create($userId, $clientName, 'day_plan', 'plan:' . $date . '#' . $planId, $before, $after, $key, $this->fingerprint($args));
     }
 
     public function saveCheckin(int $userId, array $args, string $clientName): array
@@ -762,6 +788,9 @@ final class ProposalBuilder
         $direction = in_array($dirRaw, ['short', 's'], true) ? 's' : 'l';
         $entry = $this->positiveNumber($args['entry'] ?? null, 'entry');
         $size = $this->positiveNumber($args['size'] ?? null, 'size');
+        if (!array_key_exists('sl', $args) || $args['sl'] === null || $args['sl'] === '') {
+            throw new ProposalException('stop_loss_required', 'Stop loss jest wymagany przy zapisie transakcji.', 400);
+        }
         $sl = null;
         if (array_key_exists('sl', $args) && $args['sl'] !== null && $args['sl'] !== '') {
             $sl = $this->positiveNumber($args['sl'], 'sl');
@@ -839,11 +868,11 @@ final class ProposalBuilder
             'mentor' => $this->mentorForGrade($grade, count($errors)),
             'setup' => $setup,
             'session' => $session,
-            'mae' => 0,
-            'mfe' => 0,
+            'mae' => null,
+            'mfe' => null,
             'durationMin' => 0,
             'fee' => $fee,
-            'plan' => $this->planForToday($state, $setup),
+            'plan' => $this->planForToday($state, $setup, $pair, $date),
             'source' => 'Ręcznie',
             'account' => $account,
             'screens' => [],
@@ -934,8 +963,7 @@ final class ProposalBuilder
             }
             $value = $changes[$field];
             if ($field === 'sl' && ($value === null || $value === '' || $value === 'brak')) {
-                $after['sl'] = 'brak';
-                continue;
+                throw new ProposalException('stop_loss_required', 'Stop loss jest wymagany przy transakcji.', 400);
             }
             if ($field === 'tp' && ($value === null || $value === '' || $value === '—')) {
                 $after['tp'] = '—';
@@ -1329,6 +1357,28 @@ final class ProposalBuilder
         return $number;
     }
 
+    private function nonNegativeMetric(mixed $value, string $field): ?float
+    {
+        if ($value === null) {
+            return null;
+        }
+        if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value) || $value < 0) {
+            throw new ProposalException('bad_request', 'Pole ' . $field . ' musi być nieujemną liczbą albo null.', 400);
+        }
+
+        return round((float) $value, 4);
+    }
+
+    private function storedMetric(mixed $value): ?float
+    {
+        if ($value === null || (is_string($value) && trim($value) === '') || !is_numeric($value)) {
+            return null;
+        }
+        $number = (float) $value;
+
+        return is_finite($number) && $number >= 0 ? round($number, 4) : null;
+    }
+
     private function errors(mixed $value): array
     {
         if (!is_array($value)) {
@@ -1368,28 +1418,11 @@ final class ProposalBuilder
 
     private function levels(mixed $value): array
     {
-        if (!is_array($value) || count($value) > 10) {
-            throw new ProposalException('bad_request', 'levels musi być tablicą maks. 10 poziomów.', 400);
+        try {
+            return DayPlanLevels::normalizeList($value, 10, false, true, 30, true);
+        } catch (\InvalidArgumentException $err) {
+            throw new ProposalException('bad_request', $err->getMessage(), 400);
         }
-        $out = [];
-        foreach ($value as $level) {
-            if (!is_array($level)) {
-                throw new ProposalException('bad_request', 'Poziom musi być obiektem.', 400);
-            }
-            $typeRaw = strtolower(trim((string) ($level['type'] ?? '')));
-            $type = in_array($typeRaw, ['resistance', 'opór', 'opor'], true) ? 'Opór' : 'Wsparcie';
-            $price = trim((string) ($level['price'] ?? ''));
-            if ($price !== '' && (!is_numeric(str_replace(',', '.', $price)) || (float) str_replace(',', '.', $price) <= 0)) {
-                throw new ProposalException('bad_request', 'Cena poziomu musi być liczbą większą od 0.', 400);
-            }
-            $note = mb_substr(trim((string) ($level['note'] ?? '')), 0, 200);
-            if ($price === '' && $note === '') {
-                continue;
-            }
-            $out[] = ['type' => $type, 'price' => str_replace(',', '.', $price), 'note' => $note];
-        }
-
-        return $out;
     }
 
     private function setupNames(array $state): array
@@ -1444,14 +1477,14 @@ final class ProposalBuilder
         return 7;
     }
 
-    private function planForToday(array $state, string $setup): bool
+    private function planForToday(array $state, string $setup, string $pair, string $date): bool
     {
         if ($setup === 'Bez setupu') {
             return false;
         }
-        $plan = $state['plans'][Dates::todayKey()] ?? null;
+        $plan = (new DayPlanService())->planForTrade($state, ['pair' => $pair, 'date' => $date]);
 
-        return is_array($plan) && !empty($plan['approvedAt']);
+        return $plan !== null && !empty($plan['approvedAt']);
     }
 
     private function mentorForGrade(string $grade, int $errorCount): string

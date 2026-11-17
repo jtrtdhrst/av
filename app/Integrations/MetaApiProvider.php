@@ -223,7 +223,9 @@ final class MetaApiProvider extends AbstractProvider
                     'exitQty' => 0.0,
                     'exitNotional' => 0.0,
                     'result' => 0.0,
+                    'resultKnown' => true,
                     'fees' => 0.0,
+                    'feesKnown' => true,
                     'openTime' => $time,
                     'closeTime' => $time,
                 ];
@@ -239,11 +241,19 @@ final class MetaApiProvider extends AbstractProvider
                 $pos['entryNotional'] += $volume * $price;
                 $pos['openTime'] = min((int) $pos['openTime'], $time);
             }
-            $pos['result'] += (Normalizer::num($deal['profit'] ?? null) ?? 0.0)
-                + (Normalizer::num($deal['commission'] ?? null) ?? 0.0)
-                + (Normalizer::num($deal['swap'] ?? null) ?? 0.0);
-            $pos['fees'] += abs((Normalizer::num($deal['commission'] ?? null) ?? 0.0)
-                + (Normalizer::num($deal['swap'] ?? null) ?? 0.0));
+            $profit = Normalizer::num($deal['profit'] ?? null);
+            $commission = Normalizer::num($deal['commission'] ?? null);
+            $swap = Normalizer::num($deal['swap'] ?? null);
+            if ($profit === null || $commission === null || $swap === null) {
+                $pos['resultKnown'] = false;
+            } else {
+                $pos['result'] += $profit + $commission + $swap;
+            }
+            if ($commission === null || $swap === null) {
+                $pos['feesKnown'] = false;
+            } else {
+                $pos['fees'] += abs($commission + $swap);
+            }
             unset($pos);
         }
 
@@ -264,8 +274,8 @@ final class MetaApiProvider extends AbstractProvider
                 'entry' => Normalizer::price((float) $pos['entryNotional'] / $pos['entryQty']),
                 'exit' => Normalizer::price((float) $pos['exitNotional'] / $pos['exitQty']),
                 'size' => Normalizer::size((float) $pos['exitQty']),
-                'result' => round((float) $pos['result'], 8),
-                'fee' => round((float) $pos['fees'], 8),
+                'result' => $pos['resultKnown'] ? round((float) $pos['result'], 8) : null,
+                'fee' => $pos['feesKnown'] ? round((float) $pos['fees'], 8) : null,
                 'durationMin' => max(0, (int) round(((int) $pos['closeTime'] - (int) $pos['openTime']) / 60000)),
                 'source' => $this->label(),
                 'account' => $this->label(),

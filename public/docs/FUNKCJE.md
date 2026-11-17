@@ -39,12 +39,12 @@ Legenda:
 |---|---|---|
 | Check-in przed rynkiem | ✅ | nastrój, energia, notatka; zapis w stanie; bez sekcji gotowości i bez integracji ze sprzętem |
 | Wynik dnia | ✅ | z transakcji dzisiejszych, przeliczony na walutę wyników |
-| Limity strat/transakcji/ryzyka | ✅ | z planu dnia i ustawień |
-| Plan dnia na pulpicie | ✅ | z zatwierdzonego planu |
+| Limity strat/transakcji/ryzyka | ✅ | limit strat z ustawień; limity planu są pokazywane tylko przy jednoznacznym planie, bez arbitralnego wyboru przy wielu |
+| Plany dnia na pulpicie | ✅ | podgląd wszystkich planów przypisanych do dzisiejszej daty |
 | Makro-widget | ✅ | najbliższe wydarzenia ★★★, odświeżanie |
 | Alarm mentora | ✅ | na podstawie ostatnich transakcji |
 | Krzywa kapitału 30 dni | ✅ | liczona z transakcji |
-| Saldo portfela | ✅ | suma sald kont włączonych do statystyk, % od kapitału startowego, informacja o koncie głównym; kliknięcie prowadzi do „Konto i zasady” |
+| Saldo portfela i lista kont | ✅ | suma sald kont włączonych do statystyk i % od kapitału startowego tylko przy kompletnych saldach bieżących i startowych; puste saldo nie jest traktowane jak zero; rozwinięcie karty pokazuje konta, kliknięcie prowadzi do „Konto i zasady” |
 | Szybkie przejście do statystyk | ✅ | |
 
 ---
@@ -53,8 +53,9 @@ Legenda:
 
 | Funkcja | Stan | Opis |
 |---|---|---|
-| Rynek, bias, uzasadnienie | ✅ | lista rynku (wszystkie instrumenty + „Inny rynek…” z własną nazwą) i chipy szybkiego wyboru; bias jako przyciski Long/Short/Neutralnie/Nie gram; zapis do `plans[data]` i PUT `/api/state` |
-| Kluczowe poziomy | ✅ | dodawanie/usuwanie, walidacja ceny; pusty wiersz zostaje w szkicu |
+| Rynek, bias, uzasadnienie | ✅ | każdy plan ma własny rynek, bias i uzasadnienie; wiele niezależnych planów może przypadać na jedną datę; lista rynku zawiera instrumenty i „Inny rynek…” z własną nazwą |
+| Wybór planu | ✅ | selektor przełącza plany tej daty; utworzenie kolejnego nie nadpisuje istniejącego; historia otwiera konkretny plan |
+| Kluczowe poziomy | ✅ | dodawanie/usuwanie oporu, wsparcia, płynności i POI; typ, cena i opis są niezależne; pusty wiersz zostaje w szkicu |
 | Scenariusze główny/awaryjny | ✅ | |
 | Limity (ryzyko, max transakcji, godzina) | ✅ | wpływają na pulpit |
 | „Czego dziś nie robię” | ✅ | |
@@ -62,7 +63,7 @@ Legenda:
 | Zgodność transakcji z planem | ✅ | liczona po dacie, parze i kierunku (`planMatchesTrade`); sam setup nie wystarcza |
 | Kopiuj z wczoraj | ✅ | natychmiastowy zapis w MySQL |
 | Autosave szkicu | ✅ | debounce 700 ms; błąd zapisu pokazany toastem |
-| Trwały zapis w MySQL | ✅ | `user_states.state.plans[YYYY-MM-DD]`; przeładowanie odtwarza plan z bazy |
+| Trwały zapis w MySQL | ✅ | każdy plan ma własny identyfikator i rynek w `user_states.state.plans`; przeładowanie odtwarza wiele planów tej samej daty |
 | Dziś/Wczoraj/Historia | ✅ | historia planów, podgląd |
 | Trzymanie się planu | ✅ | 5 dni wstecz |
 
@@ -78,13 +79,15 @@ Legenda:
 | Szukanie po parze/emocji/setupie | ✅ | |
 | Szczegóły transakcji | ✅ | wykres, MAE/MFE, checklist, notatka, mentor |
 | Screeny przed/po | ✅ | upload, drag&drop, Ctrl+V; JPEG w stanie |
-| Dodanie transakcji | ✅ | formularz startuje pusty; walidacja kierunku SL/TP; ryzyko = \|entry − SL\| × size; ostrzeżenie przy przekroczeniu limitu |
+| Dodanie transakcji | ✅ | formularz startuje pusty; SL jest obowiązkowy, TP opcjonalny; R:R jest elastyczne i dobierane do setupu; ręczna checklista nie ma minimalnego progu zapisu; ryzyko = \|entry − SL\| × size |
+| Po zapisie | ✅ | formularz przełącza do dziennika i resetuje jego filtry |
+| Widoczność wpisów | ✅ | dziennik pokazuje wszystkie transakcje; „W statystykach” na koncie nadal filtruje statystyki, nie listę dziennika |
 | Pusty dziennik | ✅ | CTA „Dodaj transakcję” i „Giełdy i API” bez tekstu zastępczego; „Brak transakcji spełniających filtry” tylko przy aktywnym filtrze |
-| Edycja transakcji | ✅ | formularz wypełniony danymi |
+| Edycja transakcji | ✅ | formularz wypełniony danymi, zachowuje dokładny ręczny wybór punktów checklisty |
 | Usunięcie transakcji | ✅ | potwierdzenie |
-| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; MAE/MFE tylko z importu |
+| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
 | Eksport CSV | ✅ | średnik + BOM (Excel PL) |
-| Import CSV z giełdy | ✅ | parser WEEX/OKX/BingX/Bybit/MT, podgląd, deduplikacja |
+| Import CSV z giełdy | ✅ | parser WEEX/OKX/BingX/Bybit/MT, podgląd, deduplikacja; pomija wiersz bez PnL i bez danych do jego wyliczenia; MAE/MFE, opłaty i czas pozostają puste, gdy źródło ich nie zawiera |
 | Tryb ochronny (limit strat) | ✅ | blokada, countdown, obejście z powodem |
 | „Wpisuję wcześniejszą transakcję” | ✅ | zapis obejścia w `overrides` |
 
@@ -115,7 +118,7 @@ Import XLS/XLSX nie jest czytany — zapisz jako CSV (komunikat w UI).
 | Long/Short | ✅ | walidacja SL/TP |
 | Szybkie kwoty | ✅ | saldo, dźwignia, ryzyko |
 | Portfel i MM z planu | ✅ | wybór konta ustawia saldo, dźwignię i `settings.maxRisk`; wartości można zmienić ręcznie, wybór zapisany w `state.calc` |
-| Auto SL/TP z wybranym R:R | ✅ | 1:1, 1:2, 1:3, 1:5 lub własna wartość; tylko z aktualnej ceny rynkowej; kierunek Long/Short |
+| Auto SL/TP z wybranym R:R | ✅ | 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własna wartość; tylko z aktualnej ceny rynkowej; kierunek Long/Short |
 | Reset | ✅ | czyści wybór portfela, R:R i wartości |
 | Kroki obliczeń | ✅ | |
 
@@ -127,18 +130,18 @@ Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnic
 
 | Funkcja | Stan | Opis |
 |---|---|---|
-| Zakres 7/30/90 dni/wszystko | ✅ | |
+| Zakres ogólnych statystyk 7/30/90 dni/wszystko | ✅ | niezależny od zakresu kalendarza PnL |
 | Wynik, skuteczność, PF, expectancy | ✅ | z transakcji; przy 0 transakcji „—”, bez dzielenia przez zero |
 | Wynik transakcji równy 0 | ✅ | break-even; nie jest klasyfikowany jako zysk ani strata |
 | Max obsunięcie | ✅ | z krzywej kapitału |
 | % ze SL, zgodność z planem, opłaty | ✅ | przy 0 transakcji „—”; opłaty 0,00 bez ujemnego zera |
 | Krzywa kapitału | ✅ | SVG z realnych danych |
-| Kalendarz PnL | ✅ | własny zakres 7 dni / 30 dni / miesiąc, nawigacja poprzedni/następny/bieżący; liczby dni w komórkach, kolor = wynik dnia |
+| Kalendarz PnL | ✅ | własny, niezależny zakres 7 dni / 30 dni / miesiąc i nawigacja poprzedni/następny/bieżący; liczby dni w komórkach, kolor = wynik dnia |
 | Wynik wg oceny | ✅ | bez pochwał przy braku danych |
 | Checklista a wynik | ✅ | etykiety z długości checklisty użytkownika, nie stałe 7/7 |
 | Koszt błędów | ✅ | pusty stan bez „Tak trzymaj” |
-| MAE/MFE | ✅ | tylko transakcje z importu; wpisy ręczne mają null |
-| Sesje/emocje/czas trwania | ✅ | średnie pomijają null |
+| MAE/MFE | ✅ | zapisuje się wyłącznie pomiar dostarczony przez źródło lub wpisany ręcznie; niezmierzone wartości pozostają `null` i są pomijane w statystykach; MCP może ustawić nieujemną wartość albo jawnie wyczyścić do `null` |
+| Sesje/emocje/czas trwania | ✅ | średnie pomijają wartości nieznane |
 
 ---
 
@@ -150,11 +153,11 @@ Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnic
 | Jak to działa | ✅ | przepływ Alpha Vault → Serwer MCP → Asystent AI |
 | Zakładki klientów | ✅ | ChatGPT, Claude, Grok — po 4 krokach konfiguracji; Claude przez `https://claude.ai/api/mcp/auth_callback` |
 | Korzyści i bezpieczeństwo | ✅ | kontekst konta, wspólny endpoint, zakres uprawnień |
-| Status serwera MCP | ✅ | pill z `/api/mcp`: `MCP · TYLKO ODCZYT`, `MCP · ZAPIS` albo `MCP · WYŁĄCZONY` |
+| Konfiguracja MCP | ✅ | pill z `/api/mcp` pokazuje globalną konfigurację panelu (odczyt/zapis); nie sprawdza zdalnej dostępności serwera ani kwalifikacji konta do allowlisty pilota |
 | Oczekujące propozycje | ✅ | lista zmian od agenta z diffem, przyciskami Zatwierdź/Odrzuć, kodem do rozmowy i statusem po decyzji |
-| Zatwierdzanie w rozmowie | ✅ | jednorazowy kod (TTL 10 min, limit 5 prób) wydawany w panelu; agent zatwierdza `approve_proposal` tylko z tym kodem |
-| Zakres MCP 3.2 | ✅/— | 79 narzędzi w jednym zakresie `alphavault.read`: 46 odczytu i 33 zapisu (30 bezpośrednich: transakcje, recenzje, setupy, plan, check-in, screen, usunięcia, konta, wpłaty/wypłaty, reguły ryzyka, prop, zatwierdzenie planu, kosz; 3 propozycje: `propose_change`, `approve_proposal`, `reject_proposal`). Bez `alphavault.write` i bez obowiązkowego kodu z panelu. `MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu |
-| Zakres danych MCP | ✅ | profil, plan dnia, transakcje, dziennik, playbook, statystyki i raporty, check-iny, ryzyko i tryb ochronny, prop challenge, kalkulator, kapitał i PIT-38, makro, synchronizacje, odznaki; bez kluczy API i haseł; dane zdrowotne tylko przy scope `alphavault.health` i zgodzie urządzenia |
+| Zatwierdzanie propozycji | ✅ | klient powinien wysłać `approve_proposal` po zgodzie z `confirmed: true` i zgodnym `diffHash`; serwer sprawdza flagę/hash, nie treść rozmowy; kod z panelu (TTL 10 min, limit 5 prób) jest opcjonalny |
+| Zakres MCP 3.2 | ✅/— | przy włączonym zapisie zakres `alphavault.read` udostępnia 79 narzędzi: 46 odczytu i 33 zapisu (30 bezpośrednich i 3 propozycji). Bez zakresu `alphavault.write` i obowiązkowego kodu z panelu. `MCP_WRITES_ENABLED=false` pozostawia 46 narzędzi odczytu |
+| Zakres danych MCP | ✅ | profil, plan dnia, transakcje, dziennik, playbook, statystyki i raporty, check-iny, ryzyko i tryb ochronny, prop challenge, kalkulator, kapitał i PIT-38, makro, synchronizacje, odznaki; bez kluczy API i haseł; fizjologia z urządzeń wymaga scope `alphavault.health` i zgody na ekranie MCP; wynik `readiness.score` może pochodzić z check-inu bez tego scope |
 | Zgoda i wycofanie | ✅ | ekran zgody z zakresem, link do polityki §13.2, unieważnienie tokenu w `/oauth/connected` |
 | Proaktywna wiadomość przy limicie strat | ✅ | przycisk prowadzi do integracji MCP |
 
@@ -230,15 +233,15 @@ To zestawienie pomocnicze, nie porada podatkowa.
 
 | Funkcja | Stan | Opis |
 |---|---|---|
-| Ten/następny tydzień | ✅ | `macro_events` + `/api/macro-events`; FF (bieżący) i TradingView (następny) |
-| Nawigacja tygodni | ✅ | poprzedni, bieżący, następny, +2 i +3 tydzień; zakres dat w nagłówku; dane zależne od okna synchronizacji |
+| Tygodnie makro | ✅ | `macro_events` + `/api/macro-events`; ForexFactory dla bieżącego pełnego tygodnia, TradingView dla poprzedniego pełnego tygodnia oraz pełnych tygodni +1, +2 i +3 (również przy cold-starcie) |
+| Nawigacja tygodni | ✅ | poprzedni, bieżący, +1, +2 i +3 tydzień; zakres dat w nagłówku; API obejmuje poprzedni pełny tydzień i filtruje od 14 dni wstecz do około 35 dni naprzód |
 | Filtr ★★ | ✅ | toggle `macroTwo` |
 | Statusy (zakończone/dziś/za X min) | ✅ | odświeżanie |
 | Następne ważne | ✅ | |
 | Twoje dane w dni makro | ✅ | z transakcji |
 | Powiadomienia 30 min | ✅ | toast + Notification API, jeśli pozwolono |
 | Widget MAKRO | ✅ | te same dane co kalendarz |
-| Synchronizacja | ✅ | `bin/sync-macro-events.php`; wrapper LH Cron `*/5`, throttle 15 min |
+| Synchronizacja | ✅ | `bin/sync-macro-events.php`; wrapper LH Cron `*/5`, throttle 15 min; błąd zachowuje ostatnie dobre dane, a `partial`/`error` i `lastError` są widoczne |
 
 ---
 

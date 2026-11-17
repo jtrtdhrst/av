@@ -179,10 +179,10 @@ try {
   const code = (await page.locator('#mtCode').innerText()).trim();
   log('EA: kod parowania w UI', true, code);
 
-  // dziennik: 47 + 2 OKX + 1 WEEX + 1 BingX + 1 MT = 52
+  // dziennik: 47 + 2 OKX + 2 WEEX + 2 BingX + 1 MT = 54
   await page.click('.navg button[data-v="trans"]');
   const rows = await page.locator('#tbody tr').count();
-  assert.equal(rows, 52);
+  assert.equal(rows, 54);
   log('dziennik: transakcje z integracji widoczne', true, rows + ' transakcji');
 
   const html = await page.content();

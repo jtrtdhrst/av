@@ -10,7 +10,7 @@ namespace AlphaVault\Integrations;
 final class PositionReconstructor
 {
     /**
-     * @param array<int,array{id:string,symbol:string,side:string,positionSide:?string,qty:float,price:float,fee:float,pnl:?float,time:int}> $fills
+     * @param array<int,array{id:string,symbol:string,side:string,positionSide:?string,qty:float,price:float,fee:?float,pnl:?float,time:int}> $fills
      * @return array<int,array<string,mixed>>
      */
     public static function build(array $fills, string $provider, string $label): array
@@ -47,7 +47,11 @@ final class PositionReconstructor
                     $cycle['qty'] += $remaining;
                     $cycle['entryNotional'] += $remaining * $fill['price'];
                     $cycle['entryTime'] = $cycle['entryTime'] ?? $fill['time'];
-                    $cycle['fees'] += $fill['fee'] * ($remaining / $fill['qty']);
+                    if ($fill['fee'] === null) {
+                        $cycle['feesKnown'] = false;
+                    } else {
+                        $cycle['fees'] += $fill['fee'] * ($remaining / $fill['qty']);
+                    }
                     $cycle['ids'][] = $fill['id'];
                     $remaining = 0;
                     break;
@@ -60,7 +64,11 @@ final class PositionReconstructor
                 $cycle['exitNotional'] += $closeQty * $fill['price'];
                 $cycle['exitQty'] += $closeQty;
                 $cycle['exitTime'] = $fill['time'];
-                $cycle['fees'] += $fill['fee'] * $ratio;
+                if ($fill['fee'] === null) {
+                    $cycle['feesKnown'] = false;
+                } else {
+                    $cycle['fees'] += $fill['fee'] * $ratio;
+                }
                 $cycle['ids'][] = $fill['id'];
 
                 if ($fill['pnl'] !== null) {
@@ -102,6 +110,7 @@ final class PositionReconstructor
             'exitQty' => 0.0,
             'exitTime' => null,
             'fees' => 0.0,
+            'feesKnown' => true,
             'pnl' => 0.0,
             'ids' => [],
         ];
@@ -125,10 +134,13 @@ final class PositionReconstructor
         $exit = (float) $cycle['exitNotional'] / $qty;
         $pnl = (float) $cycle['pnl'];
         $fees = (float) $cycle['fees'];
-        $firstId = (string) ($cycle['ids'][0] ?? bin2hex(random_bytes(6)));
         $closeAt = (int) ($cycle['exitTime'] ?? $cycle['entryTime'] ?? time() * 1000);
         $openAt = (int) ($cycle['entryTime'] ?? $closeAt);
         $symbol = (string) $cycle['symbol'];
+        $firstId = (string) ($cycle['ids'][0] ?? '');
+        if ($firstId === '') {
+            $firstId = 'f' . substr(sha1($symbol . '|' . $closeAt . '|' . $qty), 0, 24);
+        }
 
         return [
             'extId' => $provider . ':' . $symbol . ':' . $firstId . ':' . $closeAt,
@@ -138,8 +150,8 @@ final class PositionReconstructor
             'entry' => Normalizer::price($entry),
             'exit' => Normalizer::price($exit),
             'size' => Normalizer::size($qty),
-            'result' => round($pnl + $fees, 8),
-            'fee' => round(abs($fees), 8),
+            'result' => $cycle['feesKnown'] ? round($pnl + $fees, 8) : null,
+            'fee' => $cycle['feesKnown'] ? round(abs($fees), 8) : null,
             'durationMin' => max(0, (int) round(($closeAt - $openAt) / 60000)),
             'source' => $label,
             'account' => $label,

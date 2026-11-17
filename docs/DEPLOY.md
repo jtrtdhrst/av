@@ -137,8 +137,8 @@ Brak osobnego wpisu w LH Cron. 5-minutowy wrapper wywołuje `bin/sync-macro-even
 /usr/bin/php /home/platne/serwer445119/public_html/alphavault.pl/.app/bin/sync-macro-events.php
 ```
 
-- bieżący tydzień: `ff_calendar_thisweek.json` (ForexFactory),
-- następny tydzień: `economic-calendar.tradingview.com` (TradingView),
+- bieżący tydzień niedziela 00:00–następna niedziela 00:00 UTC: `ff_calendar_thisweek.json` (ForexFactory),
+- poprzedni pełny tydzień oraz pełne tygodnie +1, +2 i +3, poniedziałek 00:00–następny poniedziałek 00:00 UTC: `economic-calendar.tradingview.com` (TradingView); dzięki temu cold-start pustej bazy również ma historię,
 - zapis tylko ★★/★★★, UPSERT + soft delete,
 - log: `~/public_html/alphavault.pl/.app/logs/macro-sync.log`,
 - deploy po migracji uruchamia jednorazowy sync; błąd nie blokuje wdrożenia.
@@ -356,10 +356,11 @@ Plik `integrations/mt5/AlphaVault.mq5` kompiluje się w MetaEditorze. Wymaga:
   atestacją integralności plików runtime.
 - `dry_run=true` wykonuje odczytowe połączenie SSH i symulację rsync, ale nie
   tworzy zdalnych katalogów ani nie zapisuje `.htaccess`.
-- MCP 2.0 używa Composer (`league/oauth2-server`, `mcp/sdk`); deploy uruchamia `composer install`, jeśli `vendor/autoload.php` nie istnieje na runnerze.
+- MCP 3.2 używa Composer (`league/oauth2-server`, `mcp/sdk`); deploy uruchamia `composer install`, jeśli `vendor/autoload.php` nie istnieje na runnerze.
 - Migracje MCP są addytywne: `db/schema.sql` tworzy tabele `mcp_*`, `db/migrations/20261114_mcp2.sql` dodaje `payload_hash` propozycji i rozszerza `mcp_proposals.kind`, `db/migrations/20261115_mcp_approval.sql` dodaje `diff_hash` oraz kolumny kodu jednorazowego i idempotencji decyzji, a `db/migrations/20261116_mcp_idempotency_fingerprints.sql` dodaje fingerprinty i ustawia klucze idempotencji jako case-sensitive. Stare bezpośrednie wpisy bez fingerprintu pozostają odrzucane do wygaśnięcia TTL; stare decyzje propozycji są odtwarzane tylko po zgodności statusu, diffu i użytego kodu.
 - CI odtwarza schemat sprzed migracji 20261116, wykonuje upgrade i ponawia migrator, aby sprawdzić kolumny i collation na ścieżce aktualizacji istniejącej bazy.
 - Domyślnie działa 46 narzędzi odczytu; przy `MCP_WRITES_ENABLED=true` rejestr ma 79 narzędzi (46 odczytu + 33 zapisu). Nie ma zakresu `alphavault.write`: token z `alphavault.read` od razu widzi cały rejestr, a wdrożenie nie wymaga ponownego OAuth.
+- Sam skrypt `scripts/deploy-mcp.sh` ma bezpieczny fallback `MCP_WRITES_ENABLED=false`; workflow przekazuje input `writes_enabled`, którego domyślna wartość to `true`. Allowlista `MCP_PILOT_DISCORD_IDS` jest egzekwowana przy każdym wywołaniu zapisu, niezależnie od widoczności rejestru narzędzi.
 - Wszystkie 30 operacji zapisu działa bezpośrednio; usunięcia są miękkie (kosz + `restore_deleted_record`). 3 narzędzia obsługują opcjonalne propozycje (`propose_change`, `approve_proposal`, `reject_proposal`). Kod z panelu (`POST /api/mcp/proposals/{id}/approval-code`) jest opcjonalny.
 - `MCP_PILOT_DISCORD_IDS` (CSV) opcjonalnie ogranicza zapis do wybranych kont Discord; puste = wszyscy z `alphavault.read`. Allowlista jest egzekwowana przy każdym wywołaniu zapisu.
 - Workflow sprawdza sekrety, uruchamia `php -l` i `scripts/deploy-mcp.sh`: backup, rsync, migracja, klucze OAuth, health check.

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Alpha Vault API
-  version: 2.1.0
+  version: 4.2.0
   description: |
     API panelu Alpha Vault. Uwierzytelnianie przez sesję w cookie HttpOnly
     ustawianą po logowaniu Discord OAuth2 lub w trybie demo.
@@ -417,12 +417,12 @@ paths:
   /api/macro-events:
     get:
       tags: [API]
-      summary: Kalendarz makro z MySQL
+      summary: Kalendarz makro z MySQL (FF bieżący tydzień; TradingView tygodnie +1…+3; API pełny poprzedni tydzień, od 14 dni wstecz do ok. 35 dni naprzód)
       security:
         - cookieAuth: []
       responses:
         '200':
-          description: Publikacje makro + stan synchronizacji
+          description: Publikacje makro z filtrem odpowiedzi obejmującym poprzedni pełny tydzień (od 14 dni wstecz do około 35 dni naprzód), bieżący tydzień ForexFactory niedziela–niedziela UTC oraz pełne tygodnie TradingView +1…+3 poniedziałek–poniedziałek UTC; +35 dni to limit odpowiedzi, nie gwarancja pokrycia feedu poza tygodniem +3. Przy nakładaniu okien ForexFactory ma priorytet. Odpowiedź zawiera też status synchronizacji i `lastError`.
           content:
             application/json:
               schema:
@@ -774,9 +774,10 @@ components:
         previous: { type: string }
     MacroSync:
       type: object
-      required: [status, lastSuccessAt, eventsCount, stale]
+      required: [status, lastSuccessAt, lastError, eventsCount, stale]
       properties:
         status: { type: string, enum: [never, running, success, partial, error] }
         lastSuccessAt: { type: [string, 'null'], format: date-time }
+        lastError: { type: [string, 'null'] }
         eventsCount: { type: integer }
         stale: { type: boolean }

@@ -18,7 +18,7 @@
 | [TESTOWANIE.md](TESTOWANIE.md) | testy prop, API i UI, checklisty | tak |
 | [DISCORD.md](https://github.com/miloszspyrka-code/av/blob/main/docs/DISCORD.md) | konfiguracja aplikacji i roli Alpha | nie |
 | [DEPLOY.md](https://github.com/miloszspyrka-code/av/blob/main/docs/DEPLOY.md) | produkcja, reverse proxy, backup | nie |
-| [MCP.md](https://github.com/miloszspyrka-code/av/blob/main/docs/MCP.md) | MCP 3.2: OAuth 2.1, 79 narzędzi w zakresie `alphavault.read`, wszystkie zapisy bezpośrednie, kosz i `restore`, opcjonalne propozycje z diffem, wdrożenie | nie |
+| [MCP.md](https://github.com/miloszspyrka-code/av/blob/main/docs/MCP.md) | MCP 3.2: OAuth 2.1, do 79 narzędzi w zakresie `alphavault.read` przy włączonym zapisie, wszystkie zapisy bezpośrednie, kosz i `restore`, opcjonalne propozycje z diffem, wdrożenie | nie |
 | [CHANGELOG.md](https://github.com/miloszspyrka-code/av/blob/main/CHANGELOG.md) | historia zmian | nie |
 
 Dokumentacja publiczna jest serwowana pod `/docs/`. Katalog `public/docs/` jest generowany z `docs/` oraz dokumentów głównych:

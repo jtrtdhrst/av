@@ -6,6 +6,7 @@ namespace AlphaVault\Mcp\Proposals;
 use AlphaVault\Config;
 use AlphaVault\Db;
 use AlphaVault\Mcp\Support\Dates;
+use AlphaVault\Mcp\Support\DayPlanRecords;
 use AlphaVault\Mcp\Support\PropChallengeService;
 use AlphaVault\Mcp\Write\WriteEngine;
 
@@ -52,6 +53,13 @@ final class ProposalService
             'fingerprint' => $fingerprint ?? ['after' => $this->payloadForHash($after)],
         ]));
 
+        $this->db->execute(
+            "UPDATE mcp_proposals
+                SET status = 'expired'
+              WHERE user_id = ? AND idempotency_key = ? AND status = 'pending'
+                AND expires_at < UTC_TIMESTAMP()",
+            [$userId, $key]
+        );
         $existing = $this->db->queryOne(
             'SELECT id, kind, target_ref, status, expires_at, payload_hash, base_revision, diff_hash, diff_json, after_json FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ?',
             [$userId, $key]
@@ -116,7 +124,7 @@ final class ProposalService
             'changes' => array_map(static fn (array $change): string => (string) $change['field'], $diff),
             'diff' => $diff,
             'expiresAt' => $expires->format('Y-m-d\TH:i:s\Z'),
-            'note' => 'Propozycja czeka na zatwierdzenie. Nic nie zostało zmienione. Aby zatwierdzić w rozmowie, użytkownik musi wygenerować jednorazowy kod w panelu AlphaVault.',
+            'note' => 'Propozycja czeka na decyzję. Nic nie zostało zmienione. Zatwierdź ją w panelu AlphaVault albo użyj wygenerowanego tam jednorazowego kodu w rozmowie z MCP.',
         ];
     }
 
@@ -219,7 +227,15 @@ final class ProposalService
      * idempotencji decyzji. Kod z panelu jest opcjonalny: gdy go brak, wystarcza
      * potwierdzenie `confirmed: true` z rozmowy (sprawdzane w WriteTools).
      */
-    public function approveWithCode(int $userId, string $proposalId, string $expectedDiffHash, ?string $confirmationCode, string $idempotencyKey, string $clientName): array
+    public function approveWithCode(
+        int $userId,
+        string $proposalId,
+        string $expectedDiffHash,
+        ?string $confirmationCode,
+        string $idempotencyKey,
+        string $clientName,
+        ?bool $confirmed = null
+    ): array
     {
         $key = $this->decisionKey($idempotencyKey);
         $decisionHash = $this->decisionFingerprint('approve', $proposalId, $expectedDiffHash, $confirmationCode);
@@ -353,7 +369,7 @@ final class ProposalService
                 'revision' => $revision,
                 'decidedBy' => $userId,
                 'channel' => 'mcp',
-                'confirmed' => $confirmationCode === null,
+                'confirmed' => $confirmed ?? ($confirmationCode === null),
                 'client' => mb_substr($clientName !== '' ? $clientName : 'Agent MCP', 0, 100),
                 'diffHash' => $storedHash,
             ]);
@@ -843,13 +859,47 @@ final class ProposalService
                 break;
 
             case 'day_plan':
-                $date = str_starts_with($targetRef, 'plan:') ? substr($targetRef, 5) : '';
+                $target = str_starts_with($targetRef, 'plan:') ? substr($targetRef, 5) : '';
+                [$date, $targetPlanId] = array_pad(explode('#', $target, 2), 2, '');
                 if (!Dates::isValidKey($date)) {
                     throw new ProposalException('bad_proposal', 'Nieprawidłowa data planu.', 400);
                 }
                 $this->assertDayPlan($after);
                 $plans = is_array($state['plans'] ?? null) ? $state['plans'] : [];
-                $plans[$date] = $after;
+                $records = DayPlanRecords::forDate($state, $date);
+                $hasTargetPlanId = trim($targetPlanId) !== '';
+                $planId = $hasTargetPlanId ? trim($targetPlanId) : '';
+                $matches = $hasTargetPlanId
+                    ? array_values(array_filter($records, static fn (array $record): bool => $record['id'] === $planId))
+                    : $records;
+                if (!$hasTargetPlanId && count($matches) > 1) {
+                    throw new ProposalException('plan_id_required', 'Na ' . $date . ' jest wiele planów. Propozycja wymaga planId.', 409);
+                }
+                if (count($matches) > 1) {
+                    throw new ProposalException('plan_id_ambiguous', 'planId nie identyfikuje jednoznacznie planu na ' . $date . '.', 409);
+                }
+                $existing = $matches[0] ?? null;
+                if (!$hasTargetPlanId) {
+                    if ($existing !== null) {
+                        $planId = $existing['id'];
+                    } else {
+                        $planId = trim((string) ($after['id'] ?? ''));
+                        if ($planId === '') {
+                            $planId = DayPlanRecords::uniqueId($state);
+                        }
+                    }
+                }
+                if ($existing === null) {
+                    foreach (DayPlanRecords::all($state) as $record) {
+                        if ($record['id'] === $planId) {
+                            throw new ProposalException('plan_id_conflict', 'ID planu jest już używane przez inny dzień.', 409);
+                        }
+                    }
+                }
+                $after['id'] = $planId;
+                $after['date'] = $date;
+                $key = $existing['key'] ?? DayPlanRecords::insertKey($state, $date, $planId);
+                $plans[$key] = $after;
                 $state['plans'] = $plans;
                 break;
 
@@ -968,7 +1018,7 @@ final class ProposalService
                     throw new ProposalException('bad_proposal', 'Propozycja nie zawiera prawidłowej operacji zapisu.', 400);
                 }
                 $engine = new WriteEngine($this->db, $this->config);
-                $applied = $engine->apply($userId, $state, $op, $opArgs);
+                $applied = $engine->apply($userId, $state, $op, $opArgs, $targetRef);
                 $state = $applied['state'];
                 break;
 
@@ -992,6 +1042,15 @@ final class ProposalService
         if (in_array(strtolower((string) $trade['source']), ['manual', 'panel'], true) === false && (string) $trade['source'] !== 'Ręcznie') {
             throw new ProposalException('exchange_data_readonly', 'Nowa transakcja MCP musi być ręczna.', 403);
         }
+        $entry = (float) ($trade['entry'] ?? 0);
+        $stopLoss = (float) $trade['sl'];
+        if ($trade['sl'] === null || trim((string) $trade['sl']) === '' || !is_numeric($trade['sl'])
+            || !is_finite($stopLoss) || $stopLoss <= 0
+            || ((string) $trade['dir'] === 'l' ? $stopLoss >= $entry : $stopLoss <= $entry)) {
+            throw new ProposalException('stop_loss_required', 'Stop loss jest wymagany przy transakcji.', 400);
+        }
+        $this->assertOptionalMetric($trade, 'mae');
+        $this->assertOptionalMetric($trade, 'mfe');
         foreach (['exchangeId', 'externalId', 'fill', 'fillPrice', 'price', 'qty', 'quantity', 'leverage', 'balance', 'equity'] as $field) {
             if (array_key_exists($field, $trade)) {
                 throw new ProposalException('exchange_data_readonly', 'Pole ' . $field . ' należy do danych giełdowych.', 403);
@@ -1007,6 +1066,7 @@ final class ProposalService
                 throw new ProposalException('exchange_data_readonly', 'Pole ' . $field . ' nie może być zmienione przez MCP.', 403);
             }
         }
+        $this->assertOptionalMetric($after, 'mfe');
         $entry = (float) ($trade['entry'] ?? 0);
         $size = (float) ($trade['size'] ?? 0);
         $exit = (float) ($after['exit'] ?? 0);
@@ -1034,7 +1094,7 @@ final class ProposalService
     private function assertDayPlan(array $after): void
     {
         foreach ($after as $field => $_) {
-            if (!in_array($field, ['date', 'market', 'markets', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt', 'risk', 'maxTrades', 'until', 'notDo', 'approvedAt'], true)) {
+            if (!in_array($field, ['id', 'date', 'market', 'markets', 'bias', 'why', 'levels', 'ifMain', 'thenMain', 'ifAlt', 'thenAlt', 'risk', 'maxTrades', 'until', 'notDo', 'approvedAt'], true)) {
                 throw new ProposalException('bad_proposal', 'Pole ' . $field . ' nie należy do planu dnia.', 400);
             }
         }
@@ -1063,6 +1123,13 @@ final class ProposalService
                 }
             }
         }
+        $beforeSl = (string) ($before['sl'] ?? 'brak');
+        $afterSl = (string) ($after['sl'] ?? 'brak');
+        if ($beforeSl !== '' && $beforeSl !== 'brak' && ($afterSl === '' || $afterSl === 'brak' || $afterSl === '—')) {
+            throw new ProposalException('stop_loss_required', 'Nie można usunąć wymaganego stop loss.', 400);
+        }
+        $this->assertOptionalMetric($after, 'mae');
+        $this->assertOptionalMetric($after, 'mfe');
         $entry = (float) ($after['entry'] ?? 0);
         $size = (float) ($after['size'] ?? 0);
         $direction = (string) ($after['dir'] ?? 'l') === 's' ? -1 : 1;
@@ -1087,6 +1154,21 @@ final class ProposalService
                     throw new ProposalException('bad_proposal', 'R nie zgadza się z wynikiem i ryzykiem.', 400);
                 }
             }
+        }
+    }
+
+    private function assertOptionalMetric(array $record, string $field): void
+    {
+        if (!array_key_exists($field, $record) || $record[$field] === null) {
+            return;
+        }
+        $value = $record[$field];
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)
+            || !is_finite((float) $value)
+            || (float) $value < 0) {
+            throw new ProposalException('bad_proposal', 'Pole ' . $field . ' musi być nieujemną liczbą albo null.', 400);
         }
     }
 

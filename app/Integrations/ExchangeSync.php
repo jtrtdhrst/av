@@ -196,6 +196,14 @@ final class ExchangeSync
                     $skipped++;
                     continue;
                 }
+                $result = $trade['result'] ?? null;
+                if ((!is_int($result) && !is_float($result) && !is_string($result))
+                    || (is_string($result) && trim($result) === '')
+                    || !is_numeric($result)
+                    || !is_finite((float) $result)) {
+                    $skipped++;
+                    continue;
+                }
                 if (isset($existing[$extId])) {
                     $skipped++;
                     continue;
@@ -287,21 +295,21 @@ final class ExchangeSync
             'sl' => '',
             'tp' => '',
             'size' => (string) ($trade['size'] ?? ''),
-            'result' => round((float) ($trade['result'] ?? 0), 8),
+            'result' => round((float) $trade['result'], 8),
             'r' => null,
             'grade' => '',
-            'checklist' => 0,
-            'checkTotal' => 7,
+            'checklist' => null,
+            'checkTotal' => null,
             'errors' => [],
             'emotion' => '',
             'note' => 'Import automatyczny · ' . $label . '.',
             'mentor' => '',
             'setup' => '',
             'session' => '',
-            'mae' => 0,
-            'mfe' => 0,
-            'durationMin' => max(0, (int) ($trade['durationMin'] ?? 0)),
-            'fee' => round((float) ($trade['fee'] ?? 0), 8),
+            'mae' => null,
+            'mfe' => null,
+            'durationMin' => $this->optionalDuration($trade['durationMin'] ?? null),
+            'fee' => $this->optionalAmount($trade['fee'] ?? null),
             'plan' => false,
             'source' => (string) ($trade['source'] ?? $label),
             'account' => $accountName,
@@ -309,6 +317,31 @@ final class ExchangeSync
             'extId' => $extId,
             'importedAt' => $timestamp !== false ? gmdate('Y-m-d\TH:i:s\Z', $timestamp) : gmdate('Y-m-d\TH:i:s\Z'),
         ];
+    }
+
+    private function optionalDuration(mixed $value): ?int
+    {
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)
+            || !is_finite((float) $value)
+            || (float) $value < 0) {
+            return null;
+        }
+
+        return max(0, (int) round((float) $value));
+    }
+
+    private function optionalAmount(mixed $value): ?float
+    {
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)
+            || !is_finite((float) $value)) {
+            return null;
+        }
+
+        return round((float) $value, 8);
     }
 
     /**

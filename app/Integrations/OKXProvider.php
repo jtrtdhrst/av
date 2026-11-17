@@ -152,15 +152,24 @@ final class OKXProvider extends AbstractProvider
                 if ($qty === null || $price === null || $time === null) {
                     continue;
                 }
-                $fee = Normalizer::num($row['fee'] ?? null) ?? 0.0;
+                $fee = Normalizer::num($row['fee'] ?? null);
                 $feeCcy = strtoupper((string) ($row['feeCcy'] ?? ''));
-                if (!in_array($feeCcy, ['USDT', 'USDC', 'USD'], true)) {
-                    $fee = 0.0;
+                if (($fee === null || $fee !== 0.0) && !in_array($feeCcy, ['USDT', 'USDC', 'USD'], true)) {
+                    $fee = null;
                 }
+                $symbol = (string) ($row['instId'] ?? '');
+                $side = strtolower((string) ($row['side'] ?? 'buy'));
                 $fills[] = [
-                    'id' => (string) ($row['billId'] ?? $row['tradeId'] ?? ''),
-                    'symbol' => (string) ($row['instId'] ?? ''),
-                    'side' => strtolower((string) ($row['side'] ?? 'buy')),
+                    'id' => Normalizer::fillId(
+                        $row['billId'] ?? $row['tradeId'] ?? null,
+                        $symbol,
+                        $time,
+                        $qty,
+                        $price,
+                        $side
+                    ),
+                    'symbol' => $symbol,
+                    'side' => $side,
                     'positionSide' => null,
                     'qty' => $qty,
                     'price' => $price,
@@ -206,12 +215,12 @@ final class OKXProvider extends AbstractProvider
         if ($closeAt === null || $pair === '') {
             return null;
         }
-        $realized = Normalizer::num($row['realizedPnl'] ?? null) ?? 0.0;
-        $fee = Normalizer::num($row['fee'] ?? null) ?? 0.0;
-        $funding = Normalizer::num($row['fundingFee'] ?? null) ?? 0.0;
-        $penalty = Normalizer::num($row['liqPenalty'] ?? null) ?? 0.0;
+        $realized = Normalizer::num($row['realizedPnl'] ?? null);
+        $fee = Normalizer::num($row['fee'] ?? null);
+        $funding = Normalizer::num($row['fundingFee'] ?? null);
+        $penalty = Normalizer::num($row['liqPenalty'] ?? null);
         $qty = Normalizer::num($row['closeTotalPos'] ?? $row['openMaxPos'] ?? null) ?? 0.0;
-        if ($qty <= 0) {
+        if ($qty <= 0 || $realized === null || $fee === null || $funding === null || $penalty === null) {
             return null;
         }
         $posSide = (string) ($row['posSide'] ?? 'long');
@@ -233,7 +242,7 @@ final class OKXProvider extends AbstractProvider
             'size' => Normalizer::size($qty),
             'result' => round($realized + $fee + $funding + $penalty, 8),
             'fee' => round(abs($fee + $funding + $penalty), 8),
-            'durationMin' => $openAt !== null ? max(0, (int) round(($closeAt - $openAt) / 60000)) : 0,
+            'durationMin' => $openAt !== null ? max(0, (int) round(($closeAt - $openAt) / 60000)) : null,
             'source' => $this->label(),
             'account' => $this->label(),
         ];

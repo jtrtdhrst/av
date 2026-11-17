@@ -49,7 +49,8 @@ final class JournalService
             ];
         }
         $dateKey = Dates::dateKey((string) ($trade['date'] ?? ''));
-        $plan = $dateKey !== null ? $this->plans->planFor($state, $dateKey) : null;
+        $plan = $this->plans->planForTrade($state, $trade);
+        $dayPlans = $dateKey !== null ? $this->plans->plansForDate($state, $dateKey) : [];
         $compliance = $this->plans->alignment($state, $trade, $plan);
         $reviewSetupName = trim((string) ($review['setup'] ?? ''));
         $tradeSetupName = trim((string) ($trade['setup'] ?? ''));
@@ -71,6 +72,7 @@ final class JournalService
                 'savedAt' => $review['savedAt'] ?? null,
             ],
             'decisionQuality' => $this->decisionQuality($review),
+            'plans' => $dayPlans,
             'planCompliance' => $compliance,
             'setupCompliance' => [
                 'tradeSetup' => $trade['setup'] ?? null,
@@ -98,6 +100,7 @@ final class JournalService
                 'setup' => null,
                 'setupPerformance' => null,
                 'plan' => null,
+                'plans' => [],
                 'compliance' => null,
                 'screenshots' => null,
                 'account' => null,
@@ -105,8 +108,9 @@ final class JournalService
             ];
         }
         $date = Dates::dateKey((string) ($trade['date'] ?? ''));
-        $plan = $date !== null ? $this->plans->planFor($state, $date) : null;
-        $sequence = $this->sequence($state, $trade);
+        $plan = $date !== null ? $this->plans->planForTrade($state, $trade) : null;
+        $dayPlans = $date !== null ? $this->plans->plansForDate($state, $date) : [];
+        $sequence = $this->plans->tradeSequence($state, $trade, $plan);
         $alignment = $this->plans->alignment($state, $trade, $plan, $sequence);
         $setupName = trim((string) ($trade['setup'] ?? ''));
         $setup = $setupName !== '' ? $this->setups->details($state, $setupName) : null;
@@ -126,15 +130,18 @@ final class JournalService
             'setup' => $setup['setup'] ?? null,
             'setupPerformance' => $setup['performance'] ?? null,
             'plan' => $plan,
+            'plans' => $dayPlans,
             'compliance' => $alignment + [
                 'planStatus' => $plan === null ? 'none' : $this->plans->status($plan),
+                'planAmbiguous' => $plan === null && count($dayPlans) > 1,
                 'rulesNote' => 'Zgodność wynika z reguł planu, nie z wyniku transakcji.',
             ],
             'checklist' => [
                 'completed' => isset($trade['checklist']) ? (int) $trade['checklist'] : null,
                 'total' => isset($trade['checkTotal']) ? (int) $trade['checkTotal'] : null,
+                'selectedPoints' => array_values(array_map('strval', is_array($trade['checklistItems'] ?? null) ? $trade['checklistItems'] : [])),
                 'points' => array_values(array_map('strval', is_array($settings['checklist'] ?? null) ? $settings['checklist'] : [])),
-                'note' => 'Zapisana jest liczba punktów, nie ich wybór; points to aktualna checklista użytkownika.',
+                'note' => 'selectedPoints pochodzi z checklistItems; transakcje bez tego pola (w tym utworzone przez MCP, które zapisuje tylko liczby checklist/checkTotal) nie mają odtwarzalnego wyboru punktów. points to aktualna checklista użytkownika.',
             ],
             'emotions' => [
                 'emotion' => $trade['emotion'] ?? null,
@@ -164,31 +171,6 @@ final class JournalService
         }
 
         return null;
-    }
-
-    private function sequence(array $state, array $trade): int
-    {
-        $date = Dates::dateKey((string) ($trade['date'] ?? ''));
-        if ($date === null) {
-            return 1;
-        }
-        $sameDay = [];
-        foreach ((array) ($state['trades'] ?? []) as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            if (Dates::dateKey((string) ($row['date'] ?? '')) === $date) {
-                $sameDay[] = $row;
-            }
-        }
-        usort($sameDay, static fn (array $a, array $b): int => strcmp((string) ($a['date'] ?? ''), (string) ($b['date'] ?? '')));
-        foreach ($sameDay as $index => $row) {
-            if ((string) ($row['id'] ?? '') === (string) ($trade['id'] ?? '')) {
-                return $index + 1;
-            }
-        }
-
-        return 1;
     }
 
     private function account(array $state, array $trade): ?array

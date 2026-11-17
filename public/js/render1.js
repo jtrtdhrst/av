@@ -10,7 +10,10 @@
   AV.setVal = (sel, val) => { const el = typeof sel === 'string' ? $(sel) : sel; if (el && el.value !== val) el.value = val; };
   AV.show = (sel, on) => { const el = typeof sel === 'string' ? $(sel) : sel; if (el) el.style.display = on ? '' : 'none'; };
   AV.stars = (n) => '<span class="stars">' + '★'.repeat(n) + '<i>' + '★'.repeat(3 - n) + '</i></span>';
-  AV.grade = (g, cls = '') => '<span class="grade ' + g + ' ' + cls + '">' + g + '</span>';
+  AV.grade = (g, cls = '') => {
+    const value = String(g == null ? '' : g).trim();
+    return value ? '<span class="grade ' + AV.attr(value) + ' ' + cls + '">' + AV.esc(value) + '</span>' : '';
+  };
 
   AV.curRate = { USDT: 1, USD: 1, PLN: 4, EUR: 0.92 };
   AV.curLabel = () => AV.state.user.currency || 'USDT';
@@ -68,10 +71,10 @@
 
   AV.renderNavBadges = () => {
     const s = AV.state;
-    const plan = (s.plans || {})[AV.dateKey(new Date())];
+    const plans = AV.plansForDate(s, AV.dateKey(new Date()));
     const planBadge = $('.navg button[data-v="plan"] .badge');
     if (planBadge) {
-      const approved = !!(plan && plan.approvedAt);
+      const approved = plans.some((plan) => plan.approvedAt);
       planBadge.textContent = approved ? '✓' : '';
       planBadge.className = 'badge g';
       planBadge.style.display = approved ? '' : 'none';
@@ -140,25 +143,42 @@
       pnlEl.innerHTML = (today.pnl >= 0 ? '+' : '−') + AV.fmt(Math.abs(AV.disp(today.pnl)), 2) + ' <span class="mut" style="font-size:14px;font-weight:500">' + AV.curLabel() + '</span>';
       pnlEl.className = 'val ' + (today.pnl >= 0 ? 'win' : 'loss');
     }
-    const plan = (s.plans || {})[AV.dateKey(new Date())] || {};
+    const todayPlans = AV.plansForDate(s, AV.dateKey(new Date()));
+    const plan = todayPlans.find((item) => item.approvedAt) || todayPlans[0] || {};
+    const planLimitsAmbiguous = todayPlans.length > 1;
     const lossLimit = Math.max(1, Number(s.settings.maxLosses) || 2);
     AV.setText('#dayLosses', today.losses + ' / ' + lossLimit);
     AV.$('#lossBar').style.width = AV.clamp(today.losses / lossLimit * 100, 0, 100) + '%';
-    AV.setText('#dayTrades', today.count + ' / ' + (plan.maxTrades || 5));
-    AV.$('#tradesBar').style.width = AV.clamp(today.count / (Number(plan.maxTrades) || 5) * 100, 0, 100) + '%';
+    const tradesBar = AV.$('#tradesBar');
+    AV.setText('#dayTrades', planLimitsAmbiguous ? String(today.count) : today.count + ' / ' + (plan.maxTrades || 5));
+    tradesBar.style.width = planLimitsAmbiguous ? '0%' : AV.clamp(today.count / (Number(plan.maxTrades) || 5) * 100, 0, 100) + '%';
+    tradesBar.parentElement.style.display = planLimitsAmbiguous ? 'none' : '';
     const riskPct = today.risk / (AV.totalCapital(s) || 1) * 100;
-    AV.setText('#dayRisk', AV.fmt(riskPct, 1) + '% / ' + (plan.risk || '3%'));
-    AV.$('#riskBar').style.width = AV.clamp(riskPct / (AV.pnum(plan.risk) || 3) * 100, 0, 100) + '%';
+    const riskBar = AV.$('#riskBar');
+    AV.setText('#dayRisk', AV.fmt(riskPct, 1) + '%' + (planLimitsAmbiguous ? '' : ' / ' + (plan.risk || '3%')));
+    riskBar.style.width = planLimitsAmbiguous ? '0%' : AV.clamp(riskPct / (AV.pnum(plan.risk) || 3) * 100, 0, 100) + '%';
+    riskBar.parentElement.style.display = planLimitsAmbiguous ? 'none' : '';
 
-    const levels = (plan.levels || []).filter((l) => l.price);
-    const sup = levels.find((l) => l.type === 'Wsparcie');
-    const res = levels.find((l) => l.type === 'Opór');
-    AV.setHTML('#dashPlan', '<div class="mono" style="font-size:12px;color:var(--dim)">BIAS</div>' +
-      '<div style="font-weight:800;font-size:18px;margin-top:2px">' + AV.esc(plan.market || '—') + ' · <span class="' + (plan.bias === 'short' ? 'loss' : plan.bias === 'none' ? 'dim' : 'win') + '">' + AV.esc(plan.bias || 'brak') + '</span></div>' +
-      '<div class="mono dim" style="font-size:12px;margin-top:8px">' + (res ? AV.esc(res.price) + ' opór' : '—') + ' · ' + (sup ? AV.esc(sup.price) + ' wsparcie' : '—') + '</div>');
-    AV.setText('#dashPlanTag', plan.approvedAt ? new Date(plan.approvedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' }) : 'szkic');
-    const todayPlan = (s.plans || {})[AV.dateKey(new Date())];
-    AV.setText('#dashAdherence', todayPlan && todayPlan.approvedAt && today.arr.length ? today.arr.filter((t) => AV.tradePlanMatch(s, t)).length + ' z ' + today.arr.length : '—');
+    const planCards = (todayPlans.length ? todayPlans : [plan]).map((item) => {
+      const levels = (item.levels || []).filter((l) => l.price);
+      const sup = levels.find((l) => l.type === 'Wsparcie');
+      const res = levels.find((l) => l.type === 'Opór');
+      const liquidity = levels.find((l) => l.type === 'Liquidity' || l.type === 'Płynność');
+      const poi = levels.find((l) => l.type === 'POI');
+      const levelSummary = [
+        res ? AV.esc(res.price) + ' opór' : '',
+        sup ? AV.esc(sup.price) + ' wsparcie' : '',
+        liquidity ? AV.esc(liquidity.price) + ' płynność' : '',
+        poi ? AV.esc(poi.price) + ' POI' : ''
+      ].filter(Boolean).join(' · ');
+      return '<div style="font-weight:800;font-size:18px;margin-top:2px">' + AV.esc(item.market || '') + ' · <span class="' + (item.bias === 'short' ? 'loss' : item.bias === 'none' ? 'dim' : 'win') + '">' + AV.esc(item.bias || '') + '</span></div>' +
+        '<div class="mono dim" style="font-size:12px;margin-top:8px">' + levelSummary + '</div>';
+    }).join('<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">');
+    AV.setHTML('#dashPlan', '<div class="mono" style="font-size:12px;color:var(--dim)">BIAS</div>' + planCards);
+    AV.setText('#dashPlanTag', todayPlans.length > 1 ? 'wiele planów'
+      : plan.approvedAt ? new Date(plan.approvedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })
+        : todayPlans.length === 1 ? 'szkic' : '');
+    AV.setText('#dashAdherence', todayPlans.some((item) => item.approvedAt) && today.arr.length ? today.arr.filter((t) => AV.tradePlanMatch(s, t)).length + ' z ' + today.arr.length : '—');
 
     AV.setText('#dash30', (stats.net >= 0 ? '+' : '−') + AV.fmt(Math.abs(stats.net / (AV.startCapital(s) || 2000) * 100), 1) + '%');
     AV.setText('#dashResult', AV.dispMoney(stats.net, 2));
@@ -174,19 +194,41 @@
     const accounts = Array.isArray(s.accounts) ? s.accounts : [];
     const total = AV.totalCapital(s);
     const startTotal = AV.startCapital(s);
+    const includedAccounts = accounts.filter((account) => account.include);
+    const numberOrNull = (value) => {
+      if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    };
+    const balancesComplete = includedAccounts.length > 0 &&
+      includedAccounts.every((account) => numberOrNull(account.balance) !== null);
+    const startsComplete = includedAccounts.length > 0 &&
+      includedAccounts.every((account) => numberOrNull(account.start) !== null);
     const primary = accounts.find((a) => a.primary) || accounts[0] || null;
     const cur = AV.curLabel();
-    AV.setHTML('#dashBalVal', accounts.length
+    AV.setHTML('#dashBalVal', balancesComplete
       ? AV.fmt(total, 2) + ' <span class="mut" style="font-size:12px;font-weight:600">' + AV.esc(cur) + '</span>'
       : '');
-    const pct = startTotal > 0 && accounts.length ? (total - startTotal) / startTotal * 100 : null;
-    let sub = 'Dodaj pierwsze konto i wpisz balans w Konto i zasady.';
+    const pct = balancesComplete && startsComplete && startTotal > 0 ? (total - startTotal) / startTotal * 100 : null;
+    let sub = '';
     if (accounts.length) {
       sub = accounts.length + ' ' + AV.plural(accounts.length, 'konto', 'konta', 'kont') +
         (primary ? ' · główne: ' + primary.name : '') +
         (pct === null ? '' : ' · ' + AV.signed(pct, 1, '%') + ' od startu');
     }
-    AV.setText('#dashBalSub', sub + ' · ustaw balans');
+    AV.setText('#dashBalSub', sub);
+    AV.setHTML('#dashAccountList', accounts.map((account) => {
+      const balanceValue = numberOrNull(account.balance);
+      const balance = balanceValue === null ? '' : AV.fmt(balanceValue, 2) + ' ' + AV.esc(account.currency || '');
+      const startValue = numberOrNull(account.start);
+      const start = startValue === null ? '' : AV.fmt(startValue, 2) + ' ' + AV.esc(account.currency || '');
+      const growth = startValue !== null && startValue > 0 &&
+        balanceValue !== null && balanceValue >= 0
+        ? AV.signed((balanceValue - startValue) / startValue * 100, 1, '%')
+        : '';
+      const details = [start ? 'start ' + start : '', growth].filter(Boolean).join(' · ');
+      return '<div class="dash-account"><div><b>' + AV.esc(account.name || '') + '</b><small>' + AV.esc(account.exchange || account.type || '') + (account.include ? '' : ' · poza statystykami') + '</small></div><div class="dash-account-values"><b class="mono">' + balance + '</b><small>' + details + '</small></div></div>';
+    }).join(''));
   };
 
   AV.renderSpark = (curve) => {
@@ -233,6 +275,7 @@
 
   /* ---------- plan dnia ---------- */
   AV.planDate = AV.planDate || AV.dateKey(new Date());
+  AV.planId = AV.planId || null;
   AV.PLAN_MARKETS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'LINK', 'AVAX', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCHF', 'USDCAD', 'NZDUSD', 'EURGBP', 'NAS100', 'US500', 'US30', 'GER40', 'UK100', 'JPN225', 'XAUUSD', 'XAGUSD', 'OIL'];
   AV.syncPlanMarket = (p) => {
     const sel = $('#planMarketSelect');
@@ -257,12 +300,26 @@
     const s = AV.state;
     const key = AV.planDate;
     if (!s.plans || typeof s.plans !== 'object') s.plans = {};
-    const p = s.plans[key] || AV.planTemplate(key);
+    const plans = AV.plansForDate(s, key);
+    let p = AV.planById(s, AV.planId);
+    if (!p || p.date !== key) p = plans[0] || AV.planTemplate(key);
+    AV.planId = p.id || null;
+    const picker = $('#planSelect');
+    if (picker) {
+      picker.innerHTML = plans.map((item, index) => {
+        const title = item.market ? item.market + ' · plan ' + (index + 1) : 'Nowy plan · ' + (index + 1);
+        return '<option value="' + AV.attr(item.id) + '">' + AV.esc(title) + (item.approvedAt ? ' · zatwierdzony' : ' · szkic') + '</option>';
+      }).join('');
+      if (!plans.length) picker.innerHTML = '<option value="">Nowy plan</option>';
+      picker.value = AV.planId || '';
+      picker.disabled = plans.length < 2;
+    }
     AV.$$('#planSeg button').forEach((b) => b.classList.toggle('on', b.dataset.day === '0' ? key === AV.dateKey(new Date()) : b.dataset.day === '-1' ? key === AV.dateKey(AV.addDays(new Date(), -1)) : b.dataset.day === 'hist'));
     // Nie nadpisuj formularza, w którym użytkownik właśnie pisze (np. render po notowaniach).
     const editor = $('#planEditor');
     const active = document.activeElement;
-    const editing = !!(editor && active && active !== document.body && editor.contains(active));
+    const editing = !!(editor && active && active !== document.body && editor.contains(active) &&
+      !['planSelect', 'addPlan'].includes(active.id));
     if (!editing) {
       AV.syncPlanMarket(p);
       $$('#planBias .chip').forEach((c) => c.classList.toggle('on', c.dataset.b === p.bias));
@@ -283,7 +340,9 @@
     if (AV.renderNavBadges) AV.renderNavBadges();
   };
 
-  AV.levelRow = (l = {}) => '<div class="lvl"><select class="input"><option' + (l.type === 'Opór' ? ' selected' : '') + '>Opór</option><option' + (l.type === 'Wsparcie' ? ' selected' : '') + '>Wsparcie</option></select><input class="input mono" value="' + AV.attr(l.price || '') + '" placeholder="cena"><input class="input" value="' + AV.attr(l.note || '') + '" placeholder="opis"><span class="x">✕</span></div>';
+  AV.levelRow = (l = {}) => '<div class="lvl"><select class="input" aria-label="Typ poziomu">' +
+    [['Opór', 'Opór'], ['Wsparcie', 'Wsparcie'], ['Liquidity', 'Płynność'], ['POI', 'POI']].map(([value, label]) => '<option value="' + value + '"' + (l.type === value || value === 'Liquidity' && l.type === 'Płynność' ? ' selected' : '') + '>' + label + '</option>').join('') +
+    '</select><input class="input mono" value="' + AV.attr(l.price || '') + '" placeholder="cena"><input class="input" value="' + AV.attr(l.note || '') + '" placeholder="opis"><span class="x">✕</span></div>';
 
   AV.readPlanForm = (opts = {}) => {
     const levels = $$('#lvls .lvl').map((row) => ({
@@ -297,6 +356,7 @@
       ? ($('#planMarketCustom')?.value || '').trim()
       : (selVal || $('#planMarkets .chip.on')?.dataset.m || '');
     return {
+      id: AV.planId || AV.uid('plan'),
       date: AV.planDate,
       market: market,
       bias: $('#planBias .chip.on')?.dataset.b || '',
@@ -306,13 +366,13 @@
       ifAlt: $('#planIfAlt').value.trim(), thenAlt: $('#planThenAlt').value.trim(),
       risk: $('#planRisk').value.trim(), maxTrades: $('#planMaxTrades').value.trim(),
       until: $('#planUntil').value.trim(), notDo: $('#planNotDo').value.trim(),
-      approvedAt: ((AV.state.plans || {})[AV.planDate] || {}).approvedAt || null
+      approvedAt: (AV.planById(AV.state, AV.planId) || {}).approvedAt || null
     };
   };
 
   AV.renderPlanSide = () => {
     if (!AV.state.plans || typeof AV.state.plans !== 'object') AV.state.plans = {};
-    const p = AV.state.plans[AV.planDate] || AV.readPlanForm();
+    const p = AV.planById(AV.state, AV.planId) || AV.readPlanForm();
     const day = new Date(AV.planDate + 'T12:00:00');
     AV.setText('#planSideDay', 'Twój plan · ' + day.toLocaleDateString('pl-PL', { weekday: 'long' }));
     const tag = $('#planSideTag');
@@ -325,11 +385,13 @@
     const lv = p.levels || [];
     const sup = lv.find((l) => l.type === 'Wsparcie');
     const res = lv.find((l) => l.type === 'Opór');
-    AV.setText('#planSideSub', (res ? res.price + ' opór' : '') + (sup ? ' · ' + sup.price + ' wsparcie' : '') || 'brak poziomów');
+    const liquidity = lv.find((l) => l.type === 'Liquidity' || l.type === 'Płynność' || l.type === 'liquidity');
+    const poi = lv.find((l) => l.type === 'POI' || l.type === 'poi');
+    AV.setText('#planSideSub', [res && res.price ? res.price + ' opór' : '', sup && sup.price ? sup.price + ' wsparcie' : '', liquidity && liquidity.price ? liquidity.price + ' płynność' : '', poi && poi.price ? poi.price + ' POI' : ''].filter(Boolean).join(' · '));
     const todayEv = AV.buildEvents().filter((e) => e.imp === 3 && AV.dateKey(new Date(e.date)) === AV.dateKey(new Date())).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
     const tomorrowEv = AV.buildEvents().filter((e) => e.imp === 3 && AV.dateKey(new Date(e.date)) === AV.dateKey(AV.addDays(new Date(), 1)))[0];
     AV.setHTML('#planSideBody',
-      lv.slice(0, 4).map((l) => '<div class="kv"><span>' + AV.esc(l.type) + (l.note ? ' · ' + AV.esc(l.note) : '') + '</span><b class="mono ' + (l.type === 'Wsparcie' && l.note && /unieważ/i.test(l.note) ? 'loss' : '') + '">' + AV.esc(l.price || '—') + '</b></div>').join('') +
+      lv.slice(0, 4).map((l) => '<div class="kv"><span>' + AV.esc(l.type === 'Liquidity' || l.type === 'Płynność' ? 'Płynność' : l.type) + (l.note ? ' · ' + AV.esc(l.note) : '') + '</span><b class="mono ' + (l.type === 'Wsparcie' && l.note && /unieważ/i.test(l.note) ? 'loss' : '') + '">' + AV.esc(l.price || '') + '</b></div>').join('') +
       '<div class="kv"><span>Makro dziś</span><b>' + (todayEv ? AV.esc(todayEv.name) + ' ' + AV.timeFmt(todayEv.date, AV.state) : '') + '</b></div>' +
       '<div class="kv"><span>Makro jutro</span><b class="al">' + (tomorrowEv ? AV.esc(tomorrowEv.name) + ' ' + AV.timeFmt(tomorrowEv.date, AV.state) : '') + '</b></div>' +
       '<div class="kv"><span>Limity</span><b>ryzyko ' + AV.esc(p.risk || '—') + ' · max ' + AV.esc(p.maxTrades || '—') + ' transakcji</b></div>');
@@ -341,8 +403,8 @@
     const showHist = AV.ui.planHistOpen || AV.planDate !== AV.dateKey(new Date()) && AV.planDate !== AV.dateKey(AV.addDays(new Date(), -1));
     card.style.display = showHist ? '' : 'none';
     if (!showHist) return;
-    const plans = Object.values(AV.state.plans || {}).sort((a, b) => b.date.localeCompare(a.date));
-    AV.setHTML('#planHistory', plans.length ? plans.map((p) => '<div class="kv" style="cursor:pointer" data-plan-open="' + p.date + '"><span>' + new Date(p.date + 'T12:00:00').toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · ' + AV.esc(p.market) + ' ' + AV.esc(p.bias) + '</span><b class="' + (p.approvedAt ? 'win' : 'dim') + '">' + (p.approvedAt ? '✓ zatwierdzony' : 'szkic') + '</b></div>').join('') : '<div class="dim">Brak zapisanych planów.</div>');
+    const plans = AV.allPlans(AV.state).sort((a, b) => b.date.localeCompare(a.date) || String(a.market).localeCompare(String(b.market)) || String(a.id).localeCompare(String(b.id)));
+    AV.setHTML('#planHistory', plans.length ? plans.map((p) => '<div class="kv" style="cursor:pointer" data-plan-open="' + AV.attr(p.date) + '" data-plan-id="' + AV.attr(p.id) + '"><span>' + new Date(p.date + 'T12:00:00').toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · ' + AV.esc(p.market || '') + ' ' + AV.esc(p.bias || '') + '</span><b class="' + (p.approvedAt ? 'win' : 'dim') + '">' + (p.approvedAt ? '✓ zatwierdzony' : 'szkic') + '</b></div>').join('') : '<div class="dim">Brak zapisanych planów.</div>');
   };
 
   AV.renderAdherence = () => {
@@ -371,7 +433,7 @@
   AV.ui.jGrade = 'all';
   AV.ui.jSearch = '';
   AV.filteredTrades = () => {
-    let arr = AV.includedTrades(AV.state).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+    let arr = (Array.isArray(AV.state.trades) ? AV.state.trades : []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
     if (AV.ui.jFilter === 'win') arr = arr.filter((t) => t.result > 0);
     if (AV.ui.jFilter === 'loss') arr = arr.filter((t) => t.result < 0);
     if (AV.ui.jFilter === 'open') arr = arr.filter((t) => t.result == null);
@@ -387,9 +449,13 @@
     const arr = AV.filteredTrades();
     AV.setHTML('#tbody', arr.map((t) => {
       const open = t.result == null;
-      return '<tr data-id="' + t.id + '"><td class="mono dim">' + AV.dateTimeShort(t.date) + '</td><td><b>' + AV.esc(t.pair) + '</b>' + (t.sl === 'brak' ? '<span class="nosl">BEZ SL</span>' : '') + '</td>' +
+      const checklist = t.checklist == null || t.checklist === '' ? null : Number(t.checklist);
+      const totalValue = Number(t.checkTotal);
+      const checkTotal = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 7;
+      const checklistClass = checklist == null ? '' : (checklist === checkTotal ? 'win' : checklist >= Math.ceil(checkTotal * 0.7) ? 'warnc' : 'loss');
+      return '<tr data-id="' + t.id + '"><td class="mono dim">' + AV.dateTimeShort(t.date) + '</td><td><b>' + AV.esc(t.pair) + '</b>' + (t.sl === 'brak' || t.sl === '' ? '<span class="nosl">BEZ SL</span>' : '') + '</td>' +
         '<td><span class="pill ' + t.dir + '">' + (t.dir === 'l' ? 'LONG' : 'SHORT') + '</span></td>' +
-        '<td>' + AV.grade(t.grade) + '</td><td class="mono ' + (t.checklist === 7 ? 'win' : t.checklist >= 5 ? 'warnc' : 'loss') + '">' + t.checklist + '/7</td>' +
+        '<td>' + AV.grade(t.grade) + '</td><td class="mono ' + checklistClass + '">' + (checklist == null ? '' : checklist + '/' + checkTotal) + '</td>' +
         '<td class="mono">' + AV.esc(t.entry) + '</td><td class="mono ' + (open ? 'al' : '') + '">' + AV.esc(t.exit) + '</td>' +
         '<td class="mono ' + (t.r > 0 ? 'win' : t.r < 0 ? 'loss' : 'dim') + '">' + (t.r == null ? '–' : AV.signed(t.r, 1, 'R')) + '</td>' +
         '<td class="mut">' + AV.esc(t.emotion) + '</td><td>' + ((t.errors || []).length ? '<span class="ecount" title="' + AV.attr(t.errors.join(', ')) + '">' + t.errors.length + '</span>' : '<span class="dim">–</span>') + '</td>' +
@@ -399,7 +465,7 @@
     if (!arr.length) {
       const empty = $('#jEmpty');
       if (empty) {
-        if (AV.includedTrades(AV.state).length) {
+        if ((Array.isArray(AV.state.trades) ? AV.state.trades.length : 0) > 0) {
           empty.textContent = 'Brak transakcji spełniających filtry.';
         } else {
           empty.innerHTML = '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><button class="btn p sm" type="button" data-journal-add>Dodaj transakcję</button><button class="btn g sm" type="button" data-journal-exchanges>Giełdy i API</button></div>';
@@ -409,7 +475,7 @@
     AV.$$('#fRes button').forEach((b) => b.classList.toggle('on', b.dataset.f === AV.ui.jFilter));
     AV.$$('#fGrade button').forEach((b) => b.classList.toggle('on', b.dataset.f === AV.ui.jGrade));
     const count = $('.navg button[data-v="trans"] .badge');
-    if (count) count.textContent = AV.includedTrades(AV.state).length;
+    if (count) count.textContent = Array.isArray(AV.state.trades) ? AV.state.trades.length : 0;
   };
 
   /* ---------- wykresy ---------- */
@@ -497,15 +563,20 @@
       return '<label class="drop ' + (data ? 'has' : '') + '" data-drop data-shot="' + key + '" style="min-height:180px"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span>' + (data ? '' : '<div class="ic">' + AV.ic(icon) + '</div><b>' + label + '</b><span>kliknij, przeciągnij albo Ctrl+V</span>') + '</label>';
     };
     const open = t.result == null;
+    const checklist = t.checklist == null || t.checklist === '' ? null : Number(t.checklist);
+    const totalValue = Number(t.checkTotal);
+    const checkTotal = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 7;
+    const checklistClass = checklist == null ? '' : (checklist === checkTotal ? 'win' : checklist >= Math.ceil(checkTotal * 0.7) ? 'warnc' : 'loss');
+    const metricValue = (value) => value == null || (typeof value === 'string' && value.trim() === '') ? '' : AV.fmt(value, 1) + 'R';
     AV.setHTML('#tmBody', '<span class="mclose" id="mc">' + AV.ic('x', 'width:16px;height:16px') + '</span><div class="eyebrow">Transakcja · ' + AV.dateTimeShort(t.date) + ' · ' + AV.esc(t.source || 'WEEX') + '</div>' +
       '<div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap"><h1 style="font-size:32px;margin:0">' + AV.esc(t.pair) + '</h1><span class="pill ' + t.dir + '">' + (t.dir === 'l' ? 'LONG' : 'SHORT') + '</span>' + AV.grade(t.grade) + (t.sl === 'brak' ? '<span class="nosl" style="margin:0">BEZ SL</span>' : '') + '<span class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : 'al') + '" style="margin-left:auto;font-size:28px;font-weight:800">' + (open ? 'otwarta' : AV.signed(t.result, 2, ' USDT')) + '</span></div>' +
-      '<div class="grid" style="grid-template-columns:repeat(6,1fr);margin-top:20px;gap:10px">' + box('Wejście', AV.esc(t.entry)) + box('Wyjście', AV.esc(t.exit)) + box('Stop loss', AV.esc(t.sl), t.sl === 'brak' ? 'loss' : '') + box('Take profit', AV.esc(t.tp)) + box('MAE', AV.fmt(t.mae, 1) + 'R', 'loss') + box('MFE', AV.fmt(t.mfe, 1) + 'R', 'win') + '</div>' +
+      '<div class="grid" style="grid-template-columns:repeat(6,1fr);margin-top:20px;gap:10px">' + box('Wejście', AV.esc(t.entry)) + box('Wyjście', AV.esc(t.exit)) + box('Stop loss', AV.esc(t.sl), t.sl === 'brak' ? 'loss' : '') + box('Take profit', AV.esc(t.tp)) + box('MAE', metricValue(t.mae), 'loss') + box('MFE', metricValue(t.mfe), 'win') + '</div>' +
       '<div style="margin-top:16px">' + AV.proChart(t) + '</div>' +
       '<div class="sech" style="margin:18px 0 10px"><h3>Twoje screeny</h3><span class="dim" style="font-size:12.5px">opcjonalnie, jeśli chcesz zapisać swój własny widok</span></div>' +
       '<div class="grid g2">' + (t.screens && t.screens.before ? '<label class="drop has" data-drop data-shot="before"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span><img src="' + t.screens.before + '" alt="Screen przed wejściem"></label>' : drop('Dodaj screen PRZED wejściem', 'img', 'before')) + (t.screens && t.screens.after ? '<label class="drop has" data-drop data-shot="after"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span><img src="' + t.screens.after + '" alt="Screen po wyjściu"></label>' : drop('Dodaj screen PO wyjściu', 'flag', 'after')) + '</div>' +
-      ((t.errors || []).length ? '<div class="card flat" style="margin-top:16px;padding:16px"><div class="lbl">Błędy w tej transakcji</div><div style="margin-top:8px">' + t.errors.map((e) => '<span class="etag">' + AV.esc(e) + '</span>').join('') + '</div></div>' : '') +
-      '<div class="grid" style="grid-template-columns:1fr 1fr 1.2fr;margin-top:16px"><div class="card flat"><div class="lbl">Twoja notatka</div><p style="margin-top:8px;line-height:1.55;font-size:14px">' + AV.esc(t.note) + '</p><div class="chips" style="margin-top:12px"><span class="chip on">' + AV.esc(t.emotion) + '</span><span class="chip">' + AV.esc(t.setup) + '</span></div></div>' +
-      '<div class="card flat"><div class="lbl">Checklista</div><div class="val ' + (t.checklist === 7 ? 'win' : t.checklist >= 5 ? 'warnc' : 'loss') + '">' + t.checklist + ' / 7</div><div class="bar"><i style="width:' + t.checklist / 7 * 100 + '%;background:' + (t.checklist === 7 ? 'var(--win)' : t.checklist >= 5 ? 'var(--warn)' : 'var(--loss)') + '"></i></div></div>' +
+       ((t.errors || []).length ? '<div class="card flat" style="margin-top:16px;padding:16px"><div class="lbl">Błędy w tej transakcji</div><div style="margin-top:8px">' + t.errors.map((e) => '<span class="etag">' + AV.esc(e) + '</span>').join('') + '</div></div>' : '') +
+       '<div class="grid" style="grid-template-columns:1fr 1fr 1.2fr;margin-top:16px"><div class="card flat"><div class="lbl">Twoja notatka</div><p style="margin-top:8px;line-height:1.55;font-size:14px">' + AV.esc(t.note) + '</p><div class="chips" style="margin-top:12px">' + (t.emotion ? '<span class="chip on">' + AV.esc(t.emotion) + '</span>' : '') + (t.setup ? '<span class="chip">' + AV.esc(t.setup) + '</span>' : '') + '</div></div>' +
+       '<div class="card flat"><div class="lbl">Checklista</div>' + (checklist == null ? '<div class="val"></div>' : '<div class="val ' + checklistClass + '">' + checklist + ' / ' + checkTotal + '</div><div class="bar"><i style="width:' + checklist / checkTotal * 100 + '%;background:' + (checklistClass === 'win' ? 'var(--win)' : checklistClass === 'warnc' ? 'var(--warn)' : 'var(--loss)') + '"></i></div>') + '</div>' +
       '<div class="card hl"><div class="lbl">α Mentor o tej transakcji</div><p style="margin-top:8px;line-height:1.55;font-size:14px">' + AV.esc(t.mentor) + '</p></div></div>' +
       '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap"><button class="btn g" data-trade-edit="' + t.id + '">Edytuj</button><button class="btn w" data-trade-del="' + t.id + '">Usuń transakcję</button></div>');
     $('#tm').classList.add('on');
@@ -569,32 +640,63 @@
 
   /* ---------- checklista formularza ---------- */
   AV.ui.ntGradeManual = false;
+  AV.checklistPoints = (state = AV.state, historical = []) => {
+    const configured = Array.isArray(state?.settings?.checklist) ? state.settings.checklist : [];
+    const defaults = ['Trend wyższego TF', 'Poziom z planu', 'Potwierdzenie', 'SL przed wejściem', 'R:R zgodne z planem', 'Brak makro 15 min', 'Spokojna głowa'];
+    const points = (configured.length ? configured : defaults).slice(0, 8);
+    for (const item of Array.isArray(historical) ? historical : []) {
+      const label = String(item ?? '');
+      if (label.trim() && !points.includes(label) && points.length < 20) points.push(label);
+    }
+    return points;
+  };
   AV.renderChecklist = () => {
     const s = AV.state;
-    const points = (s.settings.checklist && s.settings.checklist.length ? s.settings.checklist : ['Trend wyższego TF', 'Poziom z planu', 'Potwierdzenie', 'SL przed wejściem', 'R:R ≥ 2', 'Brak makro 15 min', 'Spokojna głowa']).slice(0, 8);
+    const editing = AV.ui.editId ? s.trades.find((trade) => trade.id === AV.ui.editId) : null;
+    const historicalItems = Array.isArray(editing?.checklistItems) ? editing.checklistItems : [];
+    const points = AV.checklistPoints(s, historicalItems);
     AV.ui.ntChecks = AV.ui.ntChecks || {};
     points.forEach((p) => {
       if (AV.ui.ntChecks[p] == null) AV.ui.ntChecks[p] = false;
     });
-    AV.autoChecklist(points);
-    const n = points.filter((p) => AV.ui.ntChecks[p]).length;
-    const total = points.length;
+    const preserveHistory = !!editing && !AV.ui.ntChecklistTouched;
+    const historicalCount = editing?.checklist == null || editing.checklist === ''
+      ? null
+      : (Number.isFinite(Number(editing.checklist)) ? Number(editing.checklist) : null);
+    const historicalTotal = Number(editing?.checkTotal) > 0 ? Number(editing.checkTotal) : 7;
+    const historyUnknown = preserveHistory && (!Array.isArray(editing?.checklistItems) || historicalCount === null);
+    const n = preserveHistory && historicalCount !== null
+      ? historicalCount
+      : points.filter((p) => AV.ui.ntChecks[p]).length;
+    const total = preserveHistory && historicalTotal !== null ? historicalTotal : points.length;
     const col = n === total ? 'var(--win)' : n >= Math.ceil(total * 0.7) ? 'var(--warn)' : 'var(--loss)';
     const ring = $('#clRing');
-    if (ring) { ring.style.setProperty('--p', n / total * 100); ring.style.setProperty('--c', col); }
-    AV.setText('#clN', n + '/' + total);
+    if (ring) {
+      ring.style.setProperty('--p', n / Math.max(1, total) * 100);
+      ring.style.setProperty('--c', col);
+      ring.style.visibility = historyUnknown ? 'hidden' : 'visible';
+    }
+    AV.setText('#clN', historyUnknown && historicalCount === null
+      ? ''
+      : historyUnknown && historicalTotal === null
+        ? String(historicalCount)
+        : n + '/' + total);
     if ($('#clN')) $('#clN').style.color = col;
     const w = $('#clWarn');
     if (w) {
-      const missing = total - n;
-      w.style.display = n === total ? 'none' : 'block';
-      w.className = 'warnbox ' + (n >= Math.ceil(total * 0.7) ? 'y' : '');
-      w.innerHTML = 'Brakuje ' + missing + ' ' + AV.plural(missing, 'punktu', 'punktów', 'punktów') + '.';
+      w.style.display = 'block';
+      w.className = 'warnbox y';
+      w.textContent = historyUnknown
+        ? 'Wpis historyczny nie zapisał konkretnych zaznaczeń' +
+          (historicalCount !== null && historicalTotal !== null ? ' (wynik ' + historicalCount + '/' + historicalTotal + ')' : '') +
+          '. Zapis bez zmiany checklisty zachowa wynik; zaznacz punkt, aby zapisać nowy wybór.'
+        : preserveHistory
+          ? 'Edycja zachowuje historyczny wynik checklisty. Zaznacz punkt, aby zapisać nowy wybór.'
+          : 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono ' + n + ' z ' + total + ' punktów.';
     }
-    AV.setHTML('#clList', points.map((p, i) => {
-      const auto = ['Poziom z planu', 'SL przed wejściem', 'R:R ≥ 2'].includes(p);
+    AV.setHTML('#clList', points.map((p) => {
       const on = !!AV.ui.ntChecks[p];
-      return '<div class="cl ' + (on ? 'on' : '') + ' ' + (auto ? 'cflag' : '') + '" data-cl="' + AV.attr(p) + '"><span class="box ' + (on ? 'on' : '') + '">' + AV.ic('check') + '</span><div class="t">' + AV.esc(p) + '<small>' + AV.esc(AV.checklistHint(p)) + '</small></div>' + (auto ? '<span class="auto">AUTO</span>' : '') + '</div>';
+      return '<div class="cl ' + (on ? 'on' : '') + '" data-cl="' + AV.attr(p) + '"><span class="box ' + (on ? 'on' : '') + '">' + AV.ic('check') + '</span><div class="t">' + AV.esc(p) + '<small>' + AV.esc(AV.checklistHint(p)) + '</small></div></div>';
     }).join(''));
     const g = n === total ? 'A' : n >= Math.ceil(total * 0.7) ? 'B' : 'C';
     const sug = $('#sugg');
@@ -608,28 +710,10 @@
   AV.checklistHint = (p) => {
     const m = {
       'Trend wyższego TF': 'D1 / H4', 'Poziom z planu': 'cena z planu dnia', 'Potwierdzenie': 'zamknięcie świecy albo retest',
-      'SL przed wejściem': 'stop loss ustawiony', 'R:R ≥ 2': 'minimum 1:2', 'Brak makro 15 min': 'sprawdź kalendarz',
+      'SL przed wejściem': 'stop loss ustawiony', 'R:R zgodne z planem': 'oceń relację do tego setupu', 'R:R ≥ 2': 'oceń relację do tego setupu', 'Brak makro 15 min': 'sprawdź kalendarz',
       'Spokojna głowa': 'check-in i gotowość'
     };
     return m[p] || 'Twój punkt';
-  };
-
-  AV.autoChecklist = (points) => {
-    const en = AV.pnum($('#ntEntry')?.value), sl = AV.pnum($('#ntSl')?.value), tp = AV.pnum($('#ntTp')?.value);
-    const dir = $('#ntDir .chip.on')?.dataset.d || 'l';
-    if (points.includes('SL przed wejściem')) AV.ui.ntChecks['SL przed wejściem'] = !!sl && (dir === 'l' ? sl < en : sl > en);
-    if (points.includes('R:R ≥ 2')) {
-      const risk = Math.abs(en - sl), reward = Math.abs(tp - en);
-      AV.ui.ntChecks['R:R ≥ 2'] = !!(risk && reward && reward / risk >= 2);
-    }
-    if (points.includes('Poziom z planu')) {
-      const p = (AV.state.plans || {})[AV.dateKey(new Date())];
-      const near = (p?.levels || []).some((l) => {
-        const x = AV.pnum(l.price);
-        return x && en && Math.abs(x - en) / en < 0.003;
-      });
-      AV.ui.ntChecks['Poziom z planu'] = near;
-    }
   };
 
   AV.renderNTMeta = () => {
@@ -651,11 +735,22 @@
 
   AV.renderNewTradeForm = () => {
     const d = AV.getDraft();
+    const executionLocked = !!AV.ui.editId && !!AV.ui.ntExecutionLocked;
     AV.setVal('#ntPair', d.pair || '');
     AV.setVal('#ntEntry', d.entry || '');
     AV.setVal('#ntSize', d.size || '');
     AV.setVal('#ntSl', d.sl || '');
     AV.setVal('#ntTp', d.tp || '');
+    ['#ntPair', '#ntEntry', '#ntSize', '#ntSl', '#ntTp'].forEach((selector) => {
+      const input = $(selector);
+      if (input) input.disabled = executionLocked;
+    });
+    const direction = $('#ntDir');
+    direction?.classList.toggle('disabled', executionLocked);
+    if (direction) {
+      direction.setAttribute('aria-disabled', executionLocked ? 'true' : 'false');
+      direction.style.pointerEvents = executionLocked ? 'none' : '';
+    }
     AV.setVal('#ntNote', d.note || '');
     $$('#ntDir .chip').forEach((c) => c.classList.toggle('on', c.dataset.d === (d.dir || 'l')));
     $$('#ntSetup .chip').forEach((c) => c.classList.toggle('on', c.dataset.s === (d.setup || 'Bez setupu')));
@@ -681,6 +776,7 @@
     } catch { return {}; }
   };
   AV.saveDraft = () => {
+    if (AV.ui.editId) return;
     const d = {
       pair: $('#ntPair')?.value, entry: $('#ntEntry')?.value, size: $('#ntSize')?.value,
       sl: $('#ntSl')?.value, tp: $('#ntTp')?.value, note: $('#ntNote')?.value,

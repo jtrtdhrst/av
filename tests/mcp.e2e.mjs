@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AlphaVault MCP 2.0 E2E: OAuth 2.1 + PKCE, DCR, consent, token/refresh/revoke,
+ * AlphaVault MCP 3.2 E2E: OAuth 2.1 + PKCE, DCR, consent, token/refresh/revoke,
  * 15 narzędzi odczytu, 7 narzędzi propozycji, prompts, izolacja użytkowników
  * i tryb MCP_WRITES_ENABLED=false/true.
  *
@@ -230,6 +230,7 @@ async function main() {
   const init = await rpc(tokA.access_token, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   assert.equal(init.res.status, 200, init.text);
   assert.equal(init.json.result.serverInfo.name, 'alphavault-mcp');
+  assert.equal(init.json.result.serverInfo.version, '4.2.0');
 
   const list = await rpc(tokA.access_token, 'tools/list', {});
   assert.equal(list.res.status, 200, list.text);
@@ -403,6 +404,27 @@ async function mainWrites() {
     assert.ok(tool.inputSchema.required.includes('idempotencyKey'), name + ' idempotencyKey');
     assert.ok(tool.outputSchema, name + ' outputSchema');
   }
+  const approveProposalTool = tools.find((tool) => tool.name === 'approve_proposal');
+  assert.ok(approveProposalTool.inputSchema.required.includes('confirmed'), 'approve_proposal requires explicit conversation confirmation');
+  assert.ok(approveProposalTool.inputSchema.required.includes('expectedDiffHash'), 'approve_proposal requires diff hash');
+  assert.equal(approveProposalTool.inputSchema.required.includes('confirmationCode'), false, 'panel code is optional');
+  const destructiveTools = [
+    'approve_proposal',
+    'delete_account',
+    'delete_account_transaction',
+    'delete_checkin',
+    'delete_day_plan',
+    'delete_prop_challenge',
+    'delete_setup',
+    'delete_trade',
+    'delete_trade_review',
+    'delete_trade_screenshot',
+  ];
+  assert.deepEqual(
+    tools.filter((tool) => tool.annotations?.destructiveHint === true).map((tool) => tool.name).sort(),
+    destructiveTools.sort(),
+    'destructiveHint must identify delete tools and proposal approval'
+  );
   assert.equal(tools.length - READ_TOOLS.length, WRITE_TOOLS.length);
   assert.equal(new Set(WRITE_TOOLS).size, WRITE_TOOLS.length);
 
@@ -479,7 +501,7 @@ async function mainWrites() {
   const authB = await authorize(clientB, b.session, 'alphavault.read');
   const tokB = await token(clientB, authB);
   const blocked = await call(tokB.access_token, 'create_trade', {
-    pair: 'PILOT/USDT', dir: 'long', entry: 1, size: 1,
+    pair: 'PILOT/USDT', dir: 'long', entry: 1, size: 1, sl: 0.9,
     idempotencyKey: 'idem-e2e-pilot-' + crypto.randomBytes(8).toString('hex'),
   });
   assert.match(toolError(blocked), /pilota/i, blocked.text);

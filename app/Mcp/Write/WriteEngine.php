@@ -5,7 +5,10 @@ namespace AlphaVault\Mcp\Write;
 
 use AlphaVault\Config;
 use AlphaVault\Db;
+use AlphaVault\Mcp\Analytics\DayPlanService;
 use AlphaVault\Mcp\Support\Dates;
+use AlphaVault\Mcp\Support\DayPlanLevels;
+use AlphaVault\Mcp\Support\DayPlanRecords;
 use AlphaVault\Mcp\Support\Numbers;
 use AlphaVault\Mcp\Support\PropChallengeService;
 
@@ -38,16 +41,8 @@ final class WriteEngine
     private const IDEM_TTL_HOURS = 24;
 
     /**
-     * Operacje wysokiego ryzyka: usuwanie, finanse, zasady ryzyka i akty
-     * zobowiązania. Nie wykonują się bezpośrednio — zawsze przez propozycję,
-     * którą zatwierdza człowiek.
-     */
-    /**
-     * Operacje, które wymagają osobnej propozycji i zgody człowieka.
-     *
-     * Puste: wszystkie 30 operacji zapisuje bezpośrednio. Usunięcia są miękkie
-     * (kosz + restore), a `propose_change`/`approve_proposal` pozostają jako
-     * opcjonalna ścieżka pokazania diffu przed zapisem.
+     * Wszystkie 30 operacji zapisuje bezpośrednio. Propozycje z diffem są
+     * opcjonalną ścieżką przygotowania zmiany przed zapisem.
      */
     public const APPROVAL_REQUIRED = [];
 
@@ -73,8 +68,8 @@ final class WriteEngine
 
     /** Felder dziennika, które wolno zmieniać w transakcji importowanej z giełdy. */
     private const EXCHANGE_LOCKED = [
-        'entry', 'exit', 'exitPrice', 'price', 'fill', 'fillPrice', 'result', 'pnl',
-        'size', 'volume', 'sl', 'tp', 'fee', 'date', 'pair', 'symbol', 'dir', 'side',
+        'entry', 'exit', 'exitPrice', 'price', 'fill', 'fillPrice', 'result', 'pnl', 'r',
+        'size', 'volume', 'sl', 'tp', 'fee', 'mae', 'mfe', 'date', 'pair', 'symbol', 'dir', 'side',
         'account', 'source', 'exchangeId', 'durationMin',
     ];
 
@@ -256,9 +251,16 @@ final class WriteEngine
      * @param array<string,mixed> $args
      * @return array{before:?array,after:array,target:string,changes:array<string,mixed>}
      */
-    public function preview(int $userId, array $state, string $op, array $args): array
+    public function preview(
+        int $userId,
+        array $state,
+        string $op,
+        array $args,
+        ?string $preparedTarget = null,
+        bool $allowExistingPreparedTarget = false
+    ): array
     {
-        $applied = $this->apply($userId, $state, $op, $args);
+        $applied = $this->apply($userId, $state, $op, $args, $preparedTarget, $allowExistingPreparedTarget);
 
         return [
             'before' => $applied['before'],
@@ -273,7 +275,14 @@ final class WriteEngine
      * @param array<string,mixed> $args
      * @return array{state:array,before:?array,after:array,target:string,result:array,changes:array<string,mixed>}
      */
-    public function apply(int $userId, array $state, string $op, array $args): array
+    public function apply(
+        int $userId,
+        array $state,
+        string $op,
+        array $args,
+        ?string $preparedTarget = null,
+        bool $allowExistingPreparedTarget = false
+    ): array
     {
         foreach (['trades', 'setups', 'checkins', 'accounts', 'flows'] as $container) {
             if (!isset($state[$container]) || !is_array($state[$container])) {
@@ -306,21 +315,21 @@ final class WriteEngine
             'setup.create' => $this->setupCreate($state, $args),
             'setup.update' => $this->setupUpdate($state, $args),
             'setup.delete' => $this->setupDelete($state, $args),
-            'plan.create' => $this->planCreate($state, $args),
+            'plan.create' => $this->planCreate($state, $args, $preparedTarget, $allowExistingPreparedTarget),
             'plan.update' => $this->planUpdate($state, $args),
             'plan.approve' => $this->planApprove($state, $args),
             'plan.delete' => $this->planDelete($state, $args),
             'checkin.create' => $this->checkinCreate($state, $args),
             'checkin.update' => $this->checkinUpdate($state, $args),
             'checkin.delete' => $this->checkinDelete($state, $args),
-            'account.create' => $this->accountCreate($state, $args),
+            'account.create' => $this->accountCreate($state, $args, $preparedTarget, $allowExistingPreparedTarget),
             'account.update' => $this->accountUpdate($state, $args),
             'account.delete' => $this->accountDelete($state, $args),
-            'flow.create' => $this->flowCreate($state, $args),
+            'flow.create' => $this->flowCreate($state, $args, $preparedTarget, $allowExistingPreparedTarget),
             'flow.update' => $this->flowUpdate($state, $args),
             'flow.delete' => $this->flowDelete($state, $args),
             'risk.update' => $this->riskUpdate($state, $args),
-            'prop.create' => $this->propCreate($state, $args),
+            'prop.create' => $this->propCreate($state, $args, $preparedTarget, $allowExistingPreparedTarget),
             'prop.update' => $this->propUpdate($state, $args),
             'prop.delete' => $this->propDelete($state, $args),
             'screenshot.add' => $this->screenshotAdd($state, $args),
@@ -348,6 +357,9 @@ final class WriteEngine
         $entry = $this->positive($args['entry'] ?? null, 'entry');
         $size = $this->positive($args['size'] ?? null, 'size');
         $sl = $this->optionalPositive($args['sl'] ?? null, 'sl');
+        if ($sl === null) {
+            throw new WriteException('stop_loss_required', 'Stop loss jest wymagany przy zapisie transakcji.');
+        }
         $tp = $this->optionalPositive($args['tp'] ?? null, 'tp');
         if ($sl !== null && (($dir === 'l' && $sl >= $entry) || ($dir === 's' && $sl <= $entry))) {
             throw new WriteException('invalid_stop_loss', 'Stop loss jest po złej stronie ceny wejścia.');
@@ -409,15 +421,16 @@ final class WriteEngine
             'mentor' => $this->mentorForGrade($grade, (array) ($args['errors'] ?? []), $checklist, $checkTotal),
             'setup' => $setup,
             'session' => $this->text($args['session'] ?? $this->sessionNow(), 40),
-            'mae' => 0,
-            'mfe' => 0,
+            'mae' => null,
+            'mfe' => null,
             'durationMin' => 0,
             'fee' => Numbers::round($fee),
-            'plan' => $this->planMatches($state, $pair, $dir),
+            'plan' => false,
             'source' => 'Ręcznie',
             'account' => $account,
             'screens' => [],
         ];
+        $trade['plan'] = $this->planMatches($state, $trade);
         $risk = $this->tradeRisk($state, $trade);
         $trade['risk'] = $risk['risk'];
         $trade['riskPct'] = $risk['riskPct'];
@@ -481,16 +494,27 @@ final class WriteEngine
         foreach (['entry', 'sl', 'tp', 'size', 'fee', 'mae', 'mfe'] as $field) {
             if (array_key_exists($field, $allowed)) {
                 $value = $allowed[$field];
+                if (in_array($field, ['mae', 'mfe'], true)) {
+                    $updated[$field] = $this->optionalNonNegativeMetric($value, $field);
+                    continue;
+                }
                 if ($value === null || $value === '' || $value === 'brak' || $value === '—') {
                     if ($field === 'entry' || $field === 'size') {
                         throw new WriteException('bad_number', $field . ' musi być liczbą dodatnią.');
                     }
-                    $updated[$field] = $field === 'sl' ? 'brak' : ($field === 'tp' ? '—' : 0);
+                    $updated[$field] = $field === 'sl'
+                        ? 'brak'
+                        : ($field === 'tp' ? '—' : 0);
                     continue;
                 }
-                $number = $this->positive($value, $field, $field === 'mae' || $field === 'mfe' || $field === 'fee');
-                $updated[$field] = in_array($field, ['mae', 'mfe', 'fee'], true) ? Numbers::round($number) : $this->numText($number);
+                $number = $this->positive($value, $field, $field === 'fee');
+                $updated[$field] = $field === 'fee' ? Numbers::round($number) : $this->numText($number);
             }
+        }
+        if (($trade['result'] ?? null) === null
+            && array_key_exists('sl', $allowed)
+            && (($updated['sl'] ?? '') === '' || ($updated['sl'] ?? '') === 'brak')) {
+            throw new WriteException('stop_loss_required', 'Stop loss jest wymagany przy otwartej transakcji.');
         }
         foreach (['grade'] as $field) {
             if (array_key_exists($field, $allowed)) {
@@ -528,6 +552,13 @@ final class WriteEngine
                 $updated[$field] = $this->text($allowed[$field], $limit);
             }
         }
+        if (array_key_exists('emotion', $allowed)) {
+            $emotion = trim((string) $allowed['emotion']);
+            if ($emotion !== '' && !in_array($emotion, self::EMOTIONS, true)) {
+                throw new WriteException('invalid_emotion', 'Nieprawidłowa emocja. Dozwolone: ' . implode(', ', self::EMOTIONS) . '.');
+            }
+            $updated['emotion'] = $emotion;
+        }
         if (array_key_exists('plan', $allowed)) {
             $updated['plan'] = (bool) $allowed['plan'];
         }
@@ -545,6 +576,27 @@ final class WriteEngine
                 (int) ($updated['checklist'] ?? 0),
                 (int) ($updated['checkTotal'] ?? 7)
             );
+        }
+
+        $executionFieldsChanged = array_intersect(array_keys($allowed), ['entry', 'size', 'sl', 'tp', 'dir']) !== [];
+        if ($executionFieldsChanged) {
+            $entry = $this->positive($updated['entry'] ?? null, 'entry');
+            $size = $this->positive($updated['size'] ?? null, 'size');
+            $dir = (string) ($updated['dir'] ?? '');
+            $slText = trim((string) ($updated['sl'] ?? ''));
+            $tpText = trim((string) ($updated['tp'] ?? ''));
+            if ($slText !== '' && $slText !== 'brak' && $slText !== '—') {
+                $sl = $this->positive($slText, 'sl');
+                if (($dir === 'l' && $sl >= $entry) || ($dir === 's' && $sl <= $entry)) {
+                    throw new WriteException('invalid_stop_loss', 'Stop loss jest po złej stronie ceny wejścia.');
+                }
+            }
+            if ($tpText !== '' && $tpText !== 'brak' && $tpText !== '—') {
+                $tp = $this->positive($tpText, 'tp');
+                if (($dir === 'l' && $tp <= $entry) || ($dir === 's' && $tp >= $entry)) {
+                    throw new WriteException('invalid_take_profit', 'Take profit jest po złej stronie ceny wejścia.');
+                }
+            }
         }
 
         if (!$exchange) {
@@ -574,7 +626,7 @@ final class WriteEngine
         $dir = (string) ($trade['dir'] ?? 'l');
         $exitPrice = $this->optionalPositive($args['exitPrice'] ?? null, 'exitPrice');
         $result = array_key_exists('result', $args) && $args['result'] !== null
-            ? Numbers::round((float) $args['result'])
+            ? Numbers::round($this->signedNumber($args['result'], 'result'))
             : null;
         if ($exitPrice === null && $result === null) {
             throw new WriteException('bad_request', 'Podaj exitPrice albo result.');
@@ -582,10 +634,10 @@ final class WriteEngine
         if ($result === null) {
             $result = Numbers::round(($exitPrice - $entry) * $size * ($dir === 'l' ? 1 : -1));
         }
-        $slText = (string) ($trade['sl'] ?? 'brak');
-        $risk = $slText !== 'brak' && $slText !== ''
+        $slText = trim((string) ($trade['sl'] ?? ''));
+        $risk = $slText !== '' && $slText !== 'brak' && $slText !== '—'
             ? abs($entry - Numbers::pnum($slText)) * $size
-            : abs($entry * 0.01 * $size);
+            : null;
         $closedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
         $openedAt = $this->parseDate((string) ($trade['date'] ?? ''));
         $duration = $openedAt === null ? 0 : max(1, (int) round(($closedAt->getTimestamp() - $openedAt->getTimestamp()) / 60));
@@ -593,7 +645,7 @@ final class WriteEngine
         $updated = $trade;
         $updated['exit'] = $exitPrice === null ? null : $this->numText($exitPrice);
         $updated['result'] = $result;
-        $updated['r'] = $risk > 0 ? Numbers::round($result / $risk) : 0;
+        $updated['r'] = $risk !== null && $risk > 0 ? Numbers::round($result / $risk) : null;
         $updated['durationMin'] = $duration;
         $updated['closedAt'] = $closedAt->format('Y-m-d\TH:i:s\Z');
         $updated['mentor'] = $result > 0
@@ -601,8 +653,8 @@ final class WriteEngine
             : ($result < 0
                 ? 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.'
                 : 'Pozycja zamknięta na zero (break-even). Oceń, czy wyjście było zgodne z planem.');
-        if (array_key_exists('mfe', $args) && $args['mfe'] !== null) {
-            $updated['mfe'] = Numbers::round((float) $args['mfe']);
+        if (array_key_exists('mfe', $args)) {
+            $updated['mfe'] = $this->optionalNonNegativeMetric($args['mfe'], 'mfe');
         }
         $comment = trim((string) ($args['comment'] ?? ''));
         if ($comment !== '') {
@@ -773,65 +825,97 @@ final class WriteEngine
     // Plan dnia
     // ------------------------------------------------------------------
 
-    private function planCreate(array $state, array $args): array
+    private function planCreate(
+        array $state,
+        array $args,
+        ?string $preparedTarget = null,
+        bool $allowExistingPreparedTarget = false
+    ): array
     {
         $date = $this->dateKey($args['date'] ?? null);
         $plans = is_array($state['plans'] ?? null) ? $state['plans'] : [];
-        if (isset($plans[$date])) {
-            throw new WriteException('plan_exists', 'Plan na ' . $date . ' już istnieje. Użyj update_day_plan.');
+        $id = '';
+        $existingKey = null;
+        if ($preparedTarget !== null) {
+            if (preg_match('/^plan:(\d{4}-\d{2}-\d{2})(?:#(pl_[a-f0-9]{12}))?$/', $preparedTarget, $match) !== 1
+                || !Dates::isValidKey($match[1])
+                || (array_key_exists('date', $args) && $date !== $match[1])) {
+                throw new WriteException('invalid_proposal_target', 'Cel propozycji planu nie odpowiada podglądowi.');
+            }
+            $date = $match[1];
+            $id = (string) ($match[2] ?? '');
+            if ($id === '') {
+                // Zgodność wsteczna dla propozycji plan.create utworzonych
+                // przed wprowadzeniem stabilnego ID w target_ref.
+                $id = DayPlanRecords::uniqueId($state);
+            }
+            foreach (DayPlanRecords::all($state) as $record) {
+                if ($record['id'] === $id) {
+                    if (!$allowExistingPreparedTarget || $record['date'] !== $date) {
+                        throw new WriteException('plan_id_conflict', 'Id planu z propozycji jest już zajęte.');
+                    }
+                    $existingKey = $record['key'];
+                    break;
+                }
+            }
+        } else {
+            $id = DayPlanRecords::uniqueId($state);
         }
-        $plan = ['date' => $date] + $this->planPayload($args, null);
-        $plans[$date] = $plan;
+        $plan = ['id' => $id, 'date' => $date] + $this->planPayload($args, null);
+        $plans[$existingKey ?? DayPlanRecords::insertKey($state, $date, $id)] = $plan;
         $state['plans'] = $plans;
 
-        return $this->done($state, null, $plan, 'plan:' . $date, $plan);
+        return $this->done($state, null, $plan, 'plan:' . $date . '#' . $id, $plan);
     }
 
     private function planUpdate(array $state, array $args): array
     {
         $date = $this->dateKey($args['date'] ?? null);
         $plans = is_array($state['plans'] ?? null) ? $state['plans'] : [];
-        $before = is_array($plans[$date] ?? null) ? $plans[$date] : null;
-        if ($before === null) {
+        $entry = $this->resolvePlan($state, $date, $args['planId'] ?? null);
+        if ($entry === null) {
             throw new WriteException('plan_missing', 'Brak planu na ' . $date . '. Użyj create_day_plan.');
         }
+        $before = $entry['plan'];
         $changes = $this->changesArray($args, 'changes');
         $unknown = array_values(array_diff(array_keys($changes), self::PLAN_FIELDS));
         if ($unknown !== []) {
             throw new WriteException('field_not_editable', 'Pola niedozwolone w planie: ' . implode(', ', $unknown) . '.');
         }
-        $updated = array_merge($before, $this->planPayload($changes, $before));
-        $plans[$date] = $updated;
+        $updated = array_merge($before, ['id' => $entry['id'], 'date' => $date], $this->planPayload($changes, $before));
+        $plans[$entry['key']] = $updated;
         $state['plans'] = $plans;
 
-        return $this->done($state, $before, $updated, 'plan:' . $date, $updated);
+        return $this->done($state, $before, $updated, 'plan:' . $date . '#' . $entry['id'], $updated);
     }
 
     private function planApprove(array $state, array $args): array
     {
         $date = $this->dateKey($args['date'] ?? null);
         $plans = is_array($state['plans'] ?? null) ? $state['plans'] : [];
-        $before = is_array($plans[$date] ?? null) ? $plans[$date] : null;
-        if ($before === null) {
+        $entry = $this->resolvePlan($state, $date, $args['planId'] ?? null);
+        if ($entry === null) {
             throw new WriteException('plan_missing', 'Brak planu na ' . $date . '.', 404);
         }
-        $previous = $before;
-        $before['approvedAt'] = (int) round(microtime(true) * 1000);
-        $plans[$date] = $before;
+        $previous = $entry['plan'];
+        $approved = array_merge($previous, ['id' => $entry['id'], 'date' => $date]);
+        $approved['approvedAt'] = (int) round(microtime(true) * 1000);
+        $plans[$entry['key']] = $approved;
         $state['plans'] = $plans;
 
-        return $this->done($state, $previous, $before, 'plan:' . $date, $before);
+        return $this->done($state, $previous, $approved, 'plan:' . $date . '#' . $entry['id'], $approved);
     }
 
     private function planDelete(array $state, array $args): array
     {
         $date = $this->dateKey($args['date'] ?? null);
         $plans = is_array($state['plans'] ?? null) ? $state['plans'] : [];
-        $plan = $plans[$date] ?? null;
-        if (!is_array($plan)) {
+        $entry = $this->resolvePlan($state, $date, $args['planId'] ?? null);
+        if ($entry === null) {
             throw new WriteException('plan_missing', 'Brak planu na ' . $date . '.', 404);
         }
-        unset($plans[$date]);
+        $plan = $entry['plan'];
+        unset($plans[$entry['key']]);
         $state['plans'] = $plans;
         $trashId = $this->newTrashId();
         $state = $this->trash($state, 'plan', $plan, 'plan ' . $date, $trashId);
@@ -839,10 +923,35 @@ final class WriteEngine
         return $this->done(
             $state,
             $plan,
-            ['deleted' => true, 'date' => $date, 'trashId' => $trashId],
-            'plan:' . $date,
-            ['date' => $date, 'deleted' => true, 'trashId' => $trashId]
+            ['deleted' => true, 'date' => $date, 'planId' => $entry['id'], 'trashId' => $trashId],
+            'plan:' . $date . '#' . $entry['id'],
+            ['date' => $date, 'planId' => $entry['id'], 'deleted' => true, 'trashId' => $trashId]
         );
+    }
+
+    /**
+     * @return array{key:string,date:string,id:string,plan:array}|null
+     */
+    private function resolvePlan(array $state, string $date, mixed $planId): ?array
+    {
+        $matches = DayPlanRecords::forDate($state, $date);
+        $requestedId = trim((string) ($planId ?? ''));
+        if ($requestedId !== '') {
+            $matches = array_values(array_filter(
+                $matches,
+                static fn (array $entry): bool => $entry['id'] === $requestedId
+            ));
+            if (count($matches) > 1) {
+                throw new WriteException('plan_id_ambiguous', 'planId nie identyfikuje jednoznacznie planu na ' . $date . '.', 409);
+            }
+
+            return $matches[0] ?? null;
+        }
+        if (count($matches) > 1) {
+            throw new WriteException('plan_id_required', 'Na ' . $date . ' jest wiele planów. Podaj planId, aby wskazać właściwy rekord.');
+        }
+
+        return $matches[0] ?? null;
     }
 
     // ------------------------------------------------------------------
@@ -933,7 +1042,12 @@ final class WriteEngine
     // Konta
     // ------------------------------------------------------------------
 
-    private function accountCreate(array $state, array $args): array
+    private function accountCreate(
+        array $state,
+        array $args,
+        ?string $preparedTarget = null,
+        bool $allowExistingPreparedTarget = false
+    ): array
     {
         $accounts = is_array($state['accounts'] ?? null) ? $state['accounts'] : [];
         $name = trim((string) ($args['name'] ?? ''));
@@ -952,8 +1066,17 @@ final class WriteEngine
         $start = $this->amount($args['start'] ?? null, 'start');
         $balance = array_key_exists('balance', $args) ? $this->amount($args['balance'], 'balance') : $start;
         $primary = (bool) ($args['primary'] ?? $accounts === []);
+        $accountId = $this->preparedId(
+            $preparedTarget,
+            'account',
+            'acc',
+            $accounts,
+            $allowExistingPreparedTarget,
+            'account_id_conflict',
+            'Id konta z propozycji jest już zajęte.'
+        ) ?? ('acc' . bin2hex(random_bytes(4)));
         $account = [
-            'id' => 'acc' . bin2hex(random_bytes(4)),
+            'id' => $accountId,
             'name' => $name,
             'exchange' => $this->text($args['exchange'] ?? '', 40),
             'type' => $this->text($args['type'] ?? 'Futures', 40),
@@ -1081,11 +1204,24 @@ final class WriteEngine
     // Wpłaty i wypłaty
     // ------------------------------------------------------------------
 
-    private function flowCreate(array $state, array $args): array
+    private function flowCreate(
+        array $state,
+        array $args,
+        ?string $preparedTarget = null,
+        bool $allowExistingPreparedTarget = false
+    ): array
     {
         $flows = is_array($state['flows'] ?? null) ? $state['flows'] : [];
         $flow = $this->flowPayload($args, null, $state);
-        $flow['id'] = 'f' . bin2hex(random_bytes(4));
+        $flow['id'] = $this->preparedId(
+            $preparedTarget,
+            'flow',
+            'f',
+            $flows,
+            $allowExistingPreparedTarget,
+            'flow_id_conflict',
+            'Id wpisu kapitałowego z propozycji jest już zajęte.'
+        ) ?? ('f' . bin2hex(random_bytes(4)));
         $flows[] = $flow;
         $state['flows'] = array_values($flows);
 
@@ -1284,10 +1420,24 @@ final class WriteEngine
     // Prop challenges
     // ------------------------------------------------------------------
 
-    private function propCreate(array $state, array $args): array
+    private function propCreate(
+        array $state,
+        array $args,
+        ?string $preparedTarget = null,
+        bool $allowExistingPreparedTarget = false
+    ): array
     {
         $challenges = is_array($state['prop']['challenges'] ?? null) ? $state['prop']['challenges'] : [];
         $payload = $this->propPayload($args, null);
+        $payload['id'] = $this->preparedId(
+            $preparedTarget,
+            'prop',
+            'prop_',
+            $challenges,
+            $allowExistingPreparedTarget,
+            'prop_id_conflict',
+            'Id challenge z propozycji jest już zajęte.'
+        ) ?? '';
         $challenge = PropChallengeService::normalize($payload);
         $challenge['createdAt'] = $this->isoNow();
         $challenges[] = $challenge;
@@ -1499,11 +1649,22 @@ final class WriteEngine
                 break;
             case 'plan':
                 $date = (string) ($record['date'] ?? '');
-                if ($date === '' || isset($state['plans'][$date])) {
-                    throw new WriteException('restore_conflict', 'Plan na ten dzień już istnieje.', 409);
+                if (!Dates::isValidKey($date)) {
+                    throw new WriteException('restore_conflict', 'Data planu w koszu jest nieprawidłowa.', 409);
                 }
-                $state['plans'][$date] = $record;
-                $target = 'plan:' . $date;
+                $record['id'] = trim((string) ($record['id'] ?? '')) ?: $date;
+                $duplicateId = array_filter(
+                    DayPlanRecords::all($state),
+                    static fn (array $entry): bool => $entry['id'] === $record['id']
+                );
+                if ($duplicateId !== []) {
+                    throw new WriteException('restore_conflict', 'Plan o tym planId już istnieje.', 409);
+                }
+                $record['date'] = $date;
+                $plans = is_array($state['plans'] ?? null) ? $state['plans'] : [];
+                $plans[DayPlanRecords::insertKey($state, $date, $record['id'])] = $record;
+                $state['plans'] = $plans;
+                $target = 'plan:' . $date . '#' . $record['id'];
                 break;
             case 'checkin':
                 $date = (string) ($record['date'] ?? '');
@@ -1784,7 +1945,9 @@ final class WriteEngine
         $markets = array_key_exists('markets', $args)
             ? $this->stringList($args['markets'], 'markets', 12, 40)
             : array_values((array) ($before['markets'] ?? []));
-        $market = $this->text($args['market'] ?? ($before['market'] ?? ''), 200);
+        $market = array_key_exists('market', $args)
+            ? $this->text($args['market'], 200)
+            : (array_key_exists('markets', $args) ? (string) ($markets[0] ?? '') : $this->text($before['market'] ?? '', 200));
         if ($market === '' && $markets !== []) {
             $market = (string) $markets[0];
         }
@@ -1818,22 +1981,11 @@ final class WriteEngine
      */
     private function levels(mixed $value): array
     {
-        if (!is_array($value)) {
-            throw new WriteException('invalid_levels', 'levels musi być tablicą poziomów.');
+        try {
+            return DayPlanLevels::normalizeList($value, 12, true);
+        } catch (\InvalidArgumentException $err) {
+            throw new WriteException('invalid_levels', $err->getMessage());
         }
-        $out = [];
-        foreach (array_slice($value, 0, 12) as $level) {
-            if (is_array($level)) {
-                $out[] = [
-                    'value' => $this->text($level['value'] ?? '', 40),
-                    'note' => $this->text($level['note'] ?? '', 200),
-                ];
-            } else {
-                $out[] = ['value' => $this->text($level, 40), 'note' => ''];
-            }
-        }
-
-        return $out;
     }
 
     /**
@@ -1946,6 +2098,42 @@ final class WriteEngine
         return $payload;
     }
 
+    /**
+     * Reuses generated IDs stored in proposal targets, so preview and approval
+     * apply the same record. Existing IDs are accepted only while replaying the
+     * same idempotent proposal.
+     *
+     * @param list<array> $records
+     */
+    private function preparedId(
+        ?string $target,
+        string $resource,
+        string $prefix,
+        array $records,
+        bool $allowExisting,
+        string $conflictCode,
+        string $conflictMessage
+    ): ?string {
+        if ($target === null) {
+            return null;
+        }
+        $pattern = '/^' . preg_quote($resource, '/') . ':(' . preg_quote($prefix, '/') . '(?:[a-f0-9]{8}|[a-f0-9]{12}))$/';
+        if (preg_match($pattern, $target, $match) !== 1) {
+            throw new WriteException('invalid_proposal_target', 'Cel propozycji nie odpowiada typowi rekordu.');
+        }
+        $id = $match[1];
+        foreach ($records as $record) {
+            if (is_array($record) && (string) ($record['id'] ?? '') === $id) {
+                if (!$allowExisting) {
+                    throw new WriteException($conflictCode, $conflictMessage);
+                }
+                break;
+            }
+        }
+
+        return $id;
+    }
+
     private function dateKey(mixed $value): string
     {
         $text = trim((string) ($value ?? ''));
@@ -2018,11 +2206,34 @@ final class WriteEngine
         if (is_bool($value) || $value === null || $value === '' || is_array($value)) {
             throw new WriteException('bad_number', $field . ' musi być liczbą.');
         }
-        if (!is_int($value) && !is_float($value) && preg_match('/\d/', (string) $value) !== 1) {
+        if (is_int($value) || is_float($value)) {
+            if (!is_finite((float) $value)) {
+                throw new WriteException('bad_number', $field . ' musi być liczbą.');
+            }
+
+            return (float) $value;
+        }
+        $text = str_replace(["\u{00a0}", ' '], '', (string) $value);
+        $text = preg_replace('/[$€£%x×]/iu', '', $text) ?? $text;
+        $text = preg_replace('/,(?=\d)/', '.', $text) ?? $text;
+        $text = str_replace(',', '', $text);
+        if (preg_match('/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/', $text) !== 1) {
             throw new WriteException('bad_number', $field . ' musi być liczbą.');
         }
 
-        return Numbers::pnum($value);
+        return (float) $text;
+    }
+
+    private function signedNumber(mixed $value, string $field): float
+    {
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)
+            || !is_finite((float) $value)) {
+            throw new WriteException('bad_number', $field . ' musi być skończoną liczbą.');
+        }
+
+        return (float) $value;
     }
 
     private function positive(mixed $value, string $field, bool $allowZero = false): float
@@ -2033,6 +2244,18 @@ final class WriteEngine
         }
 
         return $number;
+    }
+
+    private function optionalNonNegativeMetric(mixed $value, string $field): ?float
+    {
+        if ($value === null) {
+            return null;
+        }
+        if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value)) {
+            throw new WriteException('bad_number', $field . ' musi być nieujemną liczbą albo null.');
+        }
+
+        return Numbers::round($this->positive($value, $field, true));
     }
 
     private function optionalPositive(mixed $value, string $field): ?float
@@ -2184,51 +2407,32 @@ final class WriteEngine
     /**
      * @param array<string,mixed> $state
      */
-    private function planMatches(array $state, string $pair, string $dir): bool
+    private function planMatches(array $state, array $trade): bool
     {
-        $plans = is_array($state['plans'] ?? null) ? $state['plans'] : [];
-        $plan = null;
-        $today = Dates::todayKey();
-        if (isset($plans[$today]) && is_array($plans[$today])) {
-            $plan = $plans[$today];
-        } else {
-            $keys = array_keys($plans);
-            sort($keys);
-            $last = $keys === [] ? null : (string) end($keys);
-            if ($last !== null && isset($plans[$last]) && is_array($plans[$last])) {
-                $plan = $plans[$last];
-            }
-        }
+        $plan = (new DayPlanService())->planForTrade($state, $trade);
         if ($plan === null) {
             return false;
         }
         $bias = strtolower(trim((string) ($plan['bias'] ?? '')));
-        $biasMatch = in_array($bias, ['', 'none', 'neutral'], true) || $bias === ($dir === 'l' ? 'long' : 'short');
-        $markets = array_map(
-            static fn (mixed $market): string => strtoupper(trim((string) $market)),
-            (array) ($plan['markets'] ?? [])
-        );
-        $market = strtoupper(trim((string) ($plan['market'] ?? '')));
-        $pairMatch = $markets === []
-            ? ($market === '' || $market === $pair || mb_strpos($market, $pair) !== false)
-            : in_array($pair, $markets, true);
+        $biasMatch = in_array($bias, ['', 'none', 'neutral'], true)
+            || $bias === ((string) ($trade['dir'] ?? 'l') === 's' ? 'short' : 'long');
 
-        return $biasMatch && $pairMatch;
+        return $biasMatch && (new DayPlanService())->marketMatchesPlan($trade, $plan);
     }
 
     /**
      * @param array<string,mixed> $state
      * @param array<string,mixed> $trade
-     * @return array{risk:float,riskPct:?float}
+     * @return array{risk:?float,riskRaw:?float,riskPct:?float}
      */
     private function tradeRisk(array $state, array $trade): array
     {
         $entry = Numbers::pnum($trade['entry'] ?? 0);
         $size = Numbers::pnum($trade['size'] ?? 0);
-        $slText = (string) ($trade['sl'] ?? 'brak');
-        $risk = $slText !== '' && $slText !== 'brak'
+        $slText = trim((string) ($trade['sl'] ?? ''));
+        $risk = $entry > 0 && $size > 0 && $slText !== '' && $slText !== 'brak' && $slText !== '—'
             ? abs($entry - Numbers::pnum($slText)) * $size
-            : abs($entry * 0.01 * $size);
+            : null;
         $capital = 0.0;
         foreach ((array) ($state['accounts'] ?? []) as $account) {
             if (!is_array($account) || ($account['include'] ?? true) === false) {
@@ -2238,8 +2442,9 @@ final class WriteEngine
         }
 
         return [
-            'risk' => Numbers::round($risk, 2),
-            'riskPct' => $capital > 0 ? Numbers::round($risk / $capital * 100, 2) : null,
+            'risk' => $risk === null ? null : Numbers::round($risk, 2),
+            'riskRaw' => $risk,
+            'riskPct' => $risk !== null && $capital > 0 ? Numbers::round($risk / $capital * 100, 2) : null,
         ];
     }
 

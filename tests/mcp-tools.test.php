@@ -18,12 +18,14 @@ use AlphaVault\Mcp\Analytics\RiskService;
 use AlphaVault\Mcp\Analytics\ScreensService;
 use AlphaVault\Mcp\Analytics\SetupService;
 use AlphaVault\Mcp\Analytics\TaxService;
+use AlphaVault\Mcp\Support\DashboardService;
 use AlphaVault\Mcp\Support\Metrics;
 use AlphaVault\Mcp\Support\PropChallengeService;
 use AlphaVault\Mcp\Support\StatsService;
 use AlphaVault\Mcp\Support\TradeService;
 use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Tools\Prompts;
+use AlphaVault\Mcp\Tools\Schemas;
 
 $pass = 0;
 $fail = 0;
@@ -46,6 +48,20 @@ $at = static fn (int $offset, int $hour): string => $today->modify(($offset >= 0
     ->setTimezone(new DateTimeZone('UTC'))
     ->format('Y-m-d\TH:i:s.000\Z');
 $dayKey = static fn (int $offset): string => $today->modify(($offset >= 0 ? '+' : '') . $offset . ' days')->format('Y-m-d');
+$dayPlanInput = Schemas::inputDayPlan();
+$dayPlanComplianceInput = Schemas::inputDayPlanCompliance();
+check(
+    'get_day_plan: schema exposes optional planId and market filters',
+    isset($dayPlanInput['properties']['planId'], $dayPlanInput['properties']['market'])
+    && !in_array('planId', $dayPlanInput['required'] ?? [], true)
+    && !in_array('market', $dayPlanInput['required'] ?? [], true)
+);
+check(
+    'get_day_plan_compliance: schema exposes optional selectors for date ranges',
+    isset($dayPlanComplianceInput['properties']['planId'], $dayPlanComplianceInput['properties']['market'])
+    && !in_array('planId', $dayPlanComplianceInput['required'] ?? [], true)
+    && !in_array('market', $dayPlanComplianceInput['required'] ?? [], true)
+);
 
 $trade = static fn (array $o): array => array_merge([
     'id' => 't' . bin2hex(random_bytes(3)),
@@ -189,12 +205,153 @@ check('Stats: break-even spójnie eksponowany', $statsBreakEven['breakeven'] ===
 $plans = new DayPlanService();
 $todayDay = $plans->day($state, $dayKey(0));
 check('Plan: status approved', $todayDay['plan']['status'] === 'approved');
+check('Plan: legacy date map zachowuje id stabilne', $todayDay['plan']['id'] === $dayKey(0));
 check('Plan: limit transakcji wykryty', $todayDay['limits']['tradesOverLimit'] === 2, json_encode($todayDay['limits']));
 check('Plan: transakcja poza rynkiem niezgodna', $todayDay['compliance']['tradeRows'][1]['aligned'] === false);
 check('Plan: brak SL to naruszenie', in_array('missing_stop_loss', $todayDay['compliance']['tradeRows'][1]['reasons'], true));
 check('Plan: szkic nie daje zgodności', $plans->day($state, $dayKey(-1))['plan']['status'] === 'draft');
 $alignmentDraft = $plans->alignment($state, $state['trades'][1], $state['plans'][$dayKey(-1)]);
 check('Plan: szkic = nie da się ustalić', $alignmentDraft['determined'] === false && in_array('plan_not_approved', $alignmentDraft['reasons'], true));
+$slashMarketAlignment = $plans->alignment(
+    $state,
+    array_merge($state['trades'][0], ['pair' => 'BTCUSDT']),
+    ['date' => $dayKey(0), 'market' => 'BTC/USDT', 'markets' => ['BTC/USDT'], 'bias' => 'long', 'approvedAt' => 1]
+);
+check(
+    'Plan: zgodność rynku używa tej samej normalizacji co przypisanie',
+    !in_array('market_not_in_plan', $slashMarketAlignment['reasons'], true)
+);
+$accountScopedState = $state;
+$accountScopedState['accounts'][] = ['id' => 'a2', 'name' => 'Konto B', 'include' => false];
+$accountScopedState['trades'][] = $trade([
+    'id' => 'excluded-earlier',
+    'date' => $at(0, 8),
+    'account' => 'Konto B',
+]);
+$sequenceTrade = $accountScopedState['trades'][2];
+$sequencePlan = $plans->planForTrade($accountScopedState, $sequenceTrade);
+check(
+    'Plan: sekwencja statystyk pomija wcześniejsze transakcje z wyłączonych kont',
+    $plans->tradeSequence($accountScopedState, $sequenceTrade, $sequencePlan) === 2
+    && $plans->tradeSequence($accountScopedState, $sequenceTrade, $sequencePlan, true) === 1
+);
+
+$multiState = $state;
+$multiState['plans'][$dayKey(0) . '#eth-plan'] = [
+    'id' => 'eth-plan',
+    'date' => $dayKey(0),
+    'market' => 'ETH',
+    'markets' => ['ETH'],
+    'bias' => 'short',
+    'risk' => '1%',
+    'maxTrades' => '2',
+    'approvedAt' => 1,
+    'levels' => [['type' => 'liquidity', 'price' => '3 400', 'note' => 'pool']],
+];
+$formattedMarketState = $state;
+$formattedMarketState['plans'][$dayKey(0)]['market'] = 'BTC/USDT';
+$formattedMarketState['plans'][$dayKey(0)]['markets'] = ['BTC/USDT'];
+$listedMultiPlans = $plans->plansForDate($multiState, $dayKey(0));
+$multiDay = $plans->day($multiState, $dayKey(0));
+$legacyLevelsState = $state;
+$legacyLevelsState['plans'][$dayKey(0)]['levels'] = [['value' => '68100', 'note' => 'old format']];
+$legacyLevelsListed = $plans->plansForDate($legacyLevelsState, $dayKey(0));
+$legacyLevelsSelected = $plans->planFor($legacyLevelsState, $dayKey(0));
+$noMatchPlanDay = $plans->day($multiState, $dayKey(0), 'missing-plan');
+$multiHistory = $plans->history($multiState, $dayKey(0), $dayKey(0), 20, 0);
+$multiCompliance = $plans->compliance($multiState, $dayKey(0), $dayKey(0), 20, 0);
+$filteredCompliance = $plans->compliance($multiState, $dayKey(0), $dayKey(0), 20, 0, 'eth-plan');
+$noMatchRangeCompliance = $plans->compliance($multiState, $dayKey(0), $dayKey(0), 20, 0, 'missing-plan');
+check(
+    'Plan: dzień nie wybiera arbitralnie i pokazuje listę',
+    $multiDay['plan'] === null && count($multiDay['plans']) === 2
+    && $listedMultiPlans[0]['status'] === 'approved'
+    && $listedMultiPlans[1]['status'] === 'approved'
+    && $plans->planFor($multiState, $dayKey(0)) === null
+);
+check(
+    'Plan: selektor market i dopasowanie transakcji',
+    $plans->planFor($multiState, $dayKey(0), 'ETH')['id'] === 'eth-plan'
+    && $plans->planFor($formattedMarketState, $dayKey(0), 'BTCUSDT')['market'] === 'BTC/USDT'
+    && $plans->planForTrade($multiState, $state['trades'][3])['id'] === 'eth-plan'
+    && $plans->planForTrade($multiState, $state['trades'][3])['status'] === 'approved'
+);
+$prefixCollisionState = [
+    'plans' => [
+        $dayKey(0) => ['id' => 'btc-plan', 'date' => $dayKey(0), 'market' => 'BTC', 'markets' => ['BTC'], 'bias' => 'long', 'approvedAt' => 1],
+        $dayKey(0) . '#btcbull-plan' => ['id' => 'btcbull-plan', 'date' => $dayKey(0), 'market' => 'BTCBULL/USDT', 'markets' => ['BTCBULL/USDT'], 'bias' => 'long', 'approvedAt' => 1],
+    ],
+    'trades' => [$trade(['id' => 'btcbull-trade', 'date' => $at(0, 10), 'pair' => 'BTCBULL/USDT'])],
+];
+check(
+    'Plan: dopasowanie legacy BTC nie koliduje z prefiksem BTCBULL',
+    !$plans->marketMatchesPlan($prefixCollisionState['trades'][0], $prefixCollisionState['plans'][$dayKey(0)])
+    && $plans->planForTrade($prefixCollisionState, $prefixCollisionState['trades'][0])['id'] === 'btcbull-plan'
+    && $plans->marketMatchesPlan(['pair' => 'BTCUSDT'], ['market' => 'BTC/USDT'])
+);
+check(
+    'Plan: błędny selektor dnia nie zwraca zgodności z innym planem',
+    $noMatchPlanDay['plan'] === null
+    && $noMatchPlanDay['compliance']['undeterminedTrades'] === 0
+    && $noMatchPlanDay['compliance']['trades'] === 0
+    && $noMatchPlanDay['compliance']['planIds'] === []
+    && $noMatchRangeCompliance['days'] === []
+    && $noMatchRangeCompliance['hasData'] === false
+);
+check(
+    'Plan: poziomy UI zachowują liquidity i price/value',
+    $multiDay['plans'][1]['levels'][0]['type'] === 'Liquidity'
+    && $multiDay['plans'][1]['levels'][0]['price'] === '3 400'
+    && $multiDay['plans'][1]['levels'][0]['value'] === '3 400'
+);
+check(
+    'Plan: get_day_plan list/selection normalizuje legacy value do price/value',
+    $legacyLevelsListed[0]['levels'][0]['price'] === '68100'
+    && $legacyLevelsListed[0]['levels'][0]['value'] === '68100'
+    && $legacyLevelsSelected['levels'][0]['price'] === '68100'
+    && $legacyLevelsSelected['levels'][0]['value'] === '68100'
+    && $legacyLevelsListed[0]['levels'][0]['note'] === 'old format'
+);
+check(
+    'Plan: historia liczy osobno każdy rekord',
+    $multiHistory['total'] === 2
+    && array_column($multiHistory['items'], 'planId') === [$dayKey(0), 'eth-plan']
+    && array_column($multiHistory['items'], 'trades') === [2, 1]
+);
+check(
+    'Plan: zgodność zachowuje rekordy i dopasowuje rynek',
+    count($multiCompliance['days']) === 2
+    && array_column($multiCompliance['days'], 'planId') === [$dayKey(0), 'eth-plan']
+    && $multiDay['compliance']['tradeRows'][1]['planId'] === 'eth-plan'
+);
+check(
+    'Plan: filtry planId i market działają także w zakresie dat',
+    count($filteredCompliance['days']) === 1
+    && $filteredCompliance['days'][0]['planId'] === 'eth-plan'
+    && $filteredCompliance['filters']['planId'] === 'eth-plan'
+    && $plans->compliance($multiState, $dayKey(0), $dayKey(0), 20, 0, null, 'ETH')['days'][0]['planId'] === 'eth-plan'
+    && $plans->compliance($formattedMarketState, $dayKey(0), $dayKey(0), 20, 0, null, 'BTCUSDT')['days'][0]['planId'] === $dayKey(0)
+);
+$sameMarketState = $multiState;
+$sameMarketState['plans'][$dayKey(0) . '#eth-plan-2'] = array_merge(
+    $multiState['plans'][$dayKey(0) . '#eth-plan'],
+    ['id' => 'eth-plan-2']
+);
+check(
+    'Plan: nie zgaduje między planami tego samego rynku',
+    $plans->planForTrade($sameMarketState, $state['trades'][3]) === null
+);
+$dashboard = (new ReflectionClass(DashboardService::class))->newInstanceWithoutConstructor();
+$singleDashboardPlans = $dashboard->planOptions($state, $dayKey(0));
+$multiDashboardPlans = $dashboard->planOptions($multiState, $dayKey(0));
+check(
+    'Dashboard: legacy plan pozostaje w plan, duplikaty są jawne',
+    $singleDashboardPlans['plan']['market'] === 'BTC'
+    && count($singleDashboardPlans['plans']) === 1
+    && $multiDashboardPlans['plan'] === null
+    && count($multiDashboardPlans['plans']) === 2
+    && array_column($multiDashboardPlans['plans'], 'market') === ['BTC', 'ETH']
+);
 
 // --- Risk ---
 $risk = new RiskService($plans);
@@ -209,6 +366,20 @@ check('Ryzyko: naruszenie ma oczekiwaną i rzeczywistą wartość', $violations[
 
 // --- Performance ---
 $perf = new PerformanceService($plans, $risk);
+$accountScopedPlanCompliance = $perf->byPlanCompliance(
+    $accountScopedState,
+    $dayKey(0),
+    $dayKey(0),
+    1
+);
+$maxTradeRule = array_values(array_filter(
+    $accountScopedPlanCompliance['rulesViolated'],
+    static fn (array $rule): bool => $rule['rule'] === 'max_trades_exceeded'
+));
+check(
+    'Plan: raport zgodności liczy limit w zakresie kont statystyk',
+    count($maxTradeRule) === 1 && $maxTradeRule[0]['count'] === 1
+);
 $bySetup = $perf->bySetup($state, null, null, 1);
 check('Analityka: suma grup = próba', array_sum(array_column($bySetup['items'], 'sampleSize')) === $bySetup['sampleSize']);
 $byGrade = $perf->byGrade($state, null, null, 1);
@@ -275,9 +446,33 @@ check('Screeny: metadane bez base64', $meta['screenshots']['count'] === 1 && $me
 check('Screeny: wymiary PNG', $meta['screenshots']['items'][0]['dimensions'] === ['width' => 1, 'height' => 1]);
 $withImages = $screens->forTrade(['id' => 'x', 'screens' => ['before' => $png, 'after' => $png]], true, 1);
 check('Screeny: limit obrazów', count($withImages['screenshots']['images']) === 1);
+$journalState = $state;
+$journalState['trades'][2]['checklistItems'] = ['Poziom'];
+$journalState['trades'][2]['checklist'] = 1;
+$journalContext = (new JournalService(new TradeService(), $setups, $plans, $screens))->context($journalState, 'w2', false);
+$mcpCreatedJournalContext = (new JournalService(new TradeService(), $setups, $plans, $screens))->context($state, 'w2', false);
+check(
+    'Dziennik MCP: zachowuje wybrane punkty checklisty',
+    $journalContext['checklist']['selectedPoints'] === ['Poziom']
+    && $journalContext['checklist']['completed'] === 1
+    && $mcpCreatedJournalContext['checklist']['selectedPoints'] === []
+);
 
 // --- Konto poza statystykami nie ukrywa transakcji z dziennika ---
 $tradeReader = new TradeService();
+$sanitizedMetrics = $tradeReader->sanitize($trade(['mae' => '', 'mfe' => ' ']), false);
+$sanitizedZeroMetrics = $tradeReader->sanitize($trade(['mae' => 0, 'mfe' => 0]), false);
+$sanitizedUnknownMeasures = $tradeReader->sanitize($trade([
+    'result' => '', 'r' => ' ', 'fee' => '', 'durationMin' => '',
+    'mae' => '', 'mfe' => ' ',
+]), false);
+check(
+    'Transakcje: puste metryki API pozostają null, prawdziwe zero zostaje zerem',
+    $sanitizedMetrics['mae'] === null && $sanitizedMetrics['mfe'] === null
+    && $sanitizedZeroMetrics['mae'] === 0.0 && $sanitizedZeroMetrics['mfe'] === 0.0
+    && $sanitizedUnknownMeasures['result'] === null && $sanitizedUnknownMeasures['r'] === null
+    && $sanitizedUnknownMeasures['fee'] === null && $sanitizedUnknownMeasures['durationMin'] === null
+);
 $accountFilterState = [
     'accounts' => [
         ['name' => 'Wyłączone', 'include' => false],
@@ -285,6 +480,7 @@ $accountFilterState = [
     ],
     'trades' => [
         $trade(['id' => 'excluded-open', 'account' => 'Wyłączone', 'result' => null]),
+        $trade(['id' => 'excluded-unknown-result', 'account' => 'Wyłączone', 'result' => '']),
         $trade(['id' => 'excluded-zero', 'account' => 'Wyłączone', 'result' => 0.0]),
         $trade(['id' => 'included-win', 'account' => 'Wliczane', 'result' => 5.0]),
         $trade(['id' => 'legacy-account-win', 'account' => 'Konto archiwalne', 'result' => 2.0]),
@@ -296,7 +492,8 @@ $closedAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'clo
 $winAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'win', 'limit' => 10]);
 $lossAccountTrades = $tradeReader->list($accountFilterState, ['status' => 'loss', 'limit' => 10]);
 check('Transakcje: konto wyłączone nadal widoczne w szczególe i liście', $tradeReader->find($accountFilterState, 'excluded-open') !== null
-    && $allAccountTrades['total'] === 4 && $openAccountTrades['total'] === 1
+    && $tradeReader->find($accountFilterState, 'excluded-unknown-result') !== null
+    && $allAccountTrades['total'] === 5 && $openAccountTrades['total'] === 2
     && $closedAccountTrades['total'] === 3 && $winAccountTrades['total'] === 2
     && $lossAccountTrades['total'] === 0);
 check('Transakcje: filtr konta zgodny w statystykach i analityce', count($tradeReader->closedTrades($accountFilterState)) === 2
@@ -309,7 +506,7 @@ $reviewState['tradeReviews']['l1'] = [
     'grade' => 'A', 'setup' => '', 'checklist' => 7, 'errors' => [],
     'emotion' => 'Spokój', 'note' => 'Ocena tradera',
 ];
-$journalService = new JournalService(new TradeService(), new SetupService(), new DayPlanService(), new ScreensService());
+$journalService = new JournalService(new TradeService(), $setups, $plans, $screens);
 $draftReview = $journalService->review($reviewState, 'l1');
 check('Journal: ocena A nie implikuje zatwierdzonego planu',
     $draftReview['reviewAvailable'] === true

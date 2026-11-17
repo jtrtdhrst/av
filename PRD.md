@@ -4,11 +4,11 @@
 | --- | --- |
 | Produkt | Alpha Vault — prywatna strefa tradera Alpha Moves |
 | Domena | <https://alphavault.pl> |
-| Wersja dokumentu | 3.1 |
-| Data | 2026-11-12 |
+| Wersja dokumentu | 3.2 |
+| Data | 2026-11-16 |
 | Właściciel produktu | Alpha Moves |
 | Odbiorca | agent **AV-engineer**, zespół techniczny |
-| Status | kod i testy gotowe; produkcja oczekuje na deploy (szczegóły w §11) |
+| Status | wymagania produktu; odnotowany stan produkcji znajduje się w §11 |
 
 **Dokumenty powiązane**
 
@@ -112,6 +112,13 @@ Cały stan użytkownika jest dokumentem JSON w `user_states`. Zapis jest optymis
 Zachowane: pulpit, plan dnia, dziennik, playbook, nowa transakcja, kalkulator, prop challenge, statystyki, mentor AI (integracje MCP), podatki PIT-38, kalendarz makro, ciało i głowa, giełdy, ustawienia, eksport i usunięcie konta.
 
 Każdy widok ma czytelny adres w hashu (`#/dziennik`, `#/akademia`, `#/podatki`, `#/konto`, …); stare krótkie adresy (`#/trans`, `#/akad`, `#/ust`) pozostają aliasami i są przepisywane na slug. Kontrakt: `DOCUMENTATION.md §11.1a`, test: `tests/router.unit.mjs`.
+
+- Karta salda na pulpicie rozwija listę kont. Plan dnia pozwala utrzymywać wiele niezależnych planów dla tej samej daty, każdy z własnym rynkiem i poziomami płynności/POI; dopasowanie transakcji nie wybiera arbitralnie, gdy kilka planów pasuje do tego samego rynku.
+- Ręczna checklista ocenia transakcję, ale nie narzuca minimalnej liczby zaznaczeń; wybór punktów jest ręczny. Edycja zachowuje historyczny wynik, a gdy starszy wpis nie zapisał nazw zaznaczonych punktów, UI nie dopisuje zmyślonego wyboru. Transakcja wymaga SL; R:R dobiera się do setupu, bez stałego minimum. Po zapisie formularz otwiera dziennik i resetuje jego filtry. Dziennik pokazuje wszystkie wpisy niezależnie od tego, czy ich konto jest włączone do statystyk.
+- Etykieta kapitału początkowego konta jest jawna („Kapitał startowy”). Zakres statystyk ogólnych pozostaje niezależny od zakresu kalendarza PnL.
+- MAE/MFE, opłaty, czas trwania i checklista z importu pozostają nieznane (`null`), jeśli źródło ich nie dostarcza; puste pomiary nie są liczone jak zero. CSV nie tworzy wpisu bez PnL i bez danych do jego wyliczenia, ale zachowuje jawny PnL równy 0.
+- Koszt błędu „Za wczesne wyjście” jest pomijany, gdy brakuje pomiaru MFE albo niezerowego R; zamknięcie transakcji przez MCP zachowuje wcześniejsze MFE, jeśli pole pominięto, a jawne `null` je czyści.
+- Eksport dziennika zachowuje MAE/MFE i nie zamienia nieznanej opłaty ani pustej checklisty na zero lub wartość domyślną. Pusty wynik jest traktowany jako transakcja otwarta; zamknięcie tylko wynikiem nie fabrykuje ceny wyjścia.
 
 ### FR-05 — Harmonogram live'ów z Discorda
 
@@ -222,29 +229,32 @@ Panel prowadzi wiele challenge'ów prop firm równolegle i pilnuje ich limitów 
 
 Kalendarz makro i widget „MAKRO · ten tydzień” korzystają z jednego, wspólnego zestawu publikacji zapisanego w MySQL i udostępnianego przez `GET /api/macro-events`.
 
-- bieżący tydzień z feedu ForexFactory, następny z TradingView,
+- bieżący pełny tydzień z feedu ForexFactory; poprzedni pełny tydzień oraz pełne tygodnie +1, +2 i +3 z TradingView (granice poniedziałek–poniedziałek, koniec wyłączny), także przy cold-starcie pustej bazy,
+- przy nakładaniu okien ForexFactory ma priorytet; rekordy TradingView poza oknem FF pozostają aktywne,
+- API filtruje wydarzenia w granicach 14 dni wstecz i około 35 dni naprzód; rzeczywiste przyszłe pokrycie feedów kończy się na pełnym tygodniu TradingView +3. Nawigacja kalendarza obejmuje poprzedni tydzień oraz tygodnie bieżący i +1…+3,
 - tylko publikacje ★★ i ★★★ (Low/Holiday pomijane), czasy w UTC + oryginalne ISO,
 - UPSERT bez duplikatów i soft delete po braku w feedzie,
-- błąd API nie czyści ostatniego dobrego zestawu; sukces z `[]` czyści widok,
+- błąd API/feedu nie czyści ostatniego dobrego zestawu i sygnalizuje stan częściowy lub stale; sukces z `[]` czyści jawne okno,
 - synchronizacja przez 5-min wrapper LH Cron z throttle 15 min (`bin/sync-macro-events.php`, znacznik `.runtime/macro.stamp`) oraz ręcznie.
 
 ### FR-21 - MCP 3.2: kontekst, 79 narzędzi i zapis bezpośredni
 
 MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAuth i bezpieczny mechanizm zmian.
 
-- OAuth 2.1 + PKCE S256, scope `alphavault.read` i `alphavault.health`. Nie ma osobnego zakresu zapisu: jedno połączenie daje od razu 79 narzędzi.
+- OAuth 2.1 + PKCE S256, scope `alphavault.read` i `alphavault.health`. Nie ma osobnego zakresu zapisu: przy `MCP_WRITES_ENABLED=true` jedno połączenie daje od razu 79 narzędzi; przy wyłączonym zapisie 46 narzędzi odczytu. Odmowa jedynego scope’u zdrowotnego kończy autoryzację bez wydania tokenu i nie rozszerza dostępu do `alphavault.read`.
 - 46 narzędzi odczytu: profil, pulpit, transakcje, dziennik, statystyki i raporty, wydarzenia, plan dnia, playbook, makro, prop, check-iny, gotowość, ryzyko, konta, kapitał, podatki, połączenia, lista i status propozycji.
 - 33 narzędzia zapisu: 30 operacji zapisuje bezpośrednio (transakcje, recenzje, setupy, plan dnia, check-in, screen, usunięcia, konta, wpłaty i wypłaty, reguły ryzyka, prop, zatwierdzenie planu, kosz) oraz 3 obsługujące opcjonalne propozycje (`propose_change`, `approve_proposal`, `reject_proposal`).
+- Plany dnia mają stabilne `id` i mogą występować wielokrotnie pod jedną datą. `get_day_plan` zwraca wszystkie plany daty; `update_day_plan`, `approve_day_plan` i `delete_day_plan` wskazują plan przez `planId`, obowiązkowy, gdy data ma wiele planów. Poziomy planu zachowują typ, cenę (`price`/`value`) i notatkę w odczycie oraz zapisie, w tym płynność i POI.
 - Każdy zapis ma `idempotencyKey` i opcjonalny `expectedRevision`; konflikt wersji nie nadpisuje danych.
 - Fingerprint wiąże `idempotencyKey` z operacją, argumentami i rewizją; ponowne użycie dla innego payloadu zwraca `idempotency_conflict` (409), także dla decyzji propozycji. Klucze są case-sensitive.
 - `account.include` ogranicza analitykę, nie odczyt list i szczegółów transakcji. Wynik 0 jest break-even, osobno od zysku i straty.
 - Dane zdrowotne na pulpicie MCP wymagają zakresu `alphavault.health` i aktywnego połączenia urządzenia; bez niego wynik gotowości zależy wyłącznie od check-inu, a bez check-inu `score` jest `null`.
 - Usunięcia są miękkie: rekord trafia do `state.trash[]` i wraca przez `restore_deleted_record`.
-- `propose_change` pokazuje diff bez zapisu; `approve_proposal` wykonuje propozycję po `confirmed: true`, a `reject_proposal` nie zmienia danych. Kod z panelu jest opcjonalny.
+- `propose_change` pokazuje diff bez zapisu; `approve_proposal` wymaga `confirmed: true` i zgodnego `diffHash`; klient powinien wysłać flagę po jednoznacznej zgodzie użytkownika, ale serwer nie analizuje treści rozmowy. `reject_proposal` nie zmienia danych, a kod z panelu jest opcjonalny. Bezpośrednie operacje zapisu nie wymagają dodatkowego potwierdzenia.
 - Idempotencja zapisu (24 h) i decyzji, TTL propozycji 30 min, `diffHash`, audyt, transakcja MySQL z `SELECT ... FOR UPDATE`.
 - Dane giełdowe są niezmienne, także saldo i kapitał startowy konta; recenzja transakcji giełdowej trafia do osobnego obszaru.
 - MCP może tylko zaostrzać reguły ryzyka; nie podnosi limitów i nie wyłącza zabezpieczeń. Nazwy pól z `get_risk_rules` są akceptowane w `update_risk_rules`.
-- `MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu (zostaje 46 odczytu) bez zmiany zakresów OAuth. `MCP_PILOT_DISCORD_IDS` opcjonalnie ogranicza zapis do wybranych kont.
+- `MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu (zostaje 46 odczytu) bez zmiany zakresów OAuth. `MCP_PILOT_DISCORD_IDS` opcjonalnie ogranicza zapis do wybranych kont; ekran zgody komunikuje oba warunki.
 
 ## 7. Wymagania niefunkcjonalne
 
@@ -284,7 +294,7 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | AC-16 | Apple Health przyjmuje dane po kodzie parowania i tokenie urządzenia | `npm run test:wearables` |
 | AC-17 | Gotowość łączy urządzenie z check-inem i czyści się po odłączeniu | test API + UI E2E |
 | AC-18 | Tokeny dostawców nie są widoczne w API ani logach | test odpowiedzi API + audyt |
-| AC-19 | Kalendarz makro i widget korzystają z DB oraz są odporne na błąd feedu | `npm run test:macro` 21/21 + API/UI E2E |
+| AC-19 | Kalendarz makro i widget korzystają z DB oraz są odporne na błąd feedu | `npm run test:macro` (okna FF/TV, granice i soft delete) + API/UI E2E |
 
 ## 9. Metryki sukcesu
 
@@ -315,7 +325,7 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | Synchronizacja Discord | gotowa, test realny 3/3 VOICE |
 | Testy DB/sync | PASS |
 | API / UI / empty-state | PASS |
-| Prop challenge (frontend) | gotowy, `prop 27/27`, `API 23/23`, `UI 55/55`; deploy po merge |
+| Prop challenge (frontend) | gotowy; ostatni pełny CI według `AGENTS.md` z 2026-11-12: `prop 27/27`, `API 23/23`, `UI 58/58` |
 | Baza `serwer445119_alphavault` | istnieje, tabele utworzone |
 | Deploy na `alphavault.pl` | **200** — wdrożony |
 | App path | `~/public_html/alphavault.pl/.app` (open_basedir, deny) |
@@ -323,12 +333,12 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | CI gate / branch protection | `PHP + API + UI` wymagany; PR, linear history, admins enforced |
 | Repo / security | publiczne `miloszspyrka-code/av`; secret scanning + push protection + Dependabot |
 | Auto-deploy | merge do `main` przy `DEPLOY_ENABLED=true`; env tylko z `main` |
-| Prod sync | success, 3 wydarzenia, 3 unikalne ID |
+| Prod sync | ostatni odnotowany health check (2026-11-12 21:49 UTC): `success`, 2 wydarzenia |
 | Prod UI (read-only) | PASS — live, harmonogram, puste konsultacje |
-| LH Cron | **działa** — co 5 min, logi 18:05:05 i 18:10:02 |
+| LH Cron | jeden wpis `*/5`; `sync` i `roleRecheck` świeże (<10 min), `stale=false` (stan z 2026-11-12) |
 | Monitoring | `monitor-production.yml` — co 15 min |
 | Stage | niezweryfikowany |
-| OAuth Discord w przeglądarce | nieprzetestowany interaktywnie |
+| OAuth Discord w przeglądarce | potwierdzony 2026-11-12: konto z rolą uzyskuje sesję, konto bez roli otrzymuje 403; konto spoza serwera pozostaje do weryfikacji |
 
 ## 12. Otwarte decyzje
 
