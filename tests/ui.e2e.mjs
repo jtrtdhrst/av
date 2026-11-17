@@ -1560,15 +1560,9 @@ try {
       mentor: '', session: '', plan: false, screens: {}
     });
     AV.saveNow();
-    clearTimeout(AV._pushTimer);
     return id;
   });
-  await page.evaluate(async () => {
-    const response = await AV.apiFetch('/api/state');
-    if (response.ok) AV.api.revision = (await response.json()).revision;
-  });
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
-  await page.waitForSelector('#ctExit', { timeout: 10000 });
   await page.fill('#ctExit', '');
   await page.fill('#ctResult', '20');
   await page.evaluate(() => document.getElementById('ctSave')?.click());
