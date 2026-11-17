@@ -1612,7 +1612,10 @@ try {
       delete AV._testOriginalApiFetch;
     });
     await page.click('#ctSave');
-    await page.waitForFunction(() => !document.querySelector('#ctSave'));
+    await page.waitForFunction((id) => {
+      const trade = AV.state.trades.find((t) => t.id === id);
+      return AV.isTradeClosed(trade) && !document.querySelector('#ctSave');
+    }, addedId, { timeout: 15000 }).catch(() => {});
     const closed = await page.evaluate((id) => {
       const trade = AV.state.trades.find((t) => t.id === id);
       return { result: trade?.result, closedAt: trade?.closedAt, closed: AV.isTradeClosed(trade) };
