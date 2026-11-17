@@ -1198,13 +1198,15 @@ try {
 
   // The in-memory checklist setup can trigger a state round-trip that drops
   // the protection-mode override; re-apply it so the form stays unlocked.
-  await page.evaluate(() => {
+  await page.evaluate((note) => {
     if (AV.lockInfo(AV.state).active) {
       AV.state.overrides = AV.state.overrides || [];
       AV.state.overrides.push({ date: AV.dateKey(new Date()), at: Date.now(), reason: 'Wpisuję wcześniejszą transakcję' });
       AV.renderLock();
     }
-  });
+    const noteEl = document.getElementById('ntNote');
+    if (noteEl) noteEl.value = note;
+  }, tradeNote);
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
