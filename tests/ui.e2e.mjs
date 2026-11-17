@@ -105,11 +105,21 @@ try {
     return {
       mcp: html.includes('13.2. Zewnętrzni asystenci przez MCP'),
       provider: html.includes('OpenAI (ChatGPT), Anthropic (Claude), xAI (Grok)'),
-      readOnly: html.includes('trybie tylko do odczytu'),
+      writes: html.includes('zapis zależy od konfiguracji serwera') &&
+        html.includes('Nie ma osobnego zakresu OAuth dla zapisu') &&
+        html.includes('Usunięcia trafiają do kosza'),
+      healthScope: html.includes('Dane fizjologiczne z urządzenia') &&
+        html.includes('health.physiologyScore') && html.includes('alphavault.health') &&
+        html.includes('bez niego pole <code>health</code> jest <code>null</code>'),
+      checkinReadiness: html.includes('readiness.score</code> może być dostępny również bez zakresu urządzeń') &&
+        html.includes('check-in i jego ocena należą do danych wpisanych w panelu'),
+      staleReadOnlyClaim: html.includes('działa w trybie tylko do odczytu') || html.includes('zapis jest wyłączony po stronie serwera'),
       revoke: html.includes('oauth/connected')
     };
   });
-  log('polityka prywatności: sekcja MCP i wycofanie zgody', policy.mcp && policy.provider && policy.readOnly && policy.revoke, JSON.stringify(policy));
+  log('polityka prywatności: zakres MCP odczytu/zapisu i wycofanie zgody',
+    policy.mcp && policy.provider && policy.writes && policy.healthScope && policy.checkinReadiness &&
+      !policy.staleReadOnlyClaim && policy.revoke, JSON.stringify(policy));
 
   const rows = await page.locator('#tbody tr').count();
   assert.equal(rows, 47);
@@ -174,9 +184,56 @@ try {
   const journalCopy = await page.evaluate(() => document.querySelector('#trans')?.innerText || '');
   log('dziennik: import do 25 minut', journalCopy.includes('do 25 minut') && !journalCopy.includes('co 30 minut'), 'ok');
   await page.click('.navg button[data-v="mentor"]');
-  await page.waitForTimeout(300);
+  await page.waitForFunction(() => {
+    const state = document.querySelector('.mcp-server-status')?.dataset.state;
+    return ['read', 'write', 'unknown'].includes(state || '');
+  });
   const mentorCopy = await page.evaluate(() => document.querySelector('#mentor')?.innerText || '');
-  log('MCP: status z API bez fałszywego live', /MCP · (TYLKO ODCZYT|ZAPIS|WYŁĄCZONY|STATUS NIEDOSTĘPNY)/.test(mentorCopy) && !mentorCopy.includes('SERWER MCP GOTOWY'), 'ok');
+  const mcpStatus = await page.evaluate(async () => {
+    const pill = document.querySelector('.mcp-server-status');
+    const response = await fetch('/api/mcp', { credentials: 'same-origin' });
+    const data = response.ok ? await response.json() : null;
+    const expectedState = !data ? 'unknown' : data.writesEnabled === true ? 'write' : 'read';
+    const expectedLabel = {
+      write: 'MCP · ZAPIS',
+      read: 'MCP · TYLKO ODCZYT',
+      unknown: 'MCP · KONFIGURACJA NIEDOSTĘPNA'
+    }[expectedState];
+    return {
+      actualState: pill?.dataset.state || '',
+      expectedState,
+      actualLabel: pill?.innerText.trim() || '',
+      expectedLabel
+    };
+  });
+  log('MCP: konfiguracja panelu zgodna z GET /api/mcp',
+    mcpStatus.actualState === mcpStatus.expectedState && mcpStatus.actualLabel === mcpStatus.expectedLabel,
+    JSON.stringify(mcpStatus));
+  log('MCP: konfiguracja bez fałszywego statusu serwera',
+    /MCP · (TYLKO ODCZYT|ZAPIS|KONFIGURACJA NIEDOSTĘPNA)/.test(mentorCopy) &&
+      mentorCopy.includes('Nie sprawdza zdalnej dostępności ani konfiguracji serwera') &&
+      mentorCopy.includes('mcp.alphavault.pl') &&
+      mentorCopy.includes('czy konto jest objęte allowlistą pilota') &&
+      !mentorCopy.includes('SERWER MCP GOTOWY'),
+    mentorCopy.match(/MCP · [^\n]+/)?.[0] || 'brak statusu');
+  const mcpFallback = await page.evaluate(async () => {
+    const AV = window.AV;
+    const originalApiFetch = AV.apiFetch;
+    try {
+      AV.apiFetch = async (path, ...args) => {
+        if (path === '/api/mcp') throw new Error('kontrolowany błąd testowy');
+        return originalApiFetch(path, ...args);
+      };
+      await AV.loadMcpStatus();
+      const pill = document.querySelector('.mcp-server-status');
+      return { state: pill?.dataset.state || '', label: pill?.innerText.trim() || '' };
+    } finally {
+      AV.apiFetch = originalApiFetch;
+    }
+  });
+  log('MCP: kontrolowany błąd API pokazuje neutralny fallback',
+    mcpFallback.state === 'unknown' && mcpFallback.label === 'MCP · KONFIGURACJA NIEDOSTĘPNA',
+    JSON.stringify(mcpFallback));
   const navLabel = await page.locator('.navg button[data-v="mentor"]').innerText();
   log('sidebar: Integracje AI', navLabel.includes('Integracje AI') && !navLabel.includes('Mentor AI'), navLabel);
 
@@ -197,16 +254,47 @@ try {
     AV.renderStats();
     return out;
   });
-  log('statystyki: puste dane bez fikcji', emptyStats.pf === '—' && emptyStats.wr === '—' && emptyStats.plan === '—' && emptyStats.fees === '0,00' && emptyStats.checklist.includes('Brak danych') && !emptyStats.checklist.includes('7/7') && !emptyStats.insight.includes('Tak trzymaj'), JSON.stringify(emptyStats));
+  log('statystyki: puste dane bez fikcji', emptyStats.pf === '—' && emptyStats.wr === '—' && emptyStats.plan === '—' && emptyStats.fees === '' && emptyStats.checklist.includes('Brak danych') && !emptyStats.checklist.includes('7/7') && !emptyStats.insight.includes('Tak trzymaj'), JSON.stringify(emptyStats));
+  const historicalChecklistLabels = await page.evaluate(() => {
+    const originalChecklist = AV.state.settings.checklist;
+    AV.state.settings.checklist = ['Punkt A', 'Punkt B'];
+    AV.renderChecklistStats({
+      n: 2,
+      full: { n: 1, net: 100, wr: 100 },
+      part: { n: 1, net: -50, wr: 0 },
+      withSL: 50,
+      withSLCount: 1
+    });
+    const text = document.querySelector('#checklistStats')?.textContent || '';
+    AV.state.settings.checklist = originalChecklist;
+    AV.renderStats();
+    return text;
+  });
+  log(
+    'statystyki: etykiety checklisty nie zależą od bieżącej konfiguracji',
+    historicalChecklistLabels.includes('Wszystkie zaznaczone punkty')
+      && historicalChecklistLabels.includes('Część zaznaczonych punktów')
+      && !historicalChecklistLabels.includes('2/2')
+      && !historicalChecklistLabels.includes('≤1/2'),
+    historicalChecklistLabels
+  );
 
   const fresh = await page.evaluate(() => {
     const s = AV.buildEmpty();
     const p = { approvedAt: 1, market: 'ETH', bias: 'short' };
+    const ambiguousState = {
+      plans: {
+        '2026-01-01#long': { id: 'long', date: '2026-01-01', market: 'ETH', bias: 'long', approvedAt: 1 },
+        '2026-01-01#short': { id: 'short', date: '2026-01-01', market: 'ETH', bias: 'short', approvedAt: 1 }
+      }
+    };
     return {
       match: AV.planMatchesTrade(p, 'ETH/USDT', 's'),
       wrongPair: AV.planMatchesTrade(p, 'BTC/USDT', 's'),
       wrongDir: AV.planMatchesTrade(p, 'ETH/USDT', 'l'),
       draft: AV.planMatchesTrade({ ...p, approvedAt: null }, 'ETH/USDT', 's'),
+      compactPair: AV.planMatchesTrade({ ...p, market: 'ETH/USDT' }, 'ETHUSDT', 's'),
+      ambiguous: AV.tradePlanMatch(ambiguousState, { date: '2026-01-01T12:00:00Z', pair: 'ETH/USDT', dir: 'l' }),
       joined: s.user.joined,
       progress: s.meta.courseProgress,
       sessions: s.meta.sessions.length,
@@ -214,7 +302,7 @@ try {
       plan: s.subscription.plan
     };
   });
-  log('plan: zgodność po parze i kierunku', fresh.match && !fresh.wrongPair && !fresh.wrongDir && !fresh.draft, JSON.stringify(fresh));
+  log('plan: zgodność rynku i kierunku bez arbitrażu', fresh.match && !fresh.wrongPair && !fresh.wrongDir && !fresh.draft && fresh.compactPair && !fresh.ambiguous, JSON.stringify(fresh));
   log('świeże konto: bez demo-seedu', fresh.joined === null && fresh.progress === 0 && fresh.sessions === 0 && fresh.weex === false, JSON.stringify(fresh));
 
   // Mentor AI: integracje MCP
@@ -245,8 +333,14 @@ try {
   await page.click('#addLvl');
   const afterAdd = await page.locator('#lvls .lvl').count();
   const levelRow = page.locator('#lvls .lvl').last();
+  await levelRow.locator('select').selectOption({ label: 'Płynność' });
   await levelRow.locator('input').first().fill('70 123');
   await levelRow.locator('input').nth(1).fill('E2E poziom');
+  await page.click('#addLvl');
+  const poiRow = page.locator('#lvls .lvl').last();
+  await poiRow.locator('select').selectOption({ label: 'POI' });
+  await poiRow.locator('input').first().fill('70 124');
+  await poiRow.locator('input').nth(1).fill('E2E POI');
   await page.click('#planMarkets .chip[data-m="ETH"]');
   await page.click('#planBias .chip[data-b="short"]');
   const chips = await page.evaluate(() => ({
@@ -263,11 +357,12 @@ try {
     return !!data.state?.plans?.[AV.dateKey(new Date())]?.approvedAt;
   }, null, { timeout: 15000 });
   const approved = await page.evaluate(() => {
-    const p = AV.state.plans[AV.dateKey(new Date())];
-    return { ok: !!p?.approvedAt, market: p?.market, bias: p?.bias, levels: p?.levels?.length, why: p?.why };
+    const p = AV.planById(AV.state, AV.planId);
+    return { id: p?.id, ok: !!p?.approvedAt, market: p?.market, bias: p?.bias, levels: p?.levels || [], why: p?.why };
   });
   log('plan dnia: chipy rynku i biasu', chips.market === 'ETH' && chips.bias === 'short', JSON.stringify(chips));
-  log('plan dnia: poziomy + zatwierdzenie', afterAdd === beforeLevels + 1 && approved.ok && approved.levels >= 1, JSON.stringify(approved));
+  log('plan dnia: poziomy + zatwierdzenie', afterAdd === beforeLevels + 1 && approved.ok && approved.levels.length >= 2, JSON.stringify(approved));
+  log('plan dnia: poziomy Liquidity (Płynność) i POI', approved.levels.some((l) => l.type === 'Liquidity' && l.price === '70 123') && approved.levels.some((l) => l.type === 'POI' && l.price === '70 124'), JSON.stringify(approved.levels));
   const adherence = await page.evaluate(() => document.querySelector('#adherenceHint')?.textContent || '');
   log('plan: bez fikcyjnych statystyk', !adherence.includes('31,40') && !adherence.includes('42,10'), adherence);
   const navBadges = await page.evaluate(() => {
@@ -284,23 +379,94 @@ try {
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 15000 });
   await page.click('.navg button[data-v="plan"]');
   const planReload = await page.evaluate(() => {
-    const p = AV.state.plans[AV.dateKey(new Date())];
+    const p = AV.planById(AV.state, AV.planId);
     return {
+      id: p?.id,
+      date: p?.date,
       market: document.querySelector('#planMarkets .chip.on')?.dataset.m,
       bias: document.querySelector('#planBias .chip.on')?.dataset.b,
       why: document.querySelector('#planWhy')?.value,
-      levels: document.querySelectorAll('#lvls .lvl').length,
+      levels: Array.from(document.querySelectorAll('#lvls .lvl')).map((row) => ({
+        type: row.querySelector('select').value,
+        price: row.querySelectorAll('input')[0].value
+      })),
       approved: !!p?.approvedAt
     };
   });
-  log('plan dnia: zapis w bazie po reloadzie', planReload.market === 'ETH' && planReload.bias === 'short' && planReload.why === why && planReload.levels >= 1 && planReload.approved, JSON.stringify(planReload));
+  log('plan dnia: zapis w bazie po reloadzie', planReload.market === 'ETH' && planReload.bias === 'short' && planReload.why === why && planReload.levels.length >= 2 && planReload.approved, JSON.stringify(planReload));
+   log('plan dnia: typy poziomów po reloadzie', planReload.levels.some((l) => l.type === 'Liquidity' && l.price === '70 123') && planReload.levels.some((l) => l.type === 'POI' && l.price === '70 124'), JSON.stringify(planReload.levels));
+
+  // dwa niezależne plany tego samego dnia i rynku pozostają osobnymi rekordami po reloadzie
+  const firstPlanId = planReload.id;
+  const sameMarketBefore = await page.evaluate(() => AV.plansForDate(AV.state, AV.planDate).filter((p) => p.market === 'ETH').length);
+  const secondWhy = 'E2E: drugi plan ETH ' + Date.now();
+  await page.click('#addPlan');
+  const secondPlanId = await page.evaluate(() => AV.planId);
+  await page.selectOption('#planMarketSelect', 'ETH');
+  await page.click('#planBias [data-b="long"]');
+  await page.fill('#planWhy', secondWhy);
+  await page.click('#addLvl');
+  const secondLevel = page.locator('#lvls .lvl').last();
+  await secondLevel.locator('select').selectOption({ label: 'POI' });
+  await secondLevel.locator('input').first().fill('70 456');
+  await secondLevel.locator('input').nth(1).fill('E2E drugi plan');
+  await page.click('#savePlan');
+  await page.waitForFunction(async ({ id, why: expectedWhy }) => {
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const data = await res.json();
+    return Object.values(data.state?.plans || {}).some((p) => p?.id === id && p.why === expectedWhy && p.approvedAt);
+  }, { id: secondPlanId, why: secondWhy }, { timeout: 15000 });
+   const sameMarketAfter = await page.evaluate(() => AV.plansForDate(AV.state, AV.planDate)
+     .filter((p) => p.market === 'ETH')
+     .map((p) => ({ id: p.id, date: p.date, bias: p.bias, why: p.why })));
+   log('plan dnia: ten sam dzień i rynek mają niezależne plany', !!firstPlanId && !!secondPlanId && firstPlanId !== secondPlanId && sameMarketAfter.length === sameMarketBefore + 1 && sameMarketAfter.some((p) => p.id === secondPlanId && p.why === secondWhy), JSON.stringify(sameMarketAfter));
+   const ambiguousPlanDashboard = await page.evaluate(() => {
+     AV.showView('pulpit');
+     return {
+       plans: AV.plansForDate(AV.state, AV.dateKey(new Date())).length,
+       trades: document.querySelector('#dayTrades')?.textContent.trim() || '',
+       tradesBar: getComputedStyle(document.querySelector('#tradesBar').parentElement).display,
+       risk: document.querySelector('#dayRisk')?.textContent.trim() || '',
+       riskBar: getComputedStyle(document.querySelector('#riskBar').parentElement).display,
+       tag: document.querySelector('#dashPlanTag')?.textContent.trim() || ''
+     };
+   });
+   log('pulpit: wiele planów nie wybiera arbitralnie limitów',
+     ambiguousPlanDashboard.plans > 1 && !ambiguousPlanDashboard.trades.includes('/') &&
+       ambiguousPlanDashboard.tradesBar === 'none' && !ambiguousPlanDashboard.risk.includes('/') &&
+       ambiguousPlanDashboard.riskBar === 'none' && ambiguousPlanDashboard.tag === 'wiele planów',
+     JSON.stringify(ambiguousPlanDashboard));
+
+   await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 15000 });
+  await page.click('.navg button[data-v="plan"]');
+  await page.waitForFunction((ids) => ids.every((id) => Array.from(document.querySelectorAll('#planSelect option')).some((o) => o.value === id)), [firstPlanId, secondPlanId], { timeout: 15000 });
+  await page.selectOption('#planSelect', firstPlanId);
+  const firstPlanAfterReload = await page.evaluate(() => {
+    const p = AV.planById(AV.state, AV.planId);
+    return { id: p?.id, date: p?.date, market: p?.market, bias: p?.bias, why: p?.why, levels: p?.levels || [] };
+  });
+  await page.selectOption('#planSelect', secondPlanId);
+  const secondPlanAfterReload = await page.evaluate(() => {
+    const p = AV.planById(AV.state, AV.planId);
+    return { id: p?.id, date: p?.date, market: p?.market, bias: p?.bias, why: p?.why, levels: p?.levels || [] };
+  });
+  log('plan dnia: dwa plany tego samego rynku niezależne po reloadzie',
+    firstPlanAfterReload.id === firstPlanId && secondPlanAfterReload.id === secondPlanId &&
+      firstPlanAfterReload.date === secondPlanAfterReload.date && firstPlanAfterReload.market === 'ETH' &&
+      secondPlanAfterReload.market === 'ETH' && firstPlanAfterReload.why === why && secondPlanAfterReload.why === secondWhy &&
+      firstPlanAfterReload.bias !== secondPlanAfterReload.bias &&
+       firstPlanAfterReload.levels.some((l) => l.type === 'Liquidity') && firstPlanAfterReload.levels.some((l) => l.type === 'POI') &&
+      secondPlanAfterReload.levels.some((l) => l.type === 'POI'),
+    JSON.stringify({ firstPlanAfterReload, secondPlanAfterReload }));
 
   // plan: edycja przez select rynku (działa też na telefonie) i własny rynek
   await page.selectOption('#planMarketSelect', 'SOL');
   await page.click('#planBias [data-b="long"]');
   await page.waitForTimeout(300);
   const planSelect = await page.evaluate(() => {
-    const p = AV.state.plans[AV.planDate] || {};
+    const p = AV.planById(AV.state, AV.planId) || {};
     return { market: p.market, bias: p.bias, select: document.querySelector('#planMarketSelect').value, chip: document.querySelector('#planMarkets .chip.on')?.dataset.m };
   });
   log('plan: select rynku i bias', planSelect.market === 'SOL' && planSelect.bias === 'long' && planSelect.select === 'SOL' && planSelect.chip === 'SOL', JSON.stringify(planSelect));
@@ -309,7 +475,7 @@ try {
   await page.fill('#planMarketCustom', 'EURUSD');
   await page.waitForTimeout(900);
   const planCustom = await page.evaluate(() => ({
-    market: (AV.state.plans[AV.planDate] || {}).market,
+    market: (AV.planById(AV.state, AV.planId) || {}).market,
     visible: getComputedStyle(document.querySelector('#planMarketCustom')).display !== 'none'
   }));
   log('plan: własny rynek spoza listy', planCustom.market === 'EURUSD' && planCustom.visible, JSON.stringify(planCustom));
@@ -380,6 +546,28 @@ try {
   log('kalkulator: portfel ustawia saldo i MM', calcPortfolio.bal === calcPortfolio.expected && calcPortfolio.risk === '1' && calcPortfolio.lev === '10' && calcPortfolio.mm.includes('1%') && calcPortfolio.account === 'acc1', JSON.stringify(calcPortfolio));
 
   // kalkulator: wybór R:R i własna wartość
+  await page.click('#cDir [data-d="long"]');
+  for (const presetValue of ['1.2', '1.5']) {
+    await page.selectOption('#cRR', presetValue);
+    await page.click('#cAuto');
+    const presetRatio = await page.evaluate(() => {
+      const en = AV.pnum(document.querySelector('#cEn').value);
+      const sl = AV.pnum(document.querySelector('#cSl').value);
+      const tp = AV.pnum(document.querySelector('#cTp').value);
+      return {
+        selected: document.querySelector('#cRR').value,
+        en, sl, tp,
+        ratio: Math.abs(tp - en) / Math.abs(en - sl),
+        label: document.querySelector('#cAuto').textContent.trim()
+      };
+    });
+    const expectedLabel = '1 : ' + presetValue.replace('.', ',');
+    log('kalkulator: gotowe R:R ' + presetValue,
+      presetRatio.selected === presetValue && presetRatio.sl > 0 && presetRatio.sl < presetRatio.en &&
+        presetRatio.tp > presetRatio.en && Math.abs(presetRatio.ratio - Number(presetValue)) < 0.15 &&
+        presetRatio.label.includes(expectedLabel),
+      JSON.stringify(presetRatio));
+  }
   await page.selectOption('#cRR', 'custom');
   await page.fill('#cRRCustom', '4');
   await page.waitForTimeout(500);
@@ -389,18 +577,23 @@ try {
     const en = AV.pnum(document.querySelector('#cEn').value);
     const sl = AV.pnum(document.querySelector('#cSl').value);
     const tp = AV.pnum(document.querySelector('#cTp').value);
-    return { en, sl, tp, ratio: (tp - en) / (en - sl) };
+    return { en, sl, tp, ratio: Math.abs(tp - en) / Math.abs(en - sl) };
   });
-  log('kalkulator: SL/TP wg wybranego R:R', /1 : 4/.test(rrLabel) && Math.abs(rrRatio.ratio - 4) < 0.2, JSON.stringify(rrRatio));
+  log('kalkulator: własne R:R 4 i ustawiony SL', /1 : 4/.test(rrLabel) && rrRatio.sl > 0 && rrRatio.sl < rrRatio.en && rrRatio.tp > rrRatio.en && Math.abs(rrRatio.ratio - 4) < 0.2, JSON.stringify({ label: rrLabel, ...rrRatio }));
   await page.selectOption('#cRR', '3');
 
   // statystyki
   await page.click('.navg button[data-v="stat"]');
+  const pnlRangeBeforeStatsChange = await page.locator('#pnlCalSeg button.on').getAttribute('data-pc');
   const st90 = await page.locator('#stResult').innerText();
   await page.click('#statSeg [data-r="7"]');
   const st7 = await page.locator('#stResult').innerText();
+  const pnlRangeAfterStatsChange = await page.locator('#pnlCalSeg button.on').getAttribute('data-pc');
   await page.click('#statSeg [data-r="90"]');
   log('statystyki: zakresy', st90 !== st7, st90 + ' → ' + st7);
+  log('statystyki: zakres ogólny nie zmienia kalendarza PnL',
+    pnlRangeBeforeStatsChange === pnlRangeAfterStatsChange,
+    `${pnlRangeBeforeStatsChange} → ${pnlRangeAfterStatsChange}`);
 
   // statystyki: kalendarz PnL ma własny zakres i nawigację
   const pnl7 = await page.evaluate(() => {
@@ -415,7 +608,11 @@ try {
     document.querySelector('#stat [data-pcnav="-1"]').click();
     return document.querySelector('#pnlCalLabel').textContent;
   });
+  const statsRangeAfterPnlChange = await page.locator('#statSeg button.on').getAttribute('data-r');
   log('statystyki: kalendarz PnL zmienia okres', pnl7.cells !== pnlMonth.cells && pnl7.label !== pnlMonth.label && pnlPrev !== pnlMonth.label, `${pnl7.cells} (${pnl7.label}) → ${pnlMonth.cells} (${pnlMonth.label}) → ${pnlPrev}`);
+  log('statystyki: kalendarz PnL nie zmienia zakresu ogólnego',
+    statsRangeAfterPnlChange === '90',
+    statsRangeAfterPnlChange || '');
   await page.evaluate(() => document.querySelector('#stat [data-pcnav="today"]').click());
 
   // prop challenge: szablony, create, walidacja, XSS, alert, archiwum, reload, delete
@@ -587,15 +784,56 @@ try {
 
   // pulpit: podgląd salda portfela i skrót do ustawień balansu
   await page.evaluate(() => AV.showView('pulpit'));
+  await page.evaluate(() => { document.querySelector('#dashBal').open = false; });
+  const dashBalClosed = await page.locator('#dashBal').evaluate((el) => !el.open);
+  await page.click('#dashBal summary');
+  const dashAccounts = await page.evaluate(() => ({
+    open: document.querySelector('#dashBal').open,
+    rows: document.querySelectorAll('#dashAccountList .dash-account').length,
+    expected: AV.state.accounts.length,
+    view: AV.currentView
+  }));
+  log('pulpit: rozwijany podgląd kont', dashBalClosed && dashAccounts.open && dashAccounts.rows > 0 && dashAccounts.rows === dashAccounts.expected && dashAccounts.view === 'pulpit', JSON.stringify(dashAccounts));
   const dashBal = await page.evaluate(() => ({
     val: (document.querySelector('#dashBalVal')?.textContent || '').replace(/\s+/g, ' ').trim(),
     sub: document.querySelector('#dashBalSub')?.textContent || ''
   }));
   log('pulpit: podgląd salda portfela', dashBal.val.length > 0 && dashBal.sub.includes('główne'), JSON.stringify(dashBal));
+  const emptyBalanceGrowth = await page.evaluate(() => {
+    const account = AV.state.accounts.find((item) => item.include);
+    const beforeBalance = account?.balance;
+    const beforeStart = account?.start;
+    if (account) account.balance = '';
+    AV.renderDashBalance();
+    const row = Array.from(document.querySelectorAll('#dashAccountList .dash-account'))
+      .find((item) => item.querySelector('b')?.textContent.trim() === account?.name);
+    const result = {
+      balance: row?.querySelector('.dash-account-values b')?.textContent.trim() || '',
+      details: row?.querySelector('.dash-account-values small')?.textContent || '',
+      total: document.querySelector('#dashBalVal')?.textContent.trim() || '',
+      summary: document.querySelector('#dashBalSub')?.textContent || ''
+    };
+    if (account) {
+      account.balance = beforeBalance;
+      account.start = '';
+      AV.renderDashBalance();
+      result.missingStartSummary = document.querySelector('#dashBalSub')?.textContent || '';
+      account.start = beforeStart;
+    }
+    AV.renderDashBalance();
+    return result;
+  });
+  log('pulpit: puste saldo nie pokazuje fałszywego −100%',
+    emptyBalanceGrowth.balance === '' && !emptyBalanceGrowth.details.includes('100%') &&
+      emptyBalanceGrowth.total === '' && !emptyBalanceGrowth.summary.includes('od startu') &&
+      !(emptyBalanceGrowth.missingStartSummary || '').includes('od startu'),
+    JSON.stringify(emptyBalanceGrowth));
 
-  await page.click('#dashBal');
+  await page.click('#dashBal [data-go="ust"]');
   const balGo = await page.evaluate(() => ({ view: AV.currentView, hash: location.hash }));
   log('pulpit: saldo prowadzi do Konto i zasady', balGo.view === 'ust' && balGo.hash === '#/konto', JSON.stringify(balGo));
+  const startCapitalHeader = ((await page.locator('#ust .accounts-table th.acc-start').textContent()) || '').trim();
+  log('konto: nagłówek Kapitał startowy', startCapitalHeader === 'Kapitał startowy', startCapitalHeader);
 
   const balEdit = await page.evaluate(async () => {
     const input = document.querySelector('[data-acc-balance="acc1"]');
@@ -650,6 +888,14 @@ try {
     return { month, week };
   });
   log('akademia: harmonogram tydzień/miesiąc', acadSchedule.month.cells >= 28 && acadSchedule.month.cls === 'mcal' && acadSchedule.week.days === 7, JSON.stringify(acadSchedule));
+  const acadNext = await page.evaluate(() => {
+    const before = AV.ui.acadOffset;
+    document.querySelector('#akad [data-aw="1"]').click();
+    const next = AV.ui.acadOffset;
+    document.querySelector('#akad [data-aw="-1"]').click();
+    return { before, next, restored: AV.ui.acadOffset, label: document.querySelector('#akad [data-aw="1"]').textContent.trim() };
+  });
+  log('akademia: klik Następny → przesuwa i przywraca tydzień', acadNext.next === acadNext.before + 1 && acadNext.restored === acadNext.before && acadNext.label === 'Następny →', JSON.stringify(acadNext));
 
   const remCustom = await page.evaluate(() => {
     const sel = document.querySelector('#liveRemMin');
@@ -700,17 +946,60 @@ try {
   await page.click('.navg button[data-v="kal"]');
   const calWeek0 = await page.locator('#calRange').innerText();
   const ev0 = await page.locator('#evFull .ev').count();
+  const nextWeekLabel = (await page.locator('#calSeg [data-w="1"]').innerText()).trim();
   await page.click('#calSeg [data-w="1"]');
   const ev1 = await page.locator('#evFull .ev').count();
   await page.click('#calSeg [data-w="2"]');
   const ev2 = await page.locator('#evFull .ev').count();
   const calWeek2 = await page.locator('#calRange').innerText();
+  await page.click('#calSeg [data-w="3"]');
+  const calWeek3 = await page.locator('#calRange').innerText();
+  const selectedWeek3 = (await page.locator('#calSeg [data-w="3"]').getAttribute('class') || '').includes('on');
   await page.click('#calSeg [data-w="0"]');
   const calBack = await page.locator('#calRange').innerText();
   const widget = await page.locator('#mwList .mev').count();
+  log('kalendarz: strzałka przy Następny', nextWeekLabel === 'Następny →', nextWeekLabel);
   log('kalendarz: tygodnie', ev1 > 0, `${ev0} → ${ev1}`);
   log('kalendarz: kolejne tygodnie i powrót', ev2 > 0 && calWeek2 !== calWeek0 && calBack === calWeek0, `${calWeek0} → ${calWeek2} → ${calBack}`);
+  log('kalendarz: tydzień +3', selectedWeek3 && calWeek3 !== calWeek2 && calBack === calWeek0, `${calWeek2} → ${calWeek3} → ${calBack}`);
   log('makro: widget z API', widget > 0, `${widget} wydarzeń`);
+  const macroSyncNotice = await page.evaluate(async () => {
+    const previousSync = AV.api.macroSync;
+    const previousError = AV.api.macroError;
+    const previousApiFetch = AV.apiFetch;
+    const previousEvents = JSON.stringify(AV.api.macroEvents);
+    AV.api.macroSync = { status: 'partial', stale: true };
+    AV.api.macroError = null;
+    AV.renderCalendar();
+    const partial = document.querySelector('#macroSyncNotice')?.textContent || '';
+    AV.apiFetch = async () => ({ ok: false, status: 503 });
+    await AV.loadMacroEvents();
+    const apiFailure = document.querySelector('#macroSyncNotice')?.textContent || '';
+    const retainedEvents = JSON.stringify(AV.api.macroEvents) === previousEvents;
+    AV.api.macroError = null;
+    AV.api.macroSync = { status: 'error', stale: false, lastError: 'ForexFactory failed' };
+    AV.renderCalendar();
+    const freshError = document.querySelector('#macroSyncNotice')?.textContent || '';
+    AV.api.macroSync = previousSync;
+    AV.api.macroError = previousError;
+    AV.apiFetch = previousApiFetch;
+    AV.renderCalendar();
+    return {
+      partial, apiFailure, freshError, retainedEvents,
+      eventCount: document.querySelectorAll('#evFull .ev').length,
+      noticeSpan: document.querySelector('#macroSyncNotice')?.style.gridColumn || ''
+    };
+  });
+  log(
+    'makro: sygnał partial/API bez czyszczenia ostatnich wydarzeń',
+    macroSyncNotice.partial.includes('częściowa') &&
+      macroSyncNotice.apiFailure.includes('ostatnie dobre wydarzenia') &&
+      macroSyncNotice.freshError.includes('nie powiodła się') &&
+      macroSyncNotice.retainedEvents &&
+      macroSyncNotice.noticeSpan === '1 / -1' &&
+      macroSyncNotice.eventCount === ev0,
+    JSON.stringify(macroSyncNotice)
+  );
 
   // ciało: check-in
   await page.click('.navg button[data-v="cialo"]');
@@ -760,6 +1049,19 @@ try {
   log('pulpit: nazwa bez powitania', h1.trim() === 'E2E Tester.', h1);
 
   // nowa transakcja: obejście limitu + zapis + zamknięcie
+  await page.click('.navg button[data-v="trans"]');
+  await page.click('#fRes [data-f="win"]');
+  await page.click('#fGrade [data-f="A"]');
+  const filterNeedle = 'E2E filtr przed zapisem ' + Date.now();
+  await page.fill('#jSearch', filterNeedle);
+  await page.waitForFunction((query) => AV.ui.jSearch === query && AV.filteredTrades().length === 0, filterNeedle, { timeout: 5000 });
+  const filteredBeforeSave = await page.evaluate(() => ({
+    result: AV.ui.jFilter,
+    grade: AV.ui.jGrade,
+    search: AV.ui.jSearch,
+    rows: document.querySelectorAll('#tbody tr').length
+  }));
+  log('dziennik: poprzednie filtry przed nowym wpisem', filteredBeforeSave.result === 'win' && filteredBeforeSave.grade === 'A' && filteredBeforeSave.search === filterNeedle && filteredBeforeSave.rows === 0, JSON.stringify(filteredBeforeSave));
   await page.click('.navg button[data-v="nowa"]');
   // Fixture demo ma stałą datę; wymuś 2 straty dziś, żeby tryb ochronny był deterministyczny.
   await page.evaluate(() => {
@@ -792,22 +1094,420 @@ try {
   log('nowa transakcja: checklista 0 i brak oceny', emptyForm.checklist === '0/7' && emptyForm.grades === 0, emptyForm.checklist + ' / ' + emptyForm.grades);
   log('nowa transakcja: limit i ryzyko osobno', emptyForm.risk.includes('Limit') && emptyForm.risk.includes('Ryzyko'), emptyForm.risk.slice(0, 100));
 
+  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+  const manualSlChecklist = await page.evaluate(() => {
+    const checkedAfterClick = AV.ui.ntChecks['SL przed wejściem'] === true;
+    AV.renderChecklist();
+    return {
+      checkedAfterClick,
+      checkedAfterRerender: AV.ui.ntChecks['SL przed wejściem'] === true,
+      checkedInList: document.querySelector('#clList [data-cl="SL przed wejściem"]')?.classList.contains('on') || false,
+      hasAutoLabel: !!document.querySelector('#clList [data-cl="SL przed wejściem"] .auto')
+    };
+  });
+  log(
+    'nowa transakcja: punkt SL checklisty jest dobrowolny i ręcznie edytowalny',
+    manualSlChecklist.checkedAfterClick && manualSlChecklist.checkedAfterRerender &&
+      manualSlChecklist.checkedInList && !manualSlChecklist.hasAutoLabel,
+    JSON.stringify(manualSlChecklist)
+  );
+  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+
+  const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
+  await page.evaluate(() => {
+    AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
+    AV.ui.ntChecks = {};
+    AV.renderChecklist();
+  });
+  await page.click('#ntDir [data-d="l"]');
+  await page.fill('#ntPair', 'ETH/USDT');
+  await page.waitForTimeout(250);
+  const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
+  const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
+  if (!initiallyChecked) await planLevel.click();
+  await page.locator('#clList [data-cl="Poziom z planu"]').click();
+  await page.fill('#ntNote', tradeNote);
+  await page.waitForTimeout(250);
+  const manualPlanLevel = await page.evaluate(() => ({
+      matches: AV.tradePlanMatch(AV.state, { date: new Date().toISOString(), pair: 'ETH/USDT', dir: 'l' }),
+    checked: document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on') || false,
+    count: document.querySelector('#clN')?.textContent.trim(),
+    warning: document.querySelector('#clWarn')?.textContent.trim() || '',
+    checkedCount: Object.values(AV.ui.ntChecks || {}).filter(Boolean).length,
+    total: Object.keys(AV.ui.ntChecks || {}).length
+  }));
+    log('nowa transakcja: niejednoznaczne plany nie tworzą zgodności', !manualPlanLevel.matches && !manualPlanLevel.checked && manualPlanLevel.count === '0/2' && manualPlanLevel.checkedCount === 0, JSON.stringify(manualPlanLevel));
+   log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
+   await page.locator('#clList [data-cl="Spokojna głowa"]').click();
+
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
-  await page.fill('#ntPair', 'E2E/USDT');
   await page.fill('#ntEntry', '100');
-  await page.fill('#ntSl', '99');
-  await page.fill('#ntTp', '103');
+  await page.fill('#ntTp', '100.5');
   await page.fill('#ntSize', '1');
   await page.click('#saveTrade');
-  await page.waitForTimeout(500);
+  const missingSl = await page.evaluate((before) => ({
+    unchanged: AV.state.trades.length === before,
+    message: document.querySelector('#toast')?.textContent || ''
+  }), beforeTrades);
+  log('nowa transakcja: SL wymagany', missingSl.unchanged && /stop loss/i.test(missingSl.message), JSON.stringify(missingSl));
+
+  await page.fill('#ntSl', '99');
+  await page.click('#saveTrade');
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
+  const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
+  const journalImmediate = await page.evaluate((id) => {
+    const row = Array.from(document.querySelectorAll('#tbody tr')).find((tr) => tr.dataset.id === id);
+    return {
+      view: AV.currentView,
+      visible: !!row,
+      row: row?.innerText || '',
+      result: AV.ui.jFilter,
+      grade: AV.ui.jGrade,
+      search: AV.ui.jSearch,
+      searchInput: document.querySelector('#jSearch')?.value || ''
+    };
+  }, addedId);
+  log('nowa transakcja: natychmiast widoczna w dzienniku po filtrach',
+    afterTrades === beforeTrades + 1 && journalImmediate.view === 'trans' && journalImmediate.visible &&
+      journalImmediate.row.includes('ETH/USDT') && journalImmediate.result === 'all' &&
+      journalImmediate.grade === 'all' && journalImmediate.search === '' && journalImmediate.searchInput === '',
+    JSON.stringify({ afterTrades, beforeTrades, journalImmediate }));
+  await page.waitForTimeout(500);
   log('nowa transakcja: zapis', afterTrades === beforeTrades + 1, beforeTrades + ' → ' + afterTrades);
-  const addedId = await page.evaluate(() => AV.state.trades.find((t) => t.pair === 'E2E/USDT')?.id);
-  const addedTrade = await page.evaluate(() => {
-    const t = AV.state.trades.find((x) => x.pair === 'E2E/USDT');
-    return t ? { risk: t.risk, riskPct: t.riskPct, mae: t.mae, mfe: t.mfe } : null;
-  });
+  const addedTrade = await page.evaluate((note) => {
+    const t = AV.state.trades.find((x) => x.note === note);
+    return t ? {
+      risk: t.risk, riskPct: t.riskPct, mae: t.mae, mfe: t.mfe, sl: t.sl, checklist: t.checklist,
+      checkTotal: t.checkTotal, checklistItems: t.checklistItems || [], plan: t.plan, account: t.account,
+      rr: Math.abs(AV.pnum(t.tp) - AV.pnum(t.entry)) / Math.abs(AV.pnum(t.entry) - AV.pnum(t.sl))
+    } : null;
+  }, tradeNote);
   log('nowa transakcja: ryzyko zapisane, MAE/MFE puste', !!addedTrade && addedTrade.risk === 1 && addedTrade.mae === null && addedTrade.mfe === null, JSON.stringify(addedTrade));
+  const missingMetricDisplay = await page.evaluate((id) => {
+    AV.openTrade(id);
+    const metric = (label) => {
+      const card = Array.from(document.querySelectorAll('#tmBody .card.flat'))
+        .find((item) => item.querySelector('.lbl')?.textContent.trim() === label);
+      return card?.querySelector('.mono')?.textContent.trim() ?? null;
+    };
+    const values = { mae: metric('MAE'), mfe: metric('MFE') };
+    document.querySelector('#mc')?.click();
+    return values;
+  }, addedId);
+  log('transakcja: puste MAE/MFE nie wyglądają jak 0.0R',
+    missingMetricDisplay.mae === '' && missingMetricDisplay.mfe === '',
+    JSON.stringify(missingMetricDisplay));
+  const earlyExitStats = await page.evaluate(() => {
+    const el = document.querySelector('#errCost');
+    const originalHtml = el?.innerHTML;
+    const now = new Date().toISOString();
+    const stats = AV.computeStats([
+      { date: now, result: 10, r: 1, mfe: null, errors: ['Za wczesne wyjście'], grade: 'B', checklist: 1, checkTotal: 2 },
+      { date: now, result: 10, r: 1, mfe: 2, errors: ['Za wczesne wyjście'], grade: 'B', checklist: 1, checkTotal: 2 }
+    ], AV.state);
+    AV.renderErrorCost(stats);
+    const rendered = el?.textContent || '';
+    if (el && originalHtml !== undefined) el.innerHTML = originalHtml;
+    const metricStats = AV.computeStats([
+      { date: now, result: 10, r: 1, mae: '', mfe: ' ', errors: [], checklist: null, checkTotal: null },
+      { date: now, result: 20, r: 2, mae: 0, mfe: 3, errors: [], checklist: null, checkTotal: null }
+    ], AV.state);
+    return {
+      unpriced: stats.unpricedEarlyExits, errors: stats.errors, rendered,
+      measuredAverage: [metricStats.avgMaeWin, metricStats.avgMfeWin, metricStats.avgExitR, metricStats.maeSampleCount]
+    };
+  });
+  log('statystyki: brak MFE nie jest liczony jako zero przy wczesnym wyjściu',
+    earlyExitStats.unpriced === 1 && earlyExitStats.errors.length === 1 &&
+      earlyExitStats.errors[0].n === 1 && Math.abs(earlyExitStats.errors[0].cost + 10) < 0.01 &&
+      earlyExitStats.rendered.includes('bez pomiaru MFE lub R') &&
+      JSON.stringify(earlyExitStats.measuredAverage) === JSON.stringify([0, 3, 2, 1]),
+    JSON.stringify(earlyExitStats));
+  const csvMetricImports = await page.evaluate(() => {
+    const unknown = AV.mapCsvTrades([
+      ['symbol', 'date', 'pnl', 'fee'],
+      ['BTCUSDT', '2026-11-01T12:00:00Z', ' ', '']
+    ]);
+    const measured = AV.mapCsvTrades([
+      ['symbol', 'side', 'date', 'pnl', 'fee', 'mae', 'mfe'],
+      ['BTCUSDT', 'buy', '2026-11-01T12:00:00Z', '0', '0', '0', '1,25']
+    ])[0];
+    const derived = AV.mapCsvTrades([
+      ['symbol', 'side', 'date', 'entry', 'exit', 'qty', 'fee'],
+      ['ETHUSDT', 'buy', '2026-11-01T12:00:00Z', '100', '101', '2', '']
+    ])[0];
+    const unknownDirection = AV.mapCsvTrades([
+      ['symbol', 'date', 'entry', 'exit', 'qty'],
+      ['ETHUSDT', '2026-11-01T12:00:00Z', '100', '101', '2']
+    ]);
+    const invalidDates = AV.mapCsvTrades([
+      ['symbol', 'side', 'date', 'pnl'],
+      ['ETHUSDT', 'buy', '2026-02-30T12:00:00Z', '5'],
+      ['ETHUSDT', 'buy', '31.02.2026', '5']
+    ]);
+    return {
+      unknownRows: unknown.length,
+      measured: [measured.result, measured.mae, measured.mfe, measured.durationMin, measured.fee, measured.checklist, measured.grade],
+      derived: [derived.result, derived.mae, derived.mfe, derived.durationMin, derived.fee],
+      unknownDirectionRows: unknownDirection.length,
+      invalidDateRows: invalidDates.length
+    };
+  });
+  log('CSV: brak pomiarów zostaje pusty, dostępne MAE/MFE i PnL 0 są zachowane',
+    csvMetricImports.unknownRows === 0 &&
+      JSON.stringify(csvMetricImports.measured) === JSON.stringify([0, 0, 1.25, null, 0, null, null]) &&
+      JSON.stringify(csvMetricImports.derived) === JSON.stringify([2, null, null, null, null]) &&
+      csvMetricImports.unknownDirectionRows === 0 && csvMetricImports.invalidDateRows === 0,
+    JSON.stringify(csvMetricImports));
+   log('nowa transakcja: elastyczne RR i brak minimum checklisty',
+     !!addedTrade && addedTrade.sl !== 'brak' && addedTrade.checklist === 1 && addedTrade.checkTotal === 2 &&
+       JSON.stringify(addedTrade.checklistItems) === JSON.stringify(['Spokojna głowa']) &&
+        !addedTrade.plan && Math.abs(addedTrade.rr - 0.5) < 0.01,
+     JSON.stringify(addedTrade));
+   await page.evaluate((id) => AV.editTrade(id), addedId);
+   const editedChecklist = await page.evaluate(() => ({
+     selected: document.querySelector('#clList [data-cl="Spokojna głowa"]')?.classList.contains('on') || false,
+     planLevel: document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on') || false,
+     saved: AV.state.trades.find((t) => t.note === document.querySelector('#ntNote')?.value)?.checklistItems || []
+   }));
+    log('nowa transakcja: edycja zachowuje ręczny wybór checklisty',
+      editedChecklist.selected && !editedChecklist.planLevel && editedChecklist.saved.includes('Spokojna głowa'),
+      JSON.stringify(editedChecklist));
+    await page.click('#cancelEdit');
+    const legacyChecklist = await page.evaluate(async () => {
+      const id = 'ui-legacy-checklist-' + Date.now();
+      const archivedId = id + '-archived-point';
+      const draftKey = AV.draftKey();
+      const priorDraft = AV.safeGet(draftKey);
+      const priorChecklist = AV.state.settings.checklist;
+      const originalSaveNow = AV.saveNow;
+      const originalRenderAll = AV.renderAll;
+       const trade = {
+        id, date: '2025-04-03T12:00:00.000Z', pair: 'LEGACY/USDT', dir: 'l',
+        entry: '100', sl: '99', tp: '102', size: '1', exit: 'otwarta',
+        result: null, r: null, grade: 'B', checklist: 6, checkTotal: 10,
+        note: 'Historyczna transakcja', setup: 'Bez setupu', emotion: 'Spokój',
+        errors: [], risk: 1, riskPct: 0.01, plan: false, mae: null, mfe: null,
+         durationMin: 0, fee: 0, source: 'Ręcznie', account: 'Konto główne', screens: {}
+       };
+      const noTotalTrade = { ...trade, id: id + '-no-total', pair: 'LEGACY/DEFAULT/USDT' };
+      const archivedPointTrade = {
+        ...trade, id: archivedId, pair: 'LEGACY/ARCHIVE/USDT', checklist: 1, checkTotal: 2,
+        checklistItems: ['Usunięta zasada']
+      };
+       delete noTotalTrade.checkTotal;
+      AV.saveNow = () => {};
+      AV.renderAll = () => {};
+      AV.safeSet(draftKey, JSON.stringify({
+        pair: 'DRAFT/SHOULD-NOT-LEAK', note: 'Nie nadpisuj szkicu',
+        entry: '999', size: '9', sl: '900', tp: '1200'
+      }));
+        AV.state.trades.push(trade, noTotalTrade, archivedPointTrade);
+      AV.state.settings.checklist = ['Aktualna zasada', 'Poziom z planu'];
+      const result = {};
+      result.id = id;
+      try {
+        AV.editTrade(id);
+         result.open = {
+          editId: AV.ui.editId,
+          pair: document.querySelector('#ntPair')?.value,
+          entry: document.querySelector('#ntEntry')?.value,
+          size: document.querySelector('#ntSize')?.value,
+          sl: document.querySelector('#ntSl')?.value,
+          tp: document.querySelector('#ntTp')?.value,
+          note: document.querySelector('#ntNote')?.value,
+          direction: document.querySelector('#ntDir .chip.on')?.dataset.d,
+          grade: document.querySelector('#gp .gp.on')?.dataset.g || '',
+          summary: document.querySelector('#clN')?.textContent.trim(),
+          selected: document.querySelectorAll('#clList .cl.on').length,
+           warning: document.querySelector('#clWarn')?.textContent || ''
+         };
+         AV.editTrade(noTotalTrade.id);
+         result.noTotalSummary = document.querySelector('#clN')?.textContent.trim() || '';
+         AV.editTrade(id);
+        const noteInput = document.querySelector('#ntNote');
+        noteInput.value = 'Historia: edytowano notatkę';
+        noteInput.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        result.inputGrade = document.querySelector('#gp .gp.on')?.dataset.g || '';
+        AV.saveTrade();
+        const afterUntouchedSave = AV.state.trades.find((row) => row.id === id);
+        result.untouchedSave = {
+          note: afterUntouchedSave?.note,
+          grade: afterUntouchedSave?.grade,
+          checklist: afterUntouchedSave?.checklist,
+          checkTotal: afterUntouchedSave?.checkTotal,
+          hasItems: Object.prototype.hasOwnProperty.call(afterUntouchedSave || {}, 'checklistItems'),
+          draft: JSON.parse(AV.safeGet(draftKey) || '{}')
+        };
+        AV.editTrade(id);
+        document.querySelector('#clList [data-cl="Poziom z planu"]')?.click();
+        result.manualSelection = {
+          count: document.querySelector('#clN')?.textContent.trim(),
+          selected: Array.from(document.querySelectorAll('#clList .cl.on')).map((row) => row.dataset.cl)
+        };
+        AV.saveTrade();
+        const afterManualSave = AV.state.trades.find((row) => row.id === id);
+        result.savedSelection = {
+          checklist: afterManualSave?.checklist,
+          checkTotal: afterManualSave?.checkTotal,
+          items: afterManualSave?.checklistItems
+        };
+        AV.editTrade(id);
+        result.reopenedSelection = Array.from(document.querySelectorAll('#clList .cl.on')).map((row) => row.dataset.cl);
+        const selectionNote = document.querySelector('#ntNote');
+        selectionNote.value = 'Historia: zachowana checklista';
+        selectionNote.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        AV.saveTrade();
+        const afterUntouchedSelectionSave = AV.state.trades.find((row) => row.id === id);
+         result.preservedSelectionAfterUntouchedSave = {
+          checklist: afterUntouchedSelectionSave?.checklist,
+          checkTotal: afterUntouchedSelectionSave?.checkTotal,
+           items: afterUntouchedSelectionSave?.checklistItems
+         };
+         AV.state.settings.checklist = ['Aktualna zasada'];
+         AV.editTrade(archivedId);
+         result.changedConfiguration = {
+           labels: Array.from(document.querySelectorAll('#clList [data-cl]')).map((row) => row.dataset.cl),
+           selected: Array.from(document.querySelectorAll('#clList .cl.on')).map((row) => row.dataset.cl)
+         };
+         document.querySelector('#clList [data-cl="Usunięta zasada"]')?.click();
+         document.querySelector('#clList [data-cl="Aktualna zasada"]')?.click();
+         AV.saveTrade();
+         const afterConfigEdit = AV.state.trades.find((row) => row.id === archivedId);
+         result.changedConfiguration.saved = {
+           items: afterConfigEdit?.checklistItems,
+           checklist: afterConfigEdit?.checklist,
+           checkTotal: afterConfigEdit?.checkTotal
+         };
+       } finally {
+          AV.state.trades = AV.state.trades.filter((row) => row.id !== id && row.id !== noTotalTrade.id && row.id !== archivedId);
+         AV.state.settings.checklist = priorChecklist;
+         AV.ui.editId = null;
+         AV.ui.ntChecks = {};
+         AV.ui.ntChecklistHistory = [];
+        AV.ui.ntChecklistTouched = false;
+        AV.ui.ntScreens = {};
+        AV.saveNow = originalSaveNow;
+        AV.renderAll = originalRenderAll;
+        if (priorDraft === null) AV.safeDel(draftKey);
+        else AV.safeSet(draftKey, priorDraft);
+        originalRenderAll();
+      }
+      return result;
+    });
+    log(
+      'historia checklisty: legacy zachowuje pola, 6/10 i szkic bez fikcyjnych punktów',
+      legacyChecklist.open?.editId === legacyChecklist.id &&
+        legacyChecklist.open.pair === 'LEGACY/USDT' && legacyChecklist.open.entry === '100' &&
+        legacyChecklist.open.size === '1' && legacyChecklist.open.sl === '99' &&
+        legacyChecklist.open.tp === '102' && legacyChecklist.open.direction === 'l' &&
+        legacyChecklist.open.grade === 'B' && legacyChecklist.inputGrade === 'B' &&
+        legacyChecklist.open.note === 'Historyczna transakcja' && legacyChecklist.open.summary === '6/10' &&
+        legacyChecklist.noTotalSummary === '6/7' &&
+        legacyChecklist.open.selected === 0 && legacyChecklist.open.warning.includes('nie zapisał konkretnych zaznaczeń') &&
+        legacyChecklist.untouchedSave.grade === 'B' &&
+        legacyChecklist.untouchedSave.checklist === 6 && legacyChecklist.untouchedSave.checkTotal === 10 &&
+        !legacyChecklist.untouchedSave.hasItems && legacyChecklist.untouchedSave.draft.pair === 'DRAFT/SHOULD-NOT-LEAK',
+      JSON.stringify(legacyChecklist)
+    );
+    log(
+      'historia checklisty: jawny wybór zastępuje nieznane punkty i wraca po ponownej edycji',
+      legacyChecklist.manualSelection.count === '1/2' &&
+        JSON.stringify(legacyChecklist.manualSelection.selected) === JSON.stringify(['Poziom z planu']) &&
+        legacyChecklist.savedSelection.checklist === 1 && legacyChecklist.savedSelection.checkTotal === 2 &&
+        JSON.stringify(legacyChecklist.savedSelection.items) === JSON.stringify(['Poziom z planu']) &&
+        JSON.stringify(legacyChecklist.reopenedSelection) === JSON.stringify(['Poziom z planu']) &&
+        legacyChecklist.preservedSelectionAfterUntouchedSave.checklist === 1 &&
+        legacyChecklist.preservedSelectionAfterUntouchedSave.checkTotal === 2 &&
+        JSON.stringify(legacyChecklist.preservedSelectionAfterUntouchedSave.items) === JSON.stringify(['Poziom z planu']),
+      JSON.stringify(legacyChecklist)
+    );
+    log(
+      'historia checklisty: po zmianie konfiguracji stary zaznaczony punkt pozostaje widoczny i edytowalny',
+      JSON.stringify(legacyChecklist.changedConfiguration?.labels) === JSON.stringify(['Aktualna zasada', 'Usunięta zasada']) &&
+        JSON.stringify(legacyChecklist.changedConfiguration?.selected) === JSON.stringify(['Usunięta zasada']) &&
+        JSON.stringify(legacyChecklist.changedConfiguration?.saved?.items) === JSON.stringify(['Aktualna zasada']) &&
+        legacyChecklist.changedConfiguration?.saved?.checklist === 1 &&
+        legacyChecklist.changedConfiguration?.saved?.checkTotal === 2,
+      JSON.stringify(legacyChecklist.changedConfiguration)
+    );
+   const tradeAccount = await page.evaluate((note) => {
+    const trade = AV.state.trades.find((t) => t.note === note);
+    const account = AV.state.accounts.find((a) => a.name === trade?.account);
+    return { id: account?.id || '', name: account?.name || '', include: !!account?.include };
+  }, tradeNote);
+  if (tradeAccount.id) {
+    await page.click('.navg button[data-v="ust"]');
+    if (tradeAccount.include) await page.locator(`#accBody [data-acc-inc="${tradeAccount.id}"]`).click();
+     const excluded = await page.evaluate((name) => {
+      const account = AV.state.accounts.find((a) => a.name === name);
+      return { include: !!account?.include, account: account?.name };
+    }, tradeAccount.name);
+    await page.click('.navg button[data-v="trans"]');
+    const excludedJournal = await page.locator(`#tbody tr[data-id="${addedId}"]`).count();
+    const tradeExcludedFromStats = await page.evaluate((note) => {
+      const trade = AV.state.trades.find((t) => t.note === note);
+      return !!trade && !AV.includedTrades(AV.state).includes(trade);
+    }, tradeNote);
+    log('dziennik: wpis widoczny przy koncie poza statystykami',
+      !excluded.include && tradeExcludedFromStats && excludedJournal === 1,
+      JSON.stringify({ account: tradeAccount.name, include: excluded.include, tradeExcludedFromStats, rows: excludedJournal }));
+    await page.click('.navg button[data-v="stat"]');
+    const visibleAccountStats = await page.evaluate(() => ({
+      visible: document.querySelector('#stResult')?.textContent.trim() || '',
+      expected: AV.dispMoney(AV.computeStats(AV.rangeTrades(AV.state, AV.ui.statRange), AV.state).net, 2)
+    }));
+    log('statystyki: widoczny wynik odzwierciedla filtr konta',
+      visibleAccountStats.visible === visibleAccountStats.expected,
+      JSON.stringify(visibleAccountStats));
+    await page.click('.navg button[data-v="trans"]');
+    const journalCsv = await page.evaluate((note) => {
+      const originalDownload = AV.download;
+      let captured = null;
+      try {
+        AV.download = (filename, content) => { captured = { filename, content }; };
+        AV.exportTradesCsv();
+        const content = String(captured?.content || '');
+        return {
+          filename: captured?.filename || '',
+          includesExcludedTrade: content.includes(note),
+          header: content.split(/\r?\n/)[0] || ''
+        };
+      } finally {
+        AV.download = originalDownload;
+      }
+    }, tradeNote);
+    log('dziennik CSV: eksportuje transakcję spoza statystyk i pomiary MAE/MFE',
+      journalCsv.filename === 'alpha-vault-transakcje.csv' && journalCsv.includesExcludedTrade
+      && journalCsv.header.includes('MAE') && journalCsv.header.includes('MFE'),
+      JSON.stringify(journalCsv));
+    const excludedEmptyState = await page.evaluate((note) => {
+      const trades = AV.state.trades;
+      const filter = AV.ui.jFilter;
+      AV.state.trades = trades.filter((t) => t.note === note);
+      AV.ui.jFilter = 'win';
+      AV.renderJournal();
+      const text = document.querySelector('#jEmpty')?.textContent || '';
+      AV.state.trades = trades;
+      AV.ui.jFilter = filter;
+      AV.renderJournal();
+      return text;
+    }, tradeNote);
+    log('dziennik: wpisy poza statystykami nie fałszują pustego stanu',
+      excludedEmptyState.includes('Brak transakcji spełniających filtry') && !excludedEmptyState.includes('Dodaj transakcję'),
+      excludedEmptyState);
+    if (tradeAccount.include) {
+      await page.click('.navg button[data-v="ust"]');
+      await page.locator(`#accBody [data-acc-inc="${tradeAccount.id}"]`).click();
+      const restoredAccount = await page.evaluate((name) => AV.state.accounts.find((a) => a.name === name)?.include, tradeAccount.name);
+      await page.click('.navg button[data-v="trans"]');
+      log('konto: przywrócono przełącznik statystyk po regresji', restoredAccount === true, tradeAccount.name);
+    }
+  } else {
+    log('dziennik: wpis widoczny przy koncie poza statystykami', false, 'nie znaleziono konta przypisanego do testowej transakcji');
+  }
   if (addedId) {
     await page.evaluate((id) => AV.closeTradeModal(id), addedId);
     await page.fill('#ctExit', '105');
@@ -815,6 +1515,40 @@ try {
     const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, addedId);
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
+  const resultOnlyId = await page.evaluate(() => {
+    const id = 'ui-result-only-' + Date.now();
+    AV.state.trades.push({
+      id, date: new Date().toISOString(), pair: 'RO/USDT', dir: 'l',
+      entry: '100', sl: '95', tp: '120', size: '2', exit: 'otwarta',
+      result: null, r: null, mae: null, mfe: null, durationMin: null, fee: null,
+      source: 'Ręcznie', account: AV.state.accounts.find((a) => a.include)?.name || 'Konto główne',
+      grade: '', checklist: null, checkTotal: null, errors: [], emotion: '', setup: '', note: '',
+      mentor: '', session: '', plan: false, screens: {}
+    });
+    AV.saveNow();
+    return id;
+  });
+  await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
+  await page.fill('#ctExit', '');
+  await page.fill('#ctResult', '20');
+  await page.click('#ctSave');
+  const resultOnly = await page.evaluate((id) => {
+    const trade = AV.state.trades.find((t) => t.id === id);
+    return { exit: trade?.exit, result: trade?.result, r: trade?.r };
+  }, resultOnlyId);
+  log('zamknięcie tylko wynikiem: exit pozostaje pusty, R liczone z SL',
+    resultOnly.exit === '' && resultOnly.result === 20 && resultOnly.r === 2,
+    JSON.stringify(resultOnly));
+  const emptyResultState = await page.evaluate(() => {
+    const state = {
+      ...AV.state,
+      trades: [{ id: 'ui-empty-result', date: new Date().toISOString(), account: AV.state.accounts.find((a) => a.include)?.name, result: '' }]
+    };
+    return { open: AV.openTrades(state).length, closed: AV.closedTrades(state).length };
+  });
+  log('dziennik: pusty wynik jest otwarty, nie break-even',
+    emptyResultState.open === 1 && emptyResultState.closed === 0,
+    JSON.stringify(emptyResultState));
 
   await page.evaluate(() => {
     AV.ui.editId = null;

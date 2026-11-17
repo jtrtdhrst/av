@@ -125,6 +125,20 @@ h3{font-size:15.5px;font-weight:700}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th{text-align:left;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);padding:15px 14px;border-bottom:1px solid var(--line);white-space:nowrap;font-weight:500}
 td{padding:14px;border-bottom:1px solid var(--line);white-space:nowrap}
+#ust .accounts-table{min-width:960px}
+#ust .accounts-table th.acc-start{min-width:152px}
+#ust .accounts-table [data-acc-start]{min-width:128px}
+#dashBal>summary{list-style:none;cursor:pointer}
+#dashBal>summary::-webkit-details-marker{display:none}
+#dashBal>summary:focus-visible{outline:2px solid var(--alpha);outline-offset:4px;border-radius:10px}
+#dashBal[open] .dash-chevron{transform:rotate(90deg)}
+.dash-chevron{transition:transform .18s}
+.dash-account-list{margin:14px 0;border-top:1px solid var(--line)}
+.dash-account{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 4px;border-bottom:1px solid var(--line)}
+.dash-account>div,.dash-account-values{min-width:0}
+.dash-account small{display:block;color:var(--dim);font-size:12px;margin-top:3px}
+.dash-account-values{text-align:right}
+#planSelect{max-width:100%;min-width:0}
 tbody tr{cursor:pointer;transition:.12s}tbody tr:hover td{background:rgba(255,255,255,.025)}
 .pill{border-radius:99px;padding:3px 10px;font-size:11px;font-weight:800;letter-spacing:.03em}.pill.l{background:var(--winS);color:var(--win)}.pill.s{background:var(--lossS);color:var(--loss)}
 .nosl{margin-left:8px;background:var(--lossS);color:var(--loss);font-size:9.5px;font-weight:800;border-radius:5px;padding:2px 6px;letter-spacing:.04em}
@@ -447,6 +461,12 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
 #mentor h1 em{color:var(--alpha2);font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-weight:400;letter-spacing:-.035em}
 #mentor .mcp-intro{max-width:640px;margin:13px 0 0;color:#a7a196;font-size:13px;line-height:1.7}
 #mentor .mcp-server-status{flex:0 0 auto;display:inline-flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid rgba(79,207,138,.22);border-radius:999px;color:#89d8ad;background:rgba(79,207,138,.075);font:800 9px/1 'JetBrains Mono',monospace;letter-spacing:.10em}
+#mentor .mcp-server-status[data-state="loading"]{border-color:var(--line2);color:var(--dim);background:rgba(255,255,255,.025)}
+#mentor .mcp-server-status[data-state="loading"] .mcp-dot{background:var(--dim);box-shadow:none}
+#mentor .mcp-server-status[data-state="unknown"]{border-color:rgba(214,176,103,.25);color:#d6b881;background:rgba(214,176,103,.07)}
+#mentor .mcp-server-status[data-state="unknown"] .mcp-dot{background:#b9914d;box-shadow:none}
+#mentor .mcp-status-note{margin:-9px 0 20px;color:var(--dim);font:500 11px/1.6 'DM Sans',sans-serif}
+#mentor .mcp-status-note code{color:var(--soft);font:500 10px 'JetBrains Mono',monospace}
 #mentor .mcp-dot{width:7px;height:7px;border-radius:50%;background:var(--win);box-shadow:0 0 12px rgba(79,207,138,.7)}
 #mentor .mcp-hero-grid{display:grid;grid-template-columns:1.06fr .94fr;gap:16px;margin-bottom:28px}
 #mentor .mcp-card{border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,rgba(25,24,21,.94),rgba(15,15,14,.96));box-shadow:0 18px 60px rgba(0,0,0,.25)}
@@ -673,14 +693,16 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
     </div>
   </div>
 
-  <div class="card" id="dashBal" style="cursor:pointer;padding:16px 20px;margin-bottom:16px" data-go="ust" role="button" tabindex="0" aria-label="Saldo portfela — ustawienia balansu">
-    <div style="display:flex;align-items:center;gap:14px">
+  <details class="card" id="dashBal" style="padding:16px 20px;margin-bottom:16px">
+    <summary aria-label="Rozwiń podgląd kont" style="display:flex;align-items:center;gap:14px">
       <div style="width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex-shrink:0;background:var(--winS);color:var(--win)"><svg class="i"><use href="#i-book"/></svg></div>
       <div style="flex:1;min-width:0"><b>Saldo portfela</b><p class="mut" id="dashBalSub" style="font-size:13.5px;margin-top:2px;line-height:1.45"></p></div>
       <div class="mono" id="dashBalVal" style="font-weight:800;white-space:nowrap;text-align:right"></div>
-      <svg class="i" style="color:var(--dim)"><use href="#i-arrow"/></svg>
-    </div>
-  </div>
+      <svg class="i dash-chevron" style="color:var(--dim)"><use href="#i-arrow"/></svg>
+    </summary>
+    <div class="dash-account-list" id="dashAccountList"></div>
+    <button type="button" class="btn g sm" data-go="ust">Konto i zasady</button>
+  </details>
 
   <div class="hero">
     <div class="card">
@@ -712,6 +734,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
   <div class="head"><div><div class="eyebrow">Przed sesją</div><h1>Plan <span class="serif">dnia.</span></h1><p>Zawodowiec wie, co zrobi, zanim rynek się otworzy. Bez planu każda transakcja jest decyzją pod wpływem chwili.</p></div><div class="seg" id="planSeg"><button class="on" data-day="0">Dziś</button><button data-day="-1">Wczoraj</button><button data-day="hist">Historia</button></div></div>
   <div class="grid" style="grid-template-columns:1.35fr 1fr;align-items:start">
     <div class="grid" id="planEditor">
+      <div class="card"><div class="sech" style="margin:0"><div><h2>Plany dla tej daty</h2><p class="mut" style="font-size:13px;margin-top:4px">Każdy plan ma własny rynek i poziomy.</p></div><button class="btn g sm" id="addPlan" type="button">+ Nowy plan</button></div><select class="input" id="planSelect" aria-label="Wybierz plan tej daty" style="margin-top:14px"></select></div>
       <div class="card"><h2>Kierunek dnia</h2>
         <span class="label">Rynek w fokusie</span>
         <select class="input" id="planMarketSelect" aria-label="Rynek w fokusie"></select>
@@ -888,8 +911,8 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
       <div class="warnbox" id="cWarn"></div>
       <div class="warnbox y" id="cWarn2">Ryzyko powyżej 5% ma sens tylko przy swingu z kilkoma wejściami. Na co dzień 1–2%.</div>
       <div class="grid g2" style="gap:10px;margin-top:14px">
-        <div><span class="label" style="margin-top:0">R:R dla sugestii SL/TP</span><select class="input" id="cRR" aria-label="Stosunek ryzyka do zysku"><option value="1">1 : 1</option><option value="2">1 : 2</option><option value="3" selected>1 : 3</option><option value="5">1 : 5</option><option value="custom">Własna wartość…</option></select></div>
-        <div id="cRRCustomWrap" style="display:none"><span class="label" style="margin-top:0">Własne R:R (1:x)</span><input class="input mono" id="cRRCustom" inputmode="decimal" placeholder="np. 4"></div>
+        <div><span class="label" style="margin-top:0">R:R dla sugestii SL/TP</span><select class="input" id="cRR" aria-label="Stosunek ryzyka do zysku"><option value="1">1 : 1</option><option value="1.2">1 : 1,2</option><option value="1.5">1 : 1,5</option><option value="2">1 : 2</option><option value="3" selected>1 : 3</option><option value="5">1 : 5</option><option value="custom">Własna wartość…</option></select></div>
+        <div id="cRRCustomWrap" style="display:none"><span class="label" style="margin-top:0">Własne R:R (1:x)</span><input class="input mono" id="cRRCustom" inputmode="decimal" placeholder="np. 1,2"></div>
       </div>
       <div style="display:flex;gap:10px;margin-top:14px"><button class="btn p" id="cAuto" style="flex:1">Zaproponuj SL i TP (1:3)</button><button class="btn g" id="cReset"><svg class="i"><use href="#i-sync"/></svg>Reset</button></div>
     </div>
@@ -908,7 +931,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
   <div class="sec"><div class="sech"><h2>Zasady zarządzania ryzykiem</h2></div>
     <div class="rules4">
       <div class="card"><div class="num">01</div><h3>Max 2% ryzyka na setup</h3><p>Na co dzień 1–2% kapitału. Swing z kilkoma wejściami: maks. 5–10%. Wyżej to już spekulacja.</p></div>
-      <div class="card"><div class="num">02</div><h3>Minimum R:R 1:2</h3><p>Ryzykujesz 1%, celujesz w 2%. Przy 1:3 wystarczy 25% skuteczności, żeby być na plusie.</p></div>
+      <div class="card"><div class="num">02</div><h3>Przykład R:R 1:2</h3><p>Ryzykujesz 1%, celujesz w 2%. Przy 1:3 wystarczy 25% skuteczności, żeby być na plusie. Dobierz relację do setupu i zachowaj SL.</p></div>
       <div class="card"><div class="num">03</div><h3>SL przed wejściem</h3><p>Stop loss ustalasz, zanim klikniesz „kup”. Nigdy nie przesuwasz go w złą stronę.</p></div>
       <div class="card"><div class="num">04</div><h3>Dźwignia ≠ zysk</h3><p>Dźwignia wzmacnia wynik, dobry i zły. Nie zwiększa szans na wygraną.</p></div>
     </div>
@@ -972,8 +995,9 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
         <h1>Alpha Vault w Twoim <em>AI.</em></h1>
         <p class="mcp-intro">Połącz swoje konto z ChatGPT, Claude lub Grok. Jeden serwer MCP udostępnia asystentowi funkcje Alpha Vault — bez potrzeby konfigurowania osobnego adresu dla każdej platformy.</p>
       </div>
-      <div class="mcp-server-status"><span class="mcp-dot"></span>MCP · TYLKO ODCZYT</div>
+      <div class="mcp-server-status" data-state="loading"><span class="mcp-dot"></span>MCP · KONFIGURACJA</div>
     </div>
+    <p class="mcp-status-note" role="note">Pill pokazuje konfigurację zapisu zwróconą przez panel Alpha Vault. Nie sprawdza zdalnej dostępności ani konfiguracji serwera <code>mcp.alphavault.pl</code> ani tego, czy konto jest objęte allowlistą pilota.</p>
 
     <section class="mcp-hero-grid" aria-label="Adres i sposób działania serwera MCP">
       <div class="mcp-card mcp-endpoint-card">
@@ -1064,7 +1088,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
           <p>Połączenie MCP nie powinno być traktowane jako dostęp do całego systemu. Asystent korzysta z narzędzi udostępnionych przez serwer, w zakresie wynikającym z konfiguracji i uprawnień konta.</p>
           <div class="mcp-permission-rule"><span class="mcp-check">✓</span><span>Nie udostępniasz asystentowi hasła do Alpha Vault.</span></div>
           <div class="mcp-permission-rule"><span class="mcp-check">✓</span><span>Zakres funkcji zależy od dostępnych narzędzi i uprawnień.</span></div>
-          <div class="mcp-permission-rule"><span class="mcp-check">✓</span><span>Tryb tylko do odczytu: bez kluczy API, haseł inwestora i danych zdrowotnych.</span></div>
+          <div class="mcp-permission-rule"><span class="mcp-check">✓</span><span>Zakres alphavault.read obejmuje odczyt; zapisy zależą od konfiguracji MCP. Dane zdrowotne wymagają osobnego zakresu alphavault.health i zgody. Bez kluczy API i haseł inwestora.</span></div>
           <div class="mcp-permission-rule"><span class="mcp-check">✓</span><span>Przed połączeniem zobaczysz zakres zgody; token unieważnisz w „Połączonych aplikacjach”.</span></div>
         </div>
       </div>
@@ -1141,12 +1165,13 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
 
 <!-- ================= KALENDARZ ================= -->
 <section class="view" id="kal">
-  <div class="head"><div><div class="eyebrow">Kalendarz makro</div><h1>Wydarzenia <span class="serif">tygodnia.</span></h1><p>Najważniejsze publikacje (★★★), które ruszają dolarem, indeksami i krypto. Godziny w czasie polskim.</p></div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="mono dim" id="calRange" style="font-size:12px"></span><div class="seg" id="calSeg"><button data-w="-1">← Poprzedni</button><button class="on" data-w="0">Ten tydzień</button><button data-w="1">Następny</button><button data-w="2">+2</button><button data-w="3">+3</button></div></div></div>
+  <div class="head"><div><div class="eyebrow">Kalendarz makro</div><h1>Wydarzenia <span class="serif">tygodnia.</span></h1><p>Najważniejsze publikacje (★★★), które ruszają dolarem, indeksami i krypto. Godziny w czasie polskim.</p></div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="mono dim" id="calRange" style="font-size:12px"></span><div class="seg" id="calSeg"><button data-w="-1">← Poprzedni</button><button class="on" data-w="0">Ten tydzień</button><button data-w="1">Następny →</button><button data-w="2">+2</button><button data-w="3">+3</button></div></div></div>
   <div class="grid" style="grid-template-columns:1.6fr 1fr;align-items:start">
+    <div id="macroSyncNotice" class="warnbox y" role="status" aria-live="polite" style="display:none;grid-column:1/-1;margin-bottom:12px"></div>
     <div class="card" id="evFull"></div>
     <div class="grid">
       <div class="card hl"><div class="lbl">Następne ważne</div><div id="evNext"></div></div>
-      <div class="card"><div class="lbl">Twoje dane w dni makro</div><div class="val loss" id="macroStats">−96,40</div><div class="hint" id="macroStatsHint">8 dni z danymi ★★★ · skuteczność 38% · 3 transakcje bez SL</div></div>
+      <div class="card"><div class="lbl">Twoje dane w dni makro</div><div class="val" id="macroStats"></div><div class="hint" id="macroStatsHint"></div></div>
       <div class="card"><div class="lbl">Powiadomienia</div>
         <div class="row"><div><b>30 min przed ★★★</b><span>powiadomienie lokalne, gdy panel jest otwarty</span></div><div class="toggle on" data-setting="macroBefore"></div></div>
         <div class="row"><div><b>Punkt w checkliście</b><span>sprawdza dane w ciągu 15 min</span></div><div class="toggle on" data-setting="macroChecklist"></div></div>
@@ -1261,12 +1286,12 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
         <div class="rule"><span class="numc">1</span><input class="input" id="rule1" value="Max 1% ryzyka na transakcję"></div>
         <div class="rule"><span class="numc">2</span><input class="input" id="rule2" value="Zawsze stop loss"></div>
         <div class="rule"><span class="numc">3</span><input class="input" id="rule3" value="Po 2 stratach koniec dnia"></div>
-        <span class="label">Punkty checklisty wejścia</span><div class="chips" id="rulesChecklist"><span class="chip on" data-c="Trend wyższego TF">Trend wyższego TF</span><span class="chip on" data-c="Poziom z planu">Poziom z planu</span><span class="chip on" data-c="Potwierdzenie">Potwierdzenie</span><span class="chip on" data-c="SL przed wejściem">SL przed wejściem</span><span class="chip on" data-c="R:R ≥ 2">R:R ≥ 2</span><span class="chip on" data-c="Brak makro 15 min">Brak makro 15 min</span><span class="chip on" data-c="Spokojna głowa">Spokojna głowa</span></div>
+        <span class="label">Punkty checklisty wejścia</span><div class="chips" id="rulesChecklist"><span class="chip on" data-c="Trend wyższego TF">Trend wyższego TF</span><span class="chip on" data-c="Poziom z planu">Poziom z planu</span><span class="chip on" data-c="Potwierdzenie">Potwierdzenie</span><span class="chip on" data-c="SL przed wejściem">SL przed wejściem</span><span class="chip on" data-c="R:R zgodne z planem">R:R zgodne z planem</span><span class="chip on" data-c="Brak makro 15 min">Brak makro 15 min</span><span class="chip on" data-c="Spokojna głowa">Spokojna głowa</span></div>
         <button class="btn p" style="margin-top:18px" id="saveRules">Zapisz zasady</button></div>
     </div>
   </div>
   <div class="card sec"><div class="sech"><div><h2>Konta i kapitał</h2><p class="mut" style="font-size:13.5px;margin-top:4px">Na tej podstawie liczą się ryzyko, statystyki i zestawienie do PIT-38.</p></div><button class="btn p sm" id="addAcc"><svg class="i"><use href="#i-plus"/></svg>Dodaj konto</button></div>
-    <div style="overflow-x:auto"><table><thead><tr><th>Konto</th><th>Typ</th><th>Waluta</th><th style="text-align:right">Start</th><th>Od</th><th style="text-align:right">Saldo</th><th style="text-align:right">Wynik</th><th>Dźwignia</th><th>W statystykach</th></tr></thead><tbody id="accBody">
+    <div style="overflow-x:auto"><table class="accounts-table"><thead><tr><th>Konto</th><th>Typ</th><th>Waluta</th><th class="acc-start" style="text-align:right">Kapitał startowy</th><th>Od</th><th style="text-align:right">Saldo</th><th style="text-align:right">Wynik</th><th>Dźwignia</th><th>W statystykach</th></tr></thead><tbody id="accBody">
       <tr><td><b>WEEX</b> <span class="dim" style="font-size:12px">· główne</span></td><td class="mut">Futures</td><td class="mono">USDT</td><td class="mono" style="text-align:right">1 500,00</td><td class="mono dim">01.03.2026</td><td class="mono" style="text-align:right">1 812,40</td><td class="mono win" style="text-align:right">+20,8%</td><td class="mono">10×</td><td><div class="toggle on"></div></td></tr>
       <tr><td><b>OKX</b></td><td class="mut">Spot · długi termin</td><td class="mono">USDT</td><td class="mono" style="text-align:right">500,00</td><td class="mono dim">15.04.2026</td><td class="mono" style="text-align:right">600,40</td><td class="mono win" style="text-align:right">+20,1%</td><td class="mono">1×</td><td><div class="toggle on"></div></td></tr>
       <tr><td><b>MT5 · demo</b></td><td class="mut">Forex · ćwiczenia</td><td class="mono">USD</td><td class="mono" style="text-align:right">10 000,00</td><td class="mono dim">01.10.2026</td><td class="mono" style="text-align:right">9 640,00</td><td class="mono loss" style="text-align:right">−3,6%</td><td class="mono">30×</td><td><div class="toggle"></div></td></tr>

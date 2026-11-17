@@ -37,7 +37,7 @@ final class TradeService
     {
         return array_values(array_filter(
             $this->includedTrades($state),
-            static fn (array $trade): bool => array_key_exists('result', $trade) && $trade['result'] !== null
+            fn (array $trade): bool => $this->hasKnownResult($trade)
         ));
     }
 
@@ -45,7 +45,7 @@ final class TradeService
     {
         return array_values(array_filter(
             $this->includedTrades($state),
-            static fn (array $trade): bool => !array_key_exists('result', $trade) || $trade['result'] === null
+            fn (array $trade): bool => !$this->hasKnownResult($trade)
         ));
     }
 
@@ -64,7 +64,7 @@ final class TradeService
         $arr = $this->todayTrades($state);
         $closed = array_values(array_filter(
             $arr,
-            static fn (array $trade): bool => array_key_exists('result', $trade) && $trade['result'] !== null
+            fn (array $trade): bool => $this->hasKnownResult($trade)
         ));
         $pnl = 0.0;
         $losses = 0;
@@ -79,7 +79,7 @@ final class TradeService
         foreach ($arr as $trade) {
             $result = $trade['result'] ?? null;
             $r = $trade['r'] ?? null;
-            if ($result !== null && $r !== null && (float) $r !== 0.0) {
+            if ($this->hasKnownResult($trade) && is_numeric($r) && is_finite((float) $r) && (float) $r !== 0.0) {
                 $risk += abs((float) $result / (float) $r);
                 continue;
             }
@@ -134,16 +134,17 @@ final class TradeService
         $filtered = [];
         foreach ($this->allTrades($state) as $trade) {
             $result = $trade['result'] ?? null;
-            if ($status === 'open' && $result !== null) {
+            $closed = $this->hasKnownResult($trade);
+            if ($status === 'open' && $closed) {
                 continue;
             }
-            if ($status === 'closed' && $result === null) {
+            if ($status === 'closed' && !$closed) {
                 continue;
             }
-            if ($status === 'win' && ($result === null || (float) $result <= 0)) {
+            if ($status === 'win' && (!$closed || (float) $result <= 0)) {
                 continue;
             }
-            if ($status === 'loss' && ($result === null || (float) $result >= 0)) {
+            if ($status === 'loss' && (!$closed || (float) $result >= 0)) {
                 continue;
             }
             if ($pair !== '' && strtoupper((string) ($trade['pair'] ?? '')) !== $pair) {
@@ -248,8 +249,8 @@ final class TradeService
             'sizeValue' => Numbers::round(Numbers::pnum($trade['size'] ?? 0), 8),
             'exit' => $trade['exit'] ?? null,
             'closedAt' => $trade['closedAt'] ?? null,
-            'result' => $trade['result'] !== null ? Numbers::round((float) $trade['result']) : null,
-            'r' => $trade['r'] !== null ? Numbers::round((float) $trade['r']) : null,
+            'result' => $this->optionalNumber($trade['result'] ?? null),
+            'r' => $this->optionalNumber($trade['r'] ?? null),
             'grade' => $trade['grade'] ?? null,
             'checklist' => isset($trade['checklist']) ? (int) $trade['checklist'] : null,
             'checkTotal' => isset($trade['checkTotal']) ? (int) $trade['checkTotal'] : null,
@@ -257,10 +258,10 @@ final class TradeService
             'emotion' => $trade['emotion'] ?? null,
             'setup' => $trade['setup'] ?? null,
             'session' => $trade['session'] ?? null,
-            'mae' => isset($trade['mae']) ? Numbers::round((float) $trade['mae']) : null,
-            'mfe' => isset($trade['mfe']) ? Numbers::round((float) $trade['mfe']) : null,
-            'durationMin' => isset($trade['durationMin']) ? (int) $trade['durationMin'] : null,
-            'fee' => isset($trade['fee']) ? Numbers::round((float) $trade['fee']) : null,
+            'mae' => $this->optionalMetric($trade['mae'] ?? null),
+            'mfe' => $this->optionalMetric($trade['mfe'] ?? null),
+            'durationMin' => $this->optionalInteger($trade['durationMin'] ?? null),
+            'fee' => $this->optionalNumber($trade['fee'] ?? null),
             'plan' => (bool) ($trade['plan'] ?? false),
             'source' => $trade['source'] ?? null,
             'account' => $trade['account'] ?? null,
@@ -273,5 +274,48 @@ final class TradeService
         }
 
         return $payload;
+    }
+
+    private function optionalMetric(mixed $value): ?float
+    {
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)) {
+            return null;
+        }
+        $number = (float) $value;
+
+        return is_finite($number) && $number >= 0 ? Numbers::round($number) : null;
+    }
+
+    private function optionalNumber(mixed $value): ?float
+    {
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)) {
+            return null;
+        }
+        $number = (float) $value;
+
+        return is_finite($number) ? Numbers::round($number) : null;
+    }
+
+    private function optionalInteger(mixed $value): ?int
+    {
+        $number = $this->optionalNumber($value);
+
+        return $number === null || $number < 0 ? null : (int) round($number);
+    }
+
+    private function hasKnownResult(array $trade): bool
+    {
+        $value = $trade['result'] ?? null;
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)) {
+            return false;
+        }
+
+        return is_finite((float) $value);
     }
 }

@@ -50,8 +50,8 @@
     AV.setText('#stSlHint', empty ? '—' : st.withSLCount + ' z ' + st.n + ' transakcji');
     setVal('stPlan', empty ? '—' : Math.round(st.planRate) + '%', '');
     AV.setText('#stPlanHint', empty ? '—' : 'cel: 85% · ' + st.planCount + ' z planem');
-    setVal('stFees', st.fees ? '−' + AV.fmt(st.fees, 2) : '0,00', st.fees ? 'warnc' : '');
-    AV.setText('#stFeesHint', empty ? '—' : st.gp ? Math.round(st.fees / st.gp * 100) + '% zysków brutto' : 'brak zysków');
+    setVal('stFees', st.fees == null ? '' : (st.fees ? '−' + AV.fmt(st.fees, 2) : '0,00'), st.fees ? 'warnc' : '');
+    AV.setText('#stFeesHint', st.fees == null || empty ? '' : st.gp ? Math.round(st.fees / st.gp * 100) + '% zysków brutto' : 'brak zysków');
     AV.renderEquity(st);
     AV.renderPnlCal(AV.dailyMap(AV.closedTrades(s)));
     AV.renderGradeStats(st);
@@ -144,8 +144,8 @@
     const total = (AV.state.settings.checklist || []).length || 7;
     const fullW = Math.abs(st.full.net) / Math.max(1, Math.abs(st.full.net), Math.abs(st.part.net)) * 50;
     AV.setHTML('#checklistStats',
-      '<div class="hbar"><span class="mut" style="font-size:13px">' + total + '/' + total + ' · ' + st.full.n + ' tr.</span><div class="tr"><i style="left:50%;width:' + (st.full.net >= 0 ? fullW : 0) + '%;background:var(--win)"></i></div><b class="win mono" style="text-align:right">' + AV.signed(st.full.net, 2, '') + '</b></div>' +
-      '<div class="hbar"><span class="mut" style="font-size:13px">≤' + (total - 1) + '/' + total + ' · ' + st.part.n + ' tr.</span><div class="tr"><i style="left:50%;width:' + Math.abs(st.part.net) / Math.max(1, Math.abs(st.full.net), Math.abs(st.part.net)) * 50 + '%;background:' + (st.part.net >= 0 ? 'var(--warn)' : 'var(--loss)') + '"></i></div><b class="' + (st.part.net >= 0 ? 'warnc' : 'loss') + ' mono" style="text-align:right">' + AV.signed(st.part.net, 2, '') + '</b></div>' +
+      '<div class="hbar"><span class="mut" style="font-size:13px">Wszystkie zaznaczone punkty · ' + st.full.n + ' tr.</span><div class="tr"><i style="left:50%;width:' + (st.full.net >= 0 ? fullW : 0) + '%;background:var(--win)"></i></div><b class="win mono" style="text-align:right">' + AV.signed(st.full.net, 2, '') + '</b></div>' +
+      '<div class="hbar"><span class="mut" style="font-size:13px">Część zaznaczonych punktów · ' + st.part.n + ' tr.</span><div class="tr"><i style="left:50%;width:' + Math.abs(st.part.net) / Math.max(1, Math.abs(st.full.net), Math.abs(st.part.net)) * 50 + '%;background:' + (st.part.net >= 0 ? 'var(--warn)' : 'var(--loss)') + '"></i></div><b class="' + (st.part.net >= 0 ? 'warnc' : 'loss') + ' mono" style="text-align:right">' + AV.signed(st.part.net, 2, '') + '</b></div>' +
       '<div class="kv" style="margin-top:8px"><span>Skuteczność z pełną checklistą</span><b class="win">' + Math.round(st.full.wr) + '%</b></div>' +
       '<div class="kv"><span>Skuteczność bez niej</span><b class="loss">' + Math.round(st.part.wr) + '%</b></div>' +
       '<div class="kv"><span>Transakcje bez SL</span><b class="' + (st.withSL >= 90 ? 'win' : 'loss') + '">' + (st.n - st.withSLCount) + '</b></div>');
@@ -161,18 +161,31 @@
     const arr = st.errors.slice(0, 7);
     const mx = Math.max(1, ...arr.map((e) => Math.abs(e.cost)));
     const tot = arr.reduce((s, e) => s + e.cost, 0);
-    const rows = arr.length ? arr.map((e) => '<div class="hbar" style="grid-template-columns:170px 1fr 90px"><span style="font-size:13.5px">' + AV.esc(e.key) + ' <span class="dim mono" style="font-size:11.5px">' + e.n + '×</span></span><div class="tr" style="background:rgba(255,255,255,.04)"><i style="left:0;width:' + Math.min(100, Math.abs(e.cost) / mx * 100) + '%;background:linear-gradient(90deg,rgba(255,93,98,.5),var(--loss))"></i></div><b class="' + (e.cost >= 0 ? 'win' : 'loss') + ' mono" style="text-align:right">' + AV.signed(e.cost, 2, '') + '</b></div>').join('') : '<div class="dim">Brak błędów w tym okresie.</div>';
+    const emptyRows = st.unpricedEarlyExits
+      ? 'Brak błędów z obliczonym kosztem.'
+      : 'Brak błędów w tym okresie.';
+    const rows = arr.length ? arr.map((e) => '<div class="hbar" style="grid-template-columns:170px 1fr 90px"><span style="font-size:13.5px">' + AV.esc(e.key) + ' <span class="dim mono" style="font-size:11.5px">' + e.n + '×</span></span><div class="tr" style="background:rgba(255,255,255,.04)"><i style="left:0;width:' + Math.min(100, Math.abs(e.cost) / mx * 100) + '%;background:linear-gradient(90deg,rgba(255,93,98,.5),var(--loss))"></i></div><b class="' + (e.cost >= 0 ? 'win' : 'loss') + ' mono" style="text-align:right">' + AV.signed(e.cost, 2, '') + '</b></div>').join('') : '<div class="dim">' + emptyRows + '</div>';
+    const unpricedNote = st.unpricedEarlyExits
+      ? '<div class="hint" style="margin-top:8px">Pominięto koszt wcześniejszego wyjścia dla ' + st.unpricedEarlyExits + ' ' + AV.plural(st.unpricedEarlyExits, 'transakcji', 'transakcji', 'transakcji') + ' bez pomiaru MFE lub R.</div>'
+      : '';
     const worst = arr[0];
-    el.innerHTML = '<div>' + rows + '</div><div><div class="lbl">Błędy razem</div><div class="val ' + (tot >= 0 ? 'win' : 'loss') + '" style="font-size:36px">' + AV.signed(tot, 2, '') + '</div><div class="hint">Suma kosztu błędów w wybranym okresie. To kwota, którą możesz odzyskać samą dyscypliną.</div>' + (worst ? '<div class="step"><b>Najdroższy błąd: ' + AV.esc(worst.key.toLowerCase()) + '.</b> ' + worst.n + ' ' + AV.plural(worst.n, 'raz', 'razy', 'razy') + ', łącznie ' + AV.signed(worst.cost, 2, '') + '. Twoje zasady celują dokładnie w niego.</div>' : '') + '</div>';
+    el.innerHTML = '<div>' + rows + unpricedNote + '</div><div><div class="lbl">Błędy razem</div><div class="val ' + (tot >= 0 ? 'win' : 'loss') + '" style="font-size:36px">' + AV.signed(tot, 2, '') + '</div><div class="hint">Suma kosztu błędów w wybranym okresie. To kwota, którą możesz odzyskać samą dyscypliną.</div>' + (worst ? '<div class="step"><b>Najdroższy błąd: ' + AV.esc(worst.key.toLowerCase()) + '.</b> ' + worst.n + ' ' + AV.plural(worst.n, 'raz', 'razy', 'razy') + ', łącznie ' + AV.signed(worst.cost, 2, '') + '. Twoje zasady celują dokładnie w niego.</div>' : '') + '</div>';
   };
 
   AV.renderMae = (st) => {
     const svg = $('#maeSvg');
     if (!svg) return;
-    const trades = AV.rangeTrades(AV.state, AV.ui.statRange).filter((t) => t.mae != null && t.mfe != null);
+    const metric = (value) => {
+      if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
+      const number = Number(value);
+      return Number.isFinite(number) && number >= 0 ? number : null;
+    };
+    const trades = AV.rangeTrades(AV.state, AV.ui.statRange)
+      .map((trade) => ({ ...trade, _mae: metric(trade.mae), _mfe: metric(trade.mfe) }))
+      .filter((trade) => trade._mae != null && trade._mfe != null);
     if (!trades.length) {
       svg.innerHTML = '';
-      AV.setHTML('#maeStats', '<div class="dim">Brak danych MAE/MFE. Wpisy ręczne nie mają tych wartości — pojawią się po imporcie z giełdy.</div>');
+      AV.setHTML('#maeStats', '');
       return;
     }
     const X = (v) => 50 + Math.min(2.95, v) / 3 * 450;
@@ -183,7 +196,7 @@
     g += '<line x1="' + X(1) + '" x2="' + X(1) + '" y1="20" y2="260" stroke="#ff5d62" stroke-dasharray="4 4" opacity=".6"/><text x="' + (X(1) + 6) + '" y="32" fill="#ff5d62" font-size="10.5" font-family="JetBrains Mono">SL 1R</text>';
     if (st.avgExitR) g += '<line x1="50" x2="500" y1="' + Y(st.avgExitR) + '" y2="' + Y(st.avgExitR) + '" style="stroke:var(--alpha)" stroke-dasharray="4 4" opacity=".7"/><text x="496" y="' + (Y(st.avgExitR) - 6) + '" style="fill:var(--alpha)" font-size="10.5" text-anchor="end" font-family="JetBrains Mono">śr. wyjście ' + AV.fmt(st.avgExitR, 1) + 'R</text>';
     trades.forEach((t) => {
-      g += '<circle cx="' + X(t.mae) + '" cy="' + Y(t.mfe) + '" r="5.5" fill="' + (t.result > 0 ? '#4fcf8a' : '#ff5d62') + '" fill-opacity=".75" stroke="#0c0b0a"><title>' + AV.esc(t.pair) + '</title></circle>';
+      g += '<circle cx="' + X(t._mae) + '" cy="' + Y(t._mfe) + '" r="5.5" fill="' + (t.result > 0 ? '#4fcf8a' : '#ff5d62') + '" fill-opacity=".75" stroke="#0c0b0a"><title>' + AV.esc(t.pair) + '</title></circle>';
     });
     g += '<text x="275" y="298" fill="#b7b0a6" font-size="11" text-anchor="middle" font-family="Archivo">MAE · ruch przeciw Tobie</text><text x="12" y="140" fill="#b7b0a6" font-size="11" text-anchor="middle" font-family="Archivo" transform="rotate(-90 12 140)">MFE · ruch na Twoją korzyść</text>';
     svg.innerHTML = g;
@@ -192,7 +205,7 @@
     AV.setHTML('#maeStats', '<div class="kv"><span>Śr. MAE zyskownych</span><b class="mono">' + (hasAvg ? AV.fmt(st.avgMaeWin, 2) + 'R' : '—') + '</b></div>' +
       '<div class="kv"><span>Śr. MFE zyskownych</span><b class="mono win">' + (hasAvg ? AV.fmt(st.avgMfeWin, 2) + 'R' : '—') + '</b></div>' +
       '<div class="kv"><span>Śr. faktyczne wyjście</span><b class="mono">' + (hasAvg ? AV.fmt(st.avgExitR, 2) + 'R' : '—') + '</b></div>' +
-      (hasAvg ? '<div class="step" style="margin-top:6px"><b>Wniosek:</b> zyskowne transakcje rzadko schodzą niżej niż ' + AV.fmt(st.avgMaeWin, 2) + 'R, więc SL na 1R jest bezpieczny. Zamykasz średnio przy ' + AV.fmt(st.avgExitR, 2) + 'R, a cena idzie do ' + AV.fmt(st.avgMfeWin, 2) + 'R. <b>Zostawiasz na stole około ' + AV.fmt(Math.max(0, left), 2) + 'R na transakcji.</b> Spróbuj zamykać połowę pozycji na 1,5R, a resztę prowadzić.</div>' : ''));
+      (hasAvg ? '<div class="hint">Średnie z ' + st.maeSampleCount + ' zyskownych transakcji z pełnymi pomiarami.</div><div class="step" style="margin-top:6px"><b>Wniosek:</b> zyskowne transakcje rzadko schodzą niżej niż ' + AV.fmt(st.avgMaeWin, 2) + 'R, więc SL na 1R jest bezpieczny. Zamykasz średnio przy ' + AV.fmt(st.avgExitR, 2) + 'R, a cena idzie do ' + AV.fmt(st.avgMfeWin, 2) + 'R. <b>Zostawiasz na stole około ' + AV.fmt(Math.max(0, left), 2) + 'R na transakcji.</b> Spróbuj zamykać połowę pozycji na 1,5R, a resztę prowadzić.</div>' : ''));
   };
 
   AV.renderGroups = (st) => {
@@ -497,7 +510,7 @@
       '<div class="grid g3" style="margin-top:18px"><div><div class="lbl">Wynik</div><div class="val ' + (st.net >= 0 ? 'win' : 'loss') + '">' + AV.signed(st.net, 2, '') + '</div></div><div><div class="lbl">Transakcje</div><div class="val">' + st.n + '</div></div><div><div class="lbl">Ocena A</div><div class="val">' + a.n + ' z ' + st.n + '</div></div></div>' +
       '<h3 style="margin-top:24px">Co poszło dobrze</h3><p class="mut" style="margin-top:6px;line-height:1.65">' + (best ? 'Najlepsza emocja: ' + AV.esc(best.key) + ' dała ' + AV.signed(best.net, 2, '') + ' na ' + best.n + ' transakcjach.' : 'Brak danych.') + ' ' + (st.full.n ? 'Transakcje z pełną checklistą: ' + Math.round(st.full.wr) + '% skuteczności.' : 'Uzupełnij checklisty, żeby zobaczyć przewagę.') + '</p>' +
       '<h3 style="margin-top:18px">Co Cię kosztowało</h3><p class="mut" style="margin-top:6px;line-height:1.65">' + (worst ? 'Najsłabsza emocja: ' + AV.esc(worst.key) + ' dała ' + AV.signed(worst.net, 2, '') + '.' : 'Brak stratnych transakcji.') + ' ' + (st.shiftedSL ? 'Przesunięty SL: ' + st.shiftedSL + '×.' : 'SL nie był przesuwany.') + '</p>' +
-      '<div class="step"><b>Jedna zmiana na ten tydzień:</b> ' + (st.part.n > st.full.n ? 'żadnej transakcji bez pełnej checklisty.' : st.shiftedSL ? 'nigdy nie przesuwaj SL w złą stronę.' : 'po 21:00 tylko obserwujesz.') + '</div>');
+      '<div class="step"><b>Jedna zmiana na ten tydzień:</b> ' + (st.part.n > st.full.n ? 'zaznaczaj tylko punkty checklisty, które mają zastosowanie do setupu.' : st.shiftedSL ? 'nigdy nie przesuwaj SL w złą stronę.' : 'po 21:00 tylko obserwujesz.') + '</div>');
   };
 
   /* ---------- akademia ---------- */
@@ -737,6 +750,23 @@
   AV.renderCalendar = () => {
     const s = AV.state;
     const events = AV.buildEvents();
+    const sync = AV.api.macroSync;
+    const notice = AV.api.macroError
+      ? 'Nie udało się odświeżyć kalendarza; zachowano ostatnie dobre wydarzenia.'
+      : sync && (sync.status === 'partial' || sync.status === 'error' || sync.stale || sync.lastError)
+        ? 'Synchronizacja makro ' +
+          (sync.status === 'error'
+            ? 'nie powiodła się'
+            : sync.status === 'partial' || sync.lastError
+              ? 'jest częściowa'
+              : 'jest nieaktualna') +
+          '; zachowano ostatnie dobre wydarzenia.'
+        : '';
+    const noticeEl = $('#macroSyncNotice');
+    if (noticeEl) {
+      noticeEl.textContent = notice;
+      noticeEl.style.display = notice ? 'block' : 'none';
+    }
     const monday = AV.addDays(AV.monday(new Date()), AV.ui.weekOffset * 7);
     const sunday = AV.addDays(monday, 6);
     AV.setText('#calRange', monday.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }) + ' – ' + sunday.toLocaleDateString('pl-PL', { day: '2-digit', month: '2-digit' }));
@@ -1208,7 +1238,7 @@
         parsed.forEach((t) => {
           if (existing.some((x) => AV.dateKey(new Date(x.date)) === AV.dateKey(new Date(t.date)) && x.pair === t.pair && x.entry === t.entry)) return;
           t.id = AV.uid('imp'); t.source = 'CSV'; t.account = AV.state.accounts.find((a) => a.include)?.name || 'Konto główne';
-          t.checkTotal = 7; t.screens = {}; t.note = t.note || 'Zaimportowane z pliku. Uzupełnij emocję i ocenę.';
+          t.screens = {}; t.note = t.note || 'Zaimportowane z pliku. Uzupełnij emocję i ocenę.';
           t.mentor = 'Transakcja z importu. Uzupełnij kontekst, żeby mentor mógł ją ocenić.';
           existing.push(t); added++;
         });
@@ -1230,29 +1260,76 @@
     const iQty = find(['qty', 'quantity', 'size', 'amount', 'wolumen']);
     const iDate = find(['date', 'time', 'data', 'closed']);
     const iFee = find(['fee', 'commission', 'prowizja']);
+    const iMae = find(['mae', 'max adverse excursion']);
+    const iMfe = find(['mfe', 'max favorable excursion', 'max favourable excursion']);
     const start = iSymbol >= 0 && iDate >= 0 ? 1 : 0;
     return rows.slice(start).map((r) => {
       const get = (i) => i >= 0 ? r[i] : '';
+      const parseNumber = (rawValue) => {
+        let text = String(rawValue ?? '').trim().replace(/\u00a0/g, '').replace(/\s/g, '')
+          .replace(/[$€£zł%x×]/gi, '');
+        if (!text) return null;
+        const comma = text.lastIndexOf(',');
+        const dot = text.lastIndexOf('.');
+        if (comma >= 0 && dot >= 0) {
+          if (comma > dot) text = text.replace(/\./g, '').replace(',', '.');
+          else text = text.replace(/,/g, '');
+        } else if (comma >= 0) {
+          text = text.replace(',', '.');
+        }
+        if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text)) return null;
+        const value = Number(text);
+        return Number.isFinite(value) ? value : null;
+      };
+      const metric = (i) => {
+        const value = parseNumber(get(i));
+        return value == null || value < 0 ? null : value;
+      };
       const pair = String(get(iSymbol) || '').trim().toUpperCase().replace(/-/g, '/');
       if (!pair) return null;
-      const side = String(get(iSide) || '').toLowerCase();
-      const dir = /sell|short|s/.test(side) ? 's' : 'l';
-      const entryN = AV.pnum(get(iEntry)), exitN = AV.pnum(get(iExit)), qty = AV.pnum(get(iQty));
-      let result = get(iPnl) !== '' ? AV.pnum(get(iPnl)) : (entryN && exitN && qty ? (exitN - entryN) * qty * (dir === 'l' ? 1 : -1) : null);
-      let date = new Date(String(get(iDate) || Date.now()));
-      if (isNaN(date)) {
-        const m = String(get(iDate)).match(/(\d{2})[.\-/](\d{2})[.\-/](\d{4})/);
-        date = m ? new Date(+m[3], +m[2] - 1, +m[1], 12, 0) : new Date();
+      const side = String(get(iSide) || '').trim().toLowerCase().replace(/[_-]+/g, ' ');
+      const dir = /^(?:sell|short|s)(?:\b|\/)/.test(side)
+        ? 's'
+        : (/^(?:buy|long|l)(?:\b|\/)/.test(side) ? 'l' : null);
+      if (dir == null) return null;
+      const entryN = parseNumber(get(iEntry)), exitN = parseNumber(get(iExit)), qty = parseNumber(get(iQty));
+      const importedPnl = parseNumber(get(iPnl));
+      const result = importedPnl != null
+        ? importedPnl
+        : (entryN != null && exitN != null && qty != null && qty > 0
+          ? (exitN - entryN) * qty * (dir === 'l' ? 1 : -1)
+          : null);
+      if (result == null) return null;
+      const rawDate = String(get(iDate) || '').trim();
+      const isoDate = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+      if (isoDate) {
+        const [, year, month, day] = isoDate;
+        const validated = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+        if (validated.getUTCFullYear() !== Number(year) || validated.getUTCMonth() !== Number(month) - 1 ||
+          validated.getUTCDate() !== Number(day)) return null;
       }
+      let date = new Date(rawDate);
+      if (isNaN(date)) {
+        const m = rawDate.match(/^(\d{2})[.\-/](\d{2})[.\-/](\d{4})$/);
+        if (m) {
+          const [, day, month, year] = m;
+          const candidate = new Date(Number(year), Number(month) - 1, Number(day), 12, 0);
+          date = candidate.getFullYear() === Number(year) && candidate.getMonth() === Number(month) - 1 &&
+            candidate.getDate() === Number(day) ? candidate : null;
+        } else {
+          date = null;
+        }
+      }
+      if (!date || isNaN(date)) return null;
       return {
         date: date.toISOString(), pair, dir,
-        entry: entryN ? AV.fmt(entryN, AV.dec(entryN)) : String(get(iEntry) || '—'),
-        exit: exitN ? AV.fmt(exitN, AV.dec(exitN)) : String(get(iExit) || '—'),
-        sl: 'brak', tp: '—', size: qty ? AV.fmt(qty, 4) : '—',
+        entry: entryN == null ? '' : AV.fmt(entryN, AV.dec(entryN)),
+        exit: exitN == null ? '' : AV.fmt(exitN, AV.dec(exitN)),
+        sl: 'brak', tp: '—', size: qty == null ? '' : AV.fmt(qty, 4),
         result: result == null ? null : Math.round(result * 100) / 100,
-        r: null, grade: 'B', checklist: 5, errors: [], emotion: 'Spokój',
-        setup: 'Bez setupu', session: 'Nowy Jork', mae: 0.3, mfe: 0.5,
-        durationMin: 60, fee: AV.pnum(get(iFee)), plan: false
+        r: null, grade: null, checklist: null, checklistItems: null, checkTotal: null, errors: [], emotion: '',
+        setup: '', session: '', mae: metric(iMae), mfe: metric(iMfe),
+        durationMin: null, fee: parseNumber(get(iFee)), plan: false
       };
     }).filter(Boolean);
   };

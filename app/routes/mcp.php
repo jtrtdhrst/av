@@ -14,8 +14,8 @@ require_once dirname(__DIR__) . '/Mcp/Proposals/ProposalService.php';
 
 /**
  * Panelowa część MCP. Sesja panelu jest jedynym miejscem, w którym powstaje
- * jednorazowy kod potwierdzenia. Decyzja przez MCP wymaga tego kodu, więc
- * agent nie może zatwierdzić własnej propozycji.
+ * jednorazowy kod potwierdzenia. Zatwierdzenie w rozmowie może użyć
+ * confirmed=true bez kodu; kod z panelu pozostaje opcjonalnym kanałem.
  */
 function av_handle_mcp_api(Config $config, Db $db, Auth $auth, ?array $user, string $method, string $path): void
 {

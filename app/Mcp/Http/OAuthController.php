@@ -278,7 +278,12 @@ final class OAuthController
             $requestedScopes = array_values(array_diff($requestedScopes, ['alphavault.health']));
         }
         if ($requestedScopes === []) {
-            $requestedScopes = ['alphavault.read'];
+            $this->denyAuthorization(
+                (string) $data['redirect_uri'],
+                (string) ($data['state'] ?? ''),
+                'access_denied',
+                'Nie zatwierdzono żadnego zakresu dostępu.'
+            );
         }
         $data['scope'] = implode(' ', $requestedScopes);
 
@@ -927,13 +932,15 @@ final class OAuthController
         $scopeHtml = '';
         foreach ($scopes as $scope) {
             $label = match ($scope) {
-                'alphavault.read' => 'Odczyt danych i zapis w Twoim panelu: profil, transakcje, statystyki, plan dnia, wydarzenia, playbook, konta, ryzyko i prop challenge.',
-                'alphavault.health' => 'Dane zdrowotne z podłączonego urządzenia: sen, HRV, tętno spoczynkowe i gotowość. Osobny zakres, wymaga Twojej zgody.',
+                'alphavault.read' => 'Odczyt danych; narzędzia zapisu są dostępne, gdy zapisy są włączone w konfiguracji MCP i — jeśli skonfigurowano allowlistę — konto jest objęte pilotażem: profil, transakcje, statystyki, check-iny i ich wynik gotowości, plan dnia, wydarzenia, playbook, konta, ryzyko i prop challenge.',
+                'alphavault.health' => 'Dane fizjologiczne z podłączonego urządzenia: sen, HRV, tętno spoczynkowe, Body Battery i wynik fizjologiczny. Osobny zakres, wymaga Twojej zgody.',
                 default => $scope,
             };
             $scopeHtml .= '<li><code>' . htmlspecialchars($scope, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</code> — ' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</li>';
         }
-        $writeNotice = '<p style="border-left:3px solid #d9b25f;padding-left:12px"><strong>Zapis:</strong> klient AI może zmieniać dane w Twoim panelu. Operacje wysokiego ryzyka (usunięcia, finanse, reguły ryzyka, prop challenge, zatwierdzenie planu, przywracanie z kosza) wymagają Twojego wyraźnego „tak” w rozmowie — agent nie zatwierdza ich sam. Możesz w każdej chwili unieważnić dostęp na stronie <a style="color:#f1d48e" href="/oauth/connected">Połączone aplikacje</a>.</p>';
+        $writeNotice = in_array('alphavault.read', $scopes, true)
+            ? '<p style="border-left:3px solid #d9b25f;padding-left:12px"><strong>Zapis:</strong> klient AI może zmieniać dane, jeśli zapisy są włączone na serwerze i — gdy skonfigurowano allowlistę — konto jest objęte pilotażem. Bezpośrednie narzędzia wykonują zapis po wywołaniu i nie wymagają osobnego potwierdzenia ani kodu. Dla opcjonalnych propozycji klient powinien wysłać <code>confirmed: true</code> dopiero po Twojej jednoznacznej zgodzie; serwer sprawdza tę flagę i diff, ale nie analizuje treści rozmowy. Kod z panelu jest opcjonalny. Przy włączonym zapisie narzędzia są dostępne w zakresie <code>alphavault.read</code> — nie ma osobnego zakresu OAuth dla zapisu. Dostęp możesz w każdej chwili unieważnić na stronie <a style="color:#f1d48e" href="/oauth/connected">Połączone aplikacje</a>.</p>'
+            : '';
         $healthNotice = in_array('alphavault.health', $scopes, true)
             ? '<label style="display:flex;gap:10px;align-items:flex-start;margin-top:12px"><input type="checkbox" name="grant_health" value="1" style="margin-top:4px"><span>Zezwalam na odczyt danych zdrowotnych z urządzenia (alphavault.health).</span></label>'
             : '';
@@ -945,6 +952,10 @@ final class OAuthController
         $noticeHtml = $notice !== ''
             ? '<p style="border-left:3px solid #d9b25f;padding-left:12px"><strong>Uwaga:</strong> ' . htmlspecialchars($notice, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</p>'
             : '';
+
+        if (!in_array('alphavault.read', $scopes, true)) {
+            Http::html('<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Zgoda MCP — AlphaVault</title></head><body><main><h1>Zgoda na dane zdrowotne AlphaVault</h1><p>Zalogowano jako <strong>' . $userName . '</strong>.</p>' . $noticeHtml . '<p><strong>' . $name . '</strong> prosi wyłącznie o zakresy widoczne poniżej. Ta zgoda nie udostępnia danych tradingowych ani narzędzi zapisu.</p><h2>Zakres dostępu</h2><ul>' . $scopeHtml . '</ul><form method="post" action="' . $actionAttr . '"><input type="hidden" name="consent_id" value="' . htmlspecialchars($consentId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"><input type="hidden" name="csrf" value="' . htmlspecialchars($csrf, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"><input type="hidden" name="consent_token" value="' . htmlspecialchars($consentToken, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">' . $healthNotice . '<button type="submit" name="decision" value="allow">Zatwierdzam dostęp</button><button type="submit" name="decision" value="deny">Odrzucam</button></form><p>Token MCP jest osobny i ograniczony zakresem zgody.</p></main></body></html>');
+        }
 
         Http::html('<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Zgoda MCP — AlphaVault</title><style>body{background:#080707;color:#f5f1eb;font-family:system-ui,Arial,sans-serif;max-width:680px;margin:0 auto;padding:40px 22px;line-height:1.65}h1{font-size:32px;letter-spacing:-1px}h2{font-size:18px;margin-top:28px}code{background:rgba(217,178,95,.12);padding:2px 6px;border-radius:5px;color:#f1d48e}ul{padding-left:20px}li{margin:8px 0}.card{background:#121110;border:1px solid rgba(255,255,255,.1);border-radius:18px;padding:22px;margin-top:20px}button{border:0;border-radius:99px;padding:11px 18px;font-weight:700;cursor:pointer}.allow{background:#f5f1eb;color:#080707}.deny{background:transparent;color:#f5f1eb;border:1px solid rgba(255,255,255,.25);margin-left:8px}small{color:#9f978c}</style></head><body><h1>Połącz AlphaVault z klientem AI</h1><p>Zalogowano jako <strong>' . $userName . '</strong>.</p>' . $noticeHtml . '<div class="card"><p><strong>' . $name . '</strong> prosi o dostęp do Twojego konta AlphaVault.</p><h2>Zakres dostępu</h2><ul>' . $scopeHtml . '</ul><h2>Co to oznacza</h2><p>Klient otrzyma dostęp do danych tradingowych zapisanych na Twoim koncie. Nie otrzyma hasła, tokenu Discord ani dostępu do bazy. Możesz w każdej chwili unieważnić dostęp na stronie <a style="color:#f1d48e" href="/oauth/connected">Połączone aplikacje</a>.</p>' . $writeNotice . $healthNotice . '<form method="post" action="' . $actionAttr . '"><input type="hidden" name="consent_id" value="' . htmlspecialchars($consentId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"><input type="hidden" name="csrf" value="' . htmlspecialchars($csrf, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"><input type="hidden" name="consent_token" value="' . htmlspecialchars($consentToken, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '"><button class="allow" type="submit" name="decision" value="allow">Zatwierdzam dostęp</button><button class="deny" type="submit" name="decision" value="deny">Odrzucam</button></form></div><p><small>AlphaVault nie przekazuje Twojego tokenu Discord klientowi AI. Token MCP jest osobny, ograniczony czasem i scope.</small></p></body></html>');
     }

@@ -49,6 +49,20 @@ final class Normalizer
         return is_numeric($clean) ? (float) $clean : null;
     }
 
+    /**
+     * Stabilny identyfikator wypełnienia: oryginalne ID albo deterministyczny hash.
+     * Zapobiega ponownemu importowi tych samych filli bez ID (losowy ID wymijałby deduplikację).
+     */
+    public static function fillId(mixed $id, string $symbol, int $time, float $qty, float $price, string $side): string
+    {
+        $id = trim((string) ($id ?? ''));
+        if ($id !== '') {
+            return $id;
+        }
+
+        return 'f' . substr(sha1($symbol . '|' . $time . '|' . $qty . '|' . $price . '|' . $side), 0, 24);
+    }
+
     public static function pair(string $symbol): string
     {
         $symbol = strtoupper(trim($symbol));

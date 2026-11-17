@@ -124,7 +124,7 @@
     ['MM', 'Ryzykujesz maksymalnie 1% kapitału. Przy {kapital} USDT to {ryzyko1} USDT na transakcję. Ani dolara więcej.'],
     ['MM', 'Najpierw stop loss, potem wielkość pozycji. Nigdy odwrotnie.'],
     ['MM', 'Dźwignia nie zwiększa szans. Zwiększa tylko to, ile stracisz, jeśli się mylisz.'],
-    ['MM', 'R:R poniżej 1:2? Potrzebujesz wtedy bardzo wysokiej skuteczności, żeby wyjść na plus. Popraw cel albo odpuść.'],
+    ['MM', 'Niższe R:R wymaga wyższej skuteczności. Oceń relację zysku do ryzyka dla konkretnego setupu i zawsze ustaw SL.'],
     ['MM', 'SL przesuwasz tylko w stronę zysku. Nigdy dalej od ceny.'],
     ['MM', 'Wielkość pozycji liczysz w Kalkulatorze Alpha, nie na oko.'],
     ['Mental', 'Wdech na 4 sekundy, zatrzymanie na 4, wydech na 4. Dopiero teraz klikasz.'],
@@ -173,7 +173,7 @@
         'Trzy rzeczy, w tej kolejności: transakcje z oceną C ({cN} sztuk, {cWynik}), wejścia po stracie ({poStracieWynik}) i granie {godz} ({godzWr}% skuteczności).<br><br><b class="al">Krok:</b> wytnij tylko pierwszy punkt, a wynik rośnie o ponad 130.',
         'Na pewno nie strategia. Twoje transakcje A mają {aWr}% skuteczności. Wynik psują dni, w które lepiej nie grać: po słabym śnie, po stracie i wieczorem.<br><br><b class="al">Krok:</b> przy gotowości poniżej 60 grasz połową pozycji.',
         'Najwięcej zabiera Ci {para}: {paraWynik}. Najwięcej daje {dobraPara}: {dobraWynik}.<br><br><b class="al">Krok:</b> przez 2 tygodnie zero {para}. Różnicę zobaczysz na krzywej kapitału.',
-        'Pomijanie checklisty. Z pełną masz {clFull}% skuteczności, bez niej {clNo}%. To nie drobiazg, to prawie dwa razy lepszy wynik.<br><br><b class="al">Krok:</b> żadnej transakcji poniżej 6/7.',
+        'Pomijanie checklisty. Z pełną masz {clFull}% skuteczności, bez niej {clNo}%. Checklista pomaga ocenić jakość decyzji, ale nie blokuje zapisu transakcji.<br><br><b class="al">Krok:</b> uzupełnij punkty, które mają zastosowanie do setupu.',
         'Pora dnia. {godz} masz {godzWr}% skuteczności. Rano jesteś zupełnie innym traderem.<br><br><b class="al">Krok:</b> ustaw w zasadach „nie handluję po 21:00”. Przypomnę Ci o tym.',
         'Brak planu. W dni z zatwierdzonym planem jesteś średnio na plusie, bez planu na minusie. Dziś zgodnie z planem: {planZgodne}.<br><br><b class="al">Krok:</b> <span class="link" data-go="plan">plan dnia</span> przed pierwszą transakcją. Zawsze.'
       ]
@@ -411,6 +411,7 @@
     const planFor = (date, approved, shift) => {
       const k = AV.dateKey(date);
       plans[k] = {
+        id: 'plan-' + k,
         date: k,
         market: ['BTC', 'ETH', 'BTC', 'SOL'][shift % 4],
         bias: shift % 5 === 4 ? 'neutral' : 'long',
@@ -463,7 +464,7 @@
         remindDay: true, remindHour: true, liveReminderMinutes: 15,
         maxLosses: 2, maxDailyLoss: 3, block: 'midnight',
         maxRisk: 1, rules: ['Max 1% ryzyka na transakcję', 'Zawsze stop loss', 'Po 2 stratach koniec dnia'],
-        checklist: ['Trend wyższego TF', 'Poziom z planu', 'Potwierdzenie', 'SL przed wejściem', 'R:R ≥ 2', 'Brak makro 15 min', 'Spokojna głowa'],
+         checklist: ['Trend wyższego TF', 'Poziom z planu', 'Potwierdzenie', 'SL przed wejściem', 'R:R zgodne z planem', 'Brak makro 15 min', 'Spokojna głowa'],
         devices: { apple: false, oura: false },
         connections: {
           weex: { connected: true, lastSync: new Date().toISOString(), imported: 41, masked: 'wx_live_••••7f2a', perms: 'read-only' },

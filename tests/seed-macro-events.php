@@ -65,6 +65,14 @@ $fixture = [
         'forecast' => '',
         'previous' => '',
     ],
+    [
+        'title' => 'Bazowy wskaźnik cen PCE w USA',
+        'country' => 'USD',
+        'date' => $monday->modify('+24 days')->setTime(14, 30)->format('Y-m-d\TH:i:sP'),
+        'impact' => 'High',
+        'forecast' => '0,2%',
+        'previous' => '0,2%',
+    ],
 ];
 
 $result = $macro->syncPayload(MacroEvents::normalize($fixture));

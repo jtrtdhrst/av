@@ -16,7 +16,7 @@
 | [TESTOWANIE.md](TESTOWANIE.md) | testy prop, API i UI, checklisty | tak |
 | [DISCORD.md](DISCORD.md) | konfiguracja aplikacji i roli Alpha | nie |
 | [DEPLOY.md](DEPLOY.md) | produkcja, reverse proxy, backup | nie |
-| [MCP.md](MCP.md) | MCP 3.2: OAuth 2.1, 79 narzędzi w zakresie `alphavault.read`, wszystkie zapisy bezpośrednie, kosz i `restore`, opcjonalne propozycje z diffem, wdrożenie | nie |
+| [MCP.md](MCP.md) | MCP 3.2: OAuth 2.1, do 79 narzędzi w zakresie `alphavault.read` przy włączonym zapisie, wszystkie zapisy bezpośrednie, kosz i `restore`, opcjonalne propozycje z diffem, wdrożenie | nie |
 | [CHANGELOG.md](../CHANGELOG.md) | historia zmian | nie |
 
 Dokumentacja publiczna jest serwowana pod `/docs/`. Katalog `public/docs/` jest generowany z `docs/` oraz dokumentów głównych:

@@ -78,7 +78,21 @@ final class Schemas
 
     public static function inputDayPlan(): array
     {
-        return self::input(['date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$']]);
+        return self::input([
+            'date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'planId' => [
+                'type' => 'string',
+                'minLength' => 1,
+                'maxLength' => 128,
+                'description' => 'Wybiera plan o tym ID; można użyć razem z market.',
+            ],
+            'market' => [
+                'type' => 'string',
+                'minLength' => 1,
+                'maxLength' => 40,
+                'description' => 'Wybiera plan, jeśli ten rynek wskazuje dokładnie jeden rekord na datę.',
+            ],
+        ]);
     }
 
     public static function inputSetups(): array { return self::input(); }
@@ -149,12 +163,18 @@ final class Schemas
         ] + self::dateRange() + [
             'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20],
             'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100000, 'default' => 0],
+            'planId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
+            'market' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 40],
         ]);
     }
 
     public static function inputDayPlanContext(): array
     {
-        return self::input(['date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$']]);
+        return self::input([
+            'date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'planId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
+            'market' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 40],
+        ]);
     }
 
     public static function inputTradeJournal(): array
@@ -414,9 +434,10 @@ final class Schemas
         return self::input([
             'proposalId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
             'expectedDiffHash' => ['type' => 'string', 'minLength' => 64, 'maxLength' => 64],
-            'confirmationCode' => ['type' => 'string', 'minLength' => 8, 'maxLength' => 12],
+            'confirmed' => ['type' => 'boolean', 'description' => 'Ustaw true wyłącznie po wyraźnym potwierdzeniu użytkownika w rozmowie.'],
             'idempotencyKey' => self::idem(),
-        ], ['proposalId', 'expectedDiffHash', 'confirmationCode', 'idempotencyKey']);
+            'confirmationCode' => ['type' => 'string', 'minLength' => 8, 'maxLength' => 12, 'description' => 'Opcjonalny kod z panelu AlphaVault.'],
+        ], ['proposalId', 'expectedDiffHash', 'confirmed', 'idempotencyKey']);
     }
 
     public static function inputRejectProposal(): array
@@ -440,6 +461,7 @@ final class Schemas
 
         return self::input([
             'date' => ['type' => 'string', 'pattern' => '^\\d{4}-\\d{2}-\\d{2}$'],
+            'planId' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
             'markets' => ['type' => 'array', 'minItems' => 1, 'maxItems' => 3, 'items' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 20]],
             'bias' => ['type' => 'string', 'enum' => ['long', 'short', 'neutral', 'none']],
             'reason' => ['type' => 'string', 'maxLength' => 2000],
@@ -447,7 +469,8 @@ final class Schemas
                 'type' => 'array', 'maxItems' => 10,
                 'items' => self::input([
                     'type' => ['type' => 'string', 'maxLength' => 20],
-                    'price' => ['type' => 'string', 'maxLength' => 30],
+                    'price' => ['anyOf' => [['type' => 'string', 'maxLength' => 30], ['type' => 'number']]],
+                    'value' => ['anyOf' => [['type' => 'string', 'maxLength' => 30], ['type' => 'number']]],
                     'note' => ['type' => 'string', 'maxLength' => 200],
                 ]),
             ],

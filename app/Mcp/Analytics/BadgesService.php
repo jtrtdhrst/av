@@ -190,17 +190,20 @@ final class BadgesService
 
     private function planStreakMilestones(array $state): array
     {
-        $plans = $this->plans->plans($state);
+        $approvedDates = [];
+        foreach ($this->plans->plans($state) as $plan) {
+            $date = (string) ($plan['date'] ?? '');
+            if ($date !== '' && $this->plans->status($plan) === 'approved') {
+                $approvedDates[$date] = true;
+            }
+        }
+        $dates = array_keys($approvedDates);
+        sort($dates);
         $milestones = [3 => null, 5 => null, 10 => null];
         $streak = 0;
         $max = 0;
         $previous = null;
-        foreach ($plans as $date => $plan) {
-            if ($this->plans->status($plan) !== 'approved') {
-                $streak = 0;
-                $previous = null;
-                continue;
-            }
+        foreach ($dates as $date) {
             $current = new \DateTimeImmutable($date, Dates::tz());
             if ($previous instanceof \DateTimeImmutable) {
                 $gap = (int) $previous->diff($current)->days;
@@ -237,11 +240,10 @@ final class BadgesService
         }
         ksort($byDate);
         foreach ($byDate as $date => $trades) {
-            $plan = $this->plans->planFor($state, $date);
             usort($trades, static fn (array $a, array $b): int => strcmp((string) ($a['date'] ?? ''), (string) ($b['date'] ?? '')));
-            $sequence = 0;
             foreach ($trades as $trade) {
-                $sequence++;
+                $plan = $this->plans->planForTrade($state, $trade);
+                $sequence = $this->plans->tradeSequence($state, $trade, $plan);
                 $alignment = $this->plans->alignment($state, $trade, $plan, $sequence);
                 if ($alignment['determined'] && $alignment['aligned']) {
                     $aligned[] = $trade;

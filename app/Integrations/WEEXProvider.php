@@ -87,22 +87,24 @@ final class WEEXProvider extends AbstractProvider
             if ($qty === null || $price === null || $time === null) {
                 continue;
             }
-            $commission = Normalizer::num($row['commission'] ?? null) ?? 0.0;
+            $commission = Normalizer::num($row['commission'] ?? null);
             $commissionAsset = strtoupper((string) ($row['commissionAsset'] ?? ''));
-            if (!in_array($commissionAsset, ['USDT', 'USDC', 'USD'], true)) {
-                $commission = 0.0;
+            if (($commission === null || $commission !== 0.0) && !in_array($commissionAsset, ['USDT', 'USDC', 'USD'], true)) {
+                $commission = null;
             }
             $pnl = Normalizer::num($row['realizedPnl'] ?? null);
             $buyer = !empty($row['buyer']);
+            $symbol = (string) ($row['symbol'] ?? '');
+            $side = $buyer ? 'buy' : 'sell';
             $out[] = [
-                'id' => (string) ($row['id'] ?? ''),
-                'symbol' => (string) ($row['symbol'] ?? ''),
-                'side' => $buyer ? 'buy' : 'sell',
+                'id' => Normalizer::fillId($row['id'] ?? null, $symbol, $time, $qty, $price, $side),
+                'symbol' => $symbol,
+                'side' => $side,
                 'positionSide' => isset($row['positionSide']) ? (string) $row['positionSide'] : null,
                 'qty' => $qty,
                 'price' => $price,
                 'fee' => $commission,
-                'pnl' => $pnl !== null && abs($pnl) > 0 ? $pnl : null,
+                'pnl' => $pnl,
                 'time' => $time,
             ];
         }

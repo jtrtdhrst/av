@@ -73,14 +73,14 @@ Bez frameworka: `index.html`, `js/core.js`, `js/data.js`, `js/state.js`, `js/ren
 
 Puste pola i stany brzegowe: [DOCUMENTATION.md §12](DOCUMENTATION.md#12-puste-pola-i-stany-brzegowe).
 
-## MCP 2.0
+## MCP 3.2
 
 MCP działa jako osobny front controller `mcp/public/index.php` na `mcp.alphavault.pl`, z tym samym MySQL i tym samym kontem LH.pl. Kod PHP w `app/Mcp/` jest ładowany przez Composer PSR-4 wyłącznie na domenie MCP; `alphavault.pl` nie wdraża `vendor/`.
 
 ```text
 app/Mcp/
   Http/OAuthController.php   OAuth 2.1 AS: discovery, DCR, authorize, token, revoke, login Discord
-  Http/McpController.php     JSON-RPC, rejestracja 15+7 narzędzi, prompts, scope policy
+  Http/McpController.php     JSON-RPC, 46 narzędzi odczytu i — przy włączonym zapisie — 33 zapisu, prompts, scope policy
   OAuth/                     league/oauth2-server: encje, repozytoria, OAuthServer, TokenValidator
   Support/                   StateRepository, TradeService, StatsService, DashboardService,
                              EventsService, MacroService, CapitalService, ConnectionsService,
@@ -93,15 +93,17 @@ app/Mcp/
 Przepływ zapisu:
 
 ```text
-agent → create_*/update_*/close_trade → WriteEngine → SELECT ... FOR UPDATE → revision+1 → mcp_audit
-agent → delete_*/account/flow/risk/prop/plan.approve/restore → preview → mcp_proposals (write_op, pending)
-panel AlphaVault albo kod jednorazowy → approve_proposal / POST /api/mcp/proposals/decide
+agent → dowolne z 30 narzędzi zapisu → WriteEngine → SELECT ... FOR UPDATE → revision+1 → mcp_audit
+agent → propose_change (opcjonalnie) → preview → mcp_proposals (write_op, pending)
+panel AlphaVault albo approve_proposal po confirmed=true (opcjonalny kod)
 → WriteEngine::apply → revision+1 → mcp_audit
 ```
 
-Zasady: jedno połączenie z `alphavault.read` daje 79 narzędzi; wszystkie 30 operacji zapisu działa
-bezpośrednio (także usunięcia, konta, finanse, reguły ryzyka i prop), propozycja z diffem jest
-opcjonalna, usunięcia są miękkie (`state.trash[]`), dane giełdowe niezmienne.
+Zasady: przy `MCP_WRITES_ENABLED=true` jedno połączenie z `alphavault.read` daje 79 narzędzi;
+przy `false` pozostaje 46 odczytu. Wszystkie 30 operacji zapisu działa bezpośrednio
+(także usunięcia, konta, finanse, reguły ryzyka i prop). `propose_change` jest
+opcjonalną ścieżką diffu, a zatwierdzenie propozycji wymaga `confirmed: true`; kod panelu jest
+opcjonalny. Usunięcia są miękkie (`state.trash[]`), dane giełdowe niezmienne.
 `MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu.
 Szczegóły: [MCP.md](https://github.com/miloszspyrka-code/av/blob/main/docs/MCP.md).
 

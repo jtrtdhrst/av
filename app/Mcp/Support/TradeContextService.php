@@ -3,10 +3,15 @@ declare(strict_types=1);
 
 namespace AlphaVault\Mcp\Support;
 
+use AlphaVault\Mcp\Analytics\DayPlanService;
+
 final class TradeContextService
 {
+    private DayPlanService $plans;
+
     public function __construct(private readonly TradeService $trades)
     {
+        $this->plans = new DayPlanService();
     }
 
     public function context(array $state, string $tradeId): ?array
@@ -39,8 +44,8 @@ final class TradeContextService
         }
 
         $dateKey = Dates::dateKey((string) ($trade['date'] ?? ''));
-        $plan = $dateKey !== null ? ($state['plans'][$dateKey] ?? null) : null;
-        $plan = is_array($plan) ? $plan : null;
+        $plan = $this->plans->planForTrade($state, $trade);
+        $dayPlans = $dateKey !== null ? $this->plans->plansForDate($state, $dateKey) : [];
         $planApproved = $plan !== null && !empty($plan['approvedAt']);
 
         return [
@@ -50,7 +55,10 @@ final class TradeContextService
             'setup' => $setup,
             'setupStats' => $setupName !== '' ? $this->trades->setupStats($state, $setupName) : null,
             'plan' => $plan,
+            'plans' => $dayPlans,
             'planMatch' => [
+                'planId' => $plan !== null ? (string) ($plan['id'] ?? '') : null,
+                'ambiguous' => $plan === null && count($dayPlans) > 1,
                 'approved' => $planApproved,
                 'setupInPlaybook' => $setup !== null,
                 'tradeMarkedPlan' => (bool) ($trade['plan'] ?? false),

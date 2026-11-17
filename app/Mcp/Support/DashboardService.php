@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace AlphaVault\Mcp\Support;
 
+use AlphaVault\Mcp\Analytics\DayPlanService;
+
 final class DashboardService
 {
     public function __construct(
@@ -17,7 +19,7 @@ final class DashboardService
     {
         $today = $this->trades->todayStats($state);
         $todayKey = Dates::todayKey();
-        $plan = $this->planSummary($state['plans'][$todayKey] ?? null, $todayKey);
+        $dayPlans = $this->planOptions($state, $todayKey);
         $lock = $this->lockInfo($state, $today);
         $readiness = $this->readiness($state, $healthAccess, $wearables);
         $events = $this->events->list(['limit' => 1]);
@@ -33,7 +35,8 @@ final class DashboardService
                 'losses' => $today['losses'],
                 'riskUsed' => $today['risk'],
             ],
-            'plan' => $plan,
+            'plan' => $dayPlans['plan'],
+            'plans' => $dayPlans['plans'],
             'readiness' => $readiness,
             'protection' => $lock,
             'capital' => [
@@ -46,6 +49,23 @@ final class DashboardService
         ];
     }
 
+    /**
+     * Keeps the legacy singular `plan` field for zero/one record and exposes
+     * every record without selecting one arbitrarily on multi-plan dates.
+     *
+     * @return array{plan:?array,plans:list<array>}
+     */
+    public function planOptions(array $state, string $date): array
+    {
+        $records = (new DayPlanService())->plansForDate($state, $date);
+        $summaries = array_map(fn (array $plan): array => $this->planSummary($plan, $date), $records);
+
+        return [
+            'plan' => count($summaries) === 1 ? $summaries[0] : null,
+            'plans' => $summaries,
+        ];
+    }
+
     public function planSummary(?array $plan, string $date): ?array
     {
         if (!is_array($plan)) {
@@ -53,6 +73,7 @@ final class DashboardService
         }
 
         return [
+            'id' => (string) ($plan['id'] ?? $date),
             'date' => (string) ($plan['date'] ?? $date),
             'approved' => !empty($plan['approvedAt']),
             'approvedAt' => isset($plan['approvedAt']) && $plan['approvedAt'] !== null ? (int) $plan['approvedAt'] : null,

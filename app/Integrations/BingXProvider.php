@@ -135,11 +135,15 @@ final class BingXProvider extends AbstractProvider
             if ($closeAt === null || $pair === '' || $qty <= 0) {
                 continue;
             }
-            $realised = Normalizer::num($row['realisedProfit'] ?? null) ?? 0.0;
+            $realised = Normalizer::num($row['realisedProfit'] ?? null);
             $netProfit = Normalizer::num($row['netProfit'] ?? null);
-            $commission = Normalizer::num($row['positionCommission'] ?? null) ?? 0.0;
-            $funding = Normalizer::num($row['totalFunding'] ?? null) ?? 0.0;
-            $result = $netProfit ?? ($realised + $commission + $funding);
+            $commission = Normalizer::num($row['positionCommission'] ?? null);
+            $funding = Normalizer::num($row['totalFunding'] ?? null);
+            $result = $netProfit ?? (
+                $realised !== null && $commission !== null && $funding !== null
+                    ? $realised + $commission + $funding
+                    : null
+            );
             $posSide = (string) ($row['positionSide'] ?? 'LONG');
             $side = strtoupper($posSide) === 'SHORT' ? 'sell' : 'buy';
 
@@ -151,9 +155,9 @@ final class BingXProvider extends AbstractProvider
                 'entry' => Normalizer::price(Normalizer::num($row['avgPrice'] ?? null)),
                 'exit' => Normalizer::price(Normalizer::num($row['avgClosePrice'] ?? null)),
                 'size' => Normalizer::size($qty),
-                'result' => round($result, 8),
-                'fee' => round(abs($commission + $funding), 8),
-                'durationMin' => $openAt !== null ? max(0, (int) round(($closeAt - $openAt) / 60000)) : 0,
+                'result' => $result === null ? null : round($result, 8),
+                'fee' => $commission !== null && $funding !== null ? round(abs($commission + $funding), 8) : null,
+                'durationMin' => $openAt !== null ? max(0, (int) round(($closeAt - $openAt) / 60000)) : null,
                 'source' => $this->label(),
                 'account' => $this->label(),
             ];

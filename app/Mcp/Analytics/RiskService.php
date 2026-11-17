@@ -175,7 +175,6 @@ final class RiskService
         $lossLimit = (int) ($rules['maxConsecutiveLossesPerDay'] ?? 2);
         $capital = (float) ($rules['capital'] ?? 0.0);
         $window = Metrics::window($state, $from, $to, ['analysis' => 'risk-violations']);
-        $plans = $this->plans->plans($state);
         $items = [];
 
         $byDate = [];
@@ -205,13 +204,14 @@ final class RiskService
                 continue;
             }
             usort($trades, static fn (array $a, array $b): int => (strtotime((string) ($a['date'] ?? '')) ?: 0) <=> (strtotime((string) ($b['date'] ?? '')) ?: 0));
-            $plan = $plans[$date] ?? null;
             $dayPnl = 0.0;
             $dayLosses = 0;
             $locked = false;
-            $sequence = 0;
+            $sequences = [];
             foreach ($trades as $trade) {
-                $sequence++;
+                $plan = $this->plans->planForTrade($state, $trade);
+                $planId = $plan !== null ? (string) ($plan['id'] ?? '') : '';
+                $sequences[$planId] = ($sequences[$planId] ?? 0) + 1;
                 $id = (string) ($trade['id'] ?? '');
                 if (!isset($allowed[$id])) {
                     continue;
@@ -261,7 +261,7 @@ final class RiskService
                         []
                     );
                 }
-                $alignment = $this->plans->alignment($state, $trade, $plan, $sequence);
+                $alignment = $this->plans->alignment($state, $trade, $plan, $sequences[$planId]);
                 if ($alignment['determined'] && !$alignment['aligned']) {
                     foreach ($alignment['reasons'] as $reason) {
                         $items[] = $this->violation(

@@ -181,16 +181,26 @@ final class Tools
         }
     }
 
-    public function getDayPlan(RequestContext $context, ?string $date = null): array
+    public function getDayPlan(
+        RequestContext $context,
+        ?string $date = null,
+        ?string $planId = null,
+        ?string $market = null
+    ): array
     {
         $date = $date ?? Dates::todayKey();
         if (!Dates::isValidKey($date)) {
             throw new ToolCallException('date musi mieć format YYYY-MM-DD.');
         }
         $state = $this->state($context);
-        $plan = $state['plans'][$date] ?? null;
+        $plans = $this->dayPlans->plansForDate($state, $date);
+        $plan = $this->dayPlans->planFor($state, $date, $market, $planId);
 
-        return ['date' => $date, 'plan' => is_array($plan) ? $plan : null];
+        return [
+            'date' => $date,
+            'plan' => $plan,
+            'plans' => $plans,
+        ];
     }
 
     public function listSetups(RequestContext $context): array
@@ -354,18 +364,30 @@ final class Tools
         }
     }
 
-    public function getDayPlanCompliance(RequestContext $context, ?string $date = null, ?string $from = null, ?string $to = null, int $limit = 20, int $offset = 0): array
+    public function getDayPlanCompliance(
+        RequestContext $context,
+        ?string $date = null,
+        ?string $from = null,
+        ?string $to = null,
+        int $limit = 20,
+        int $offset = 0,
+        ?string $planId = null,
+        ?string $market = null
+    ): array
     {
         $state = $this->state($context);
         try {
             if ($date !== null && trim($date) !== '') {
-                $day = $this->dayPlans->day($state, trim($date));
+                $day = $this->dayPlans->day($state, trim($date), $planId, $market);
+                $selectorRequested = trim((string) $planId) !== '' || trim((string) $market) !== '';
+                $selectorMatched = $day['compliance']['planIds'] !== [];
+                $hasData = !$selectorRequested || $selectorMatched;
 
                 return [
-                    'hasData' => true,
+                    'hasData' => $hasData,
                     'sampleSize' => $day['compliance']['alignedTrades'] + $day['compliance']['violatingTrades'],
-                    'days' => [$day['compliance']],
-                    'totalDays' => 1,
+                    'days' => $hasData ? [$day['compliance']] : [],
+                    'totalDays' => $hasData ? 1 : 0,
                     'nextOffset' => null,
                     'summary' => [
                         'tradesAnalyzed' => $day['compliance']['alignedTrades'] + $day['compliance']['violatingTrades'],
@@ -378,22 +400,33 @@ final class Tools
                         'rulesViolated' => $day['compliance']['rulesViolated'],
                     ],
                     'range' => ['from' => $day['date'], 'to' => $day['date'], 'timezone' => Dates::TZ],
-                    'filters' => ['date' => $day['date'], 'from' => null, 'to' => null],
+                    'filters' => [
+                        'date' => $day['date'],
+                        'from' => null,
+                        'to' => null,
+                        'planId' => trim((string) $planId) !== '' ? trim((string) $planId) : null,
+                        'market' => trim((string) $market) !== '' ? strtoupper(trim((string) $market)) : null,
+                    ],
                 ];
             }
 
-            return $this->dayPlans->compliance($state, $from, $to, $limit, $offset);
+            return $this->dayPlans->compliance($state, $from, $to, $limit, $offset, $planId, $market);
         } catch (\InvalidArgumentException $err) {
             throw new ToolCallException($err->getMessage());
         }
     }
 
-    public function getDayPlanContext(RequestContext $context, ?string $date = null): array
+    public function getDayPlanContext(
+        RequestContext $context,
+        ?string $date = null,
+        ?string $planId = null,
+        ?string $market = null
+    ): array
     {
         $date = $date !== null && trim($date) !== '' ? trim($date) : Dates::todayKey();
         $state = $this->state($context);
         try {
-            $day = $this->dayPlans->day($state, $date);
+            $day = $this->dayPlans->day($state, $date, $planId, $market);
             $macro = $this->macro->list(['from' => $date, 'to' => $date, 'limit' => 20]);
             $checkin = $this->readiness->context($state, $date, null, $this->healthAccess($context));
             $protection = $this->risk->protection($state);
@@ -749,16 +782,21 @@ final class Tools
         RequestContext $context,
         string $proposalId,
         string $expectedDiffHash,
-        string $confirmationCode,
-        string $idempotencyKey
+        bool $confirmed,
+        string $idempotencyKey,
+        ?string $confirmationCode = null
     ): array {
+        if (!$confirmed) {
+            throw new ToolCallException('[confirmation_required] Zatwierdzenie wymaga confirmed=true po wyraźnym „tak” użytkownika w rozmowie.');
+        }
         return $this->propose($context, fn (int $userId, string $client): array => $this->proposals->approveWithCode(
             $userId,
             $proposalId,
             $expectedDiffHash,
             $confirmationCode,
             $idempotencyKey,
-            $client
+            $client,
+            $confirmed
         ));
     }
 
@@ -856,13 +894,15 @@ final class Tools
         ?float $riskPercent = null,
         ?int $maxTrades = null,
         ?string $until = null,
-        ?string $notDo = null
+        ?string $notDo = null,
+        ?string $planId = null
     ): array {
         $args = ['idempotencyKey' => $idempotencyKey];
         foreach ([
             'date' => $date, 'market' => $market, 'bias' => $bias, 'why' => $why, 'levels' => $levels,
             'ifMain' => $ifMain, 'thenMain' => $thenMain, 'ifAlt' => $ifAlt, 'thenAlt' => $thenAlt,
             'riskPercent' => $riskPercent, 'maxTrades' => $maxTrades, 'until' => $until, 'notDo' => $notDo,
+            'planId' => $planId,
         ] as $key => $value) {
             if ($value !== null) {
                 $args[$key] = $value;
@@ -1010,13 +1050,15 @@ final class Tools
         ?int $maxTrades = null,
         ?string $until = null,
         ?array $rulesNotToDo = null,
-        ?string $date = null
+        ?string $date = null,
+        ?string $planId = null
     ): array {
         $args = ['idempotencyKey' => $idempotencyKey];
         foreach ([
             'markets' => $markets, 'bias' => $bias, 'why' => $reason, 'levels' => $levels,
             'scenarioA' => $scenarioA, 'scenarioB' => $scenarioB, 'riskPercent' => $riskPercent,
             'maxTrades' => $maxTrades, 'until' => $until, 'rulesNotToDo' => $rulesNotToDo, 'date' => $date,
+            'planId' => $planId,
         ] as $key => $value) {
             if ($value !== null) {
                 $args[$key] = $value;

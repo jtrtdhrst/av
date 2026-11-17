@@ -174,8 +174,11 @@ try {
   let trades = await stateTrades();
   const btc = trades.find((t) => t.extId === 'okx:pos:111');
   const eth = trades.find((t) => t.extId === 'okx:pos:222');
-  assert.ok(btc && btc.pair === 'BTC/USDT' && btc.result === 99.4, JSON.stringify(btc));
-  assert.ok(eth && eth.pair === 'ETH/USDT' && eth.result === 49.8, JSON.stringify(eth));
+  assert.ok(btc && btc.pair === 'BTC/USDT' && btc.result === 99.4 && btc.mae === null && btc.mfe === null
+    && btc.checklist === null && btc.checkTotal === null, JSON.stringify(btc));
+  assert.ok(eth && eth.pair === 'ETH/USDT' && eth.result === 49.8 && eth.mae === null && eth.mfe === null
+    && eth.checklist === null && eth.checkTotal === null, JSON.stringify(eth));
+  assert.equal(trades.some((t) => t.extId === 'okx:pos:333'), false, 'brak realizedPnl nie może utworzyć break-even');
   log('OKX: sync importuje 2 transakcje', true, 'BTC 99.4 / ETH 49.8');
 
   const okxDedupe = await sync(okxId);
@@ -193,10 +196,15 @@ try {
   assert.equal(bingx.res.status, 201, bingx.text);
   const bingxSync = await sync(bingx.json.connection.id);
   assert.equal(bingxSync.res.status, 200, bingxSync.text);
-  assert.equal(bingxSync.json.result.imported, 1);
+  assert.equal(bingxSync.json.result.imported, 2);
   trades = await stateTrades();
   const bingxTrade = trades.find((t) => t.extId === 'bingx:pos:333');
-  assert.ok(bingxTrade && bingxTrade.pair === 'BTC/USDT' && bingxTrade.result === 49.5, JSON.stringify(bingxTrade));
+  assert.ok(bingxTrade && bingxTrade.pair === 'BTC/USDT' && bingxTrade.result === 49.5 && bingxTrade.mae === null && bingxTrade.mfe === null
+    && bingxTrade.checklist === null && bingxTrade.checkTotal === null, JSON.stringify(bingxTrade));
+  const bingxUnknownMeasures = trades.find((t) => t.extId === 'bingx:pos:444');
+  assert.ok(bingxUnknownMeasures && bingxUnknownMeasures.result === 0
+    && bingxUnknownMeasures.fee === null && bingxUnknownMeasures.durationMin === null, JSON.stringify(bingxUnknownMeasures));
+  assert.equal(trades.some((t) => t.extId === 'bingx:pos:555'), false, 'brak znanego PnL nie może utworzyć break-even');
   log('BingX: sync importuje zamkniętą pozycję', true);
 
   const bingxTradeKey = await connect('bingx', { apiKey: 'bingx-trade', secretKey: 'bingx-secret' });
@@ -209,13 +217,15 @@ try {
   assert.equal(weex.res.status, 201, weex.text);
   const weexSync = await sync(weex.json.connection.id);
   assert.equal(weexSync.res.status, 200, weexSync.text);
-  assert.equal(weexSync.json.result.imported, 1);
+  assert.equal(weexSync.json.result.imported, 2);
   trades = await stateTrades();
   const weexTrade = trades.find((t) => String(t.extId || '').startsWith('weex:BTCUSDT:501:'));
   assert.ok(weexTrade && weexTrade.pair === 'BTC/USDT' && weexTrade.result === 9.8, JSON.stringify(weexTrade));
   assert.equal(weexTrade.entry, '100');
   assert.equal(weexTrade.exit, '110');
-  log('WEEX: rekonstrukcja transakcji z fills', true, 'wynik 9.8');
+  const weexBreakEven = trades.find((t) => String(t.extId || '').startsWith('weex:ETHUSDT:503:'));
+  assert.ok(weexBreakEven && weexBreakEven.result === -0.2 && weexBreakEven.fee === 0.2, JSON.stringify(weexBreakEven));
+  log('WEEX: rekonstrukcja transakcji z fills', true, 'BTC 9.8 / ETH break-even po opłatach');
 
   const weexTradeKey = await connect('weex', { apiKey: 'weex-trade', secretKey: 'weex-secret', passphrase: 'p' });
   assert.equal(weexTradeKey.res.status, 201, weexTradeKey.text);

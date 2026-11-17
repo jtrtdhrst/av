@@ -219,6 +219,13 @@ async function finishConsent(client, verifier, challenge, sessionCookie) {
   });
   const auth = await req('/oauth/authorize?' + q.toString(), { headers: { Cookie: sessionCookie } });
   assert.equal(auth.res.status, 200, auth.text);
+  assert.match(auth.text, /Bezpośrednie narzędzia wykonują zapis po wywołaniu/);
+  assert.match(auth.text, /zapisy są włączone w konfiguracji MCP i — jeśli skonfigurowano allowlistę — konto jest objęte pilotażem/);
+  assert.match(auth.text, /jeśli zapisy są włączone na serwerze i — gdy skonfigurowano allowlistę — konto jest objęte pilotażem/);
+  assert.match(auth.text, /<code>confirmed: true<\/code> dopiero po Twojej jednoznacznej zgodzie/);
+  assert.match(auth.text, /serwer sprawdza tę flagę i diff, ale nie analizuje treści rozmowy/);
+  assert.match(auth.text, /Przy włączonym zapisie narzędzia są dostępne w zakresie <code>alphavault\.read<\/code>/);
+  assert.doesNotMatch(auth.text, /Operacje wysokiego ryzyka .* wymagają Twojego wyraźnego „tak”/);
   const consentToken = /name="consent_token" value="([^"]+)"/.exec(auth.text);
   const formAction = /<form method="post" action="([^"]+)"/.exec(auth.text);
   assert.ok(consentToken && formAction);
@@ -457,4 +464,3 @@ try {
   fake.close();
   cleanup();
 }
-

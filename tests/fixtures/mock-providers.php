@@ -91,6 +91,12 @@ if (str_starts_with($path, '/okx/')) {
                 'realizedPnl' => '50', 'fee' => '-0.2', 'fundingFee' => '0', 'liqPenalty' => '0',
                 'openTime' => (string) ($now - 10800000), 'closeTime' => (string) ($now - 7200000),
             ],
+            [
+                'posId' => '333', 'instId' => 'SOL-USDT-SWAP', 'posSide' => 'long',
+                'openAvgPx' => '100', 'closeAvgPx' => '101', 'closeTotalPos' => '1',
+                'fee' => '0', 'fundingFee' => '0', 'liqPenalty' => '0',
+                'openTime' => (string) ($now - 5400000), 'closeTime' => (string) ($now - 3600000),
+            ],
         ]]);
     }
     if ($path === '/okx/api/v5/trade/fills-history') {
@@ -123,7 +129,7 @@ if (str_starts_with($path, '/bingx/')) {
             'asset' => 'USDT', 'time' => $now - 3600000, 'tranId' => 'inc-1', 'tradeId' => 'inc-1',
         ]]]);
     }
-    if ($path === '/bingx/openApi/swap/v1/trade/positionHistory') {
+     if ($path === '/bingx/openApi/swap/v1/trade/positionHistory') {
         out(['code' => 0, 'msg' => '', 'data' => ['positionHistory' => [[
             'positionId' => '333', 'symbol' => 'BTC-USDT', 'positionSide' => 'LONG',
             'openTime' => $now - 7200000, 'updateTime' => $now - 3600000,
@@ -131,6 +137,14 @@ if (str_starts_with($path, '/bingx/')) {
             'realisedProfit' => '50', 'netProfit' => '49.5',
             'positionAmt' => '0.1', 'closePositionAmt' => '0.1',
             'positionCommission' => '-0.4', 'totalFunding' => '-0.1',
+        ], [
+            'positionId' => '444', 'symbol' => 'ETH-USDT', 'positionSide' => 'LONG',
+            'updateTime' => $now - 1800000, 'avgPrice' => '3000', 'avgClosePrice' => '3001',
+            'netProfit' => '0', 'positionAmt' => '0.2', 'closePositionAmt' => '0.2',
+        ], [
+            'positionId' => '555', 'symbol' => 'SOL-USDT', 'positionSide' => 'LONG',
+            'updateTime' => $now - 900000, 'avgPrice' => '100', 'avgClosePrice' => '101',
+            'positionAmt' => '1', 'closePositionAmt' => '1',
         ]]]]);
     }
     out(['code' => 404, 'msg' => 'Not found', 'data' => []], 404);
@@ -167,6 +181,18 @@ if (str_starts_with($path, '/weex/')) {
                 'commission' => '-0.1', 'commissionAsset' => 'USDT', 'maker' => false,
                 'price' => '110', 'qty' => '1', 'quoteQty' => '110', 'realizedPnl' => '10',
                 'side' => 'SELL', 'positionSide' => 'LONG', 'time' => $now - 3600000,
+            ],
+            [
+                'id' => 503, 'orderId' => 3, 'symbol' => 'ETHUSDT', 'buyer' => true,
+                'commission' => '-0.1', 'commissionAsset' => 'USDT', 'maker' => false,
+                'price' => '100', 'qty' => '1', 'quoteQty' => '100', 'realizedPnl' => '0',
+                'side' => 'BUY', 'positionSide' => 'LONG', 'time' => $now - 5400000,
+            ],
+            [
+                'id' => 504, 'orderId' => 4, 'symbol' => 'ETHUSDT', 'buyer' => false,
+                'commission' => '-0.1', 'commissionAsset' => 'USDT', 'maker' => false,
+                'price' => '100', 'qty' => '1', 'quoteQty' => '100', 'realizedPnl' => '0',
+                'side' => 'SELL', 'positionSide' => 'LONG', 'time' => $now - 1800000,
             ],
         ]);
     }

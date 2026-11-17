@@ -2,7 +2,7 @@
 
 ## Gdzie uruchamiamy testy
 
-**Testy uruchamia wyłącznie GitHub Actions.** AV-engineer nie uruchamia testów, serwera PHP, MySQL ani Playwright lokalnie. Lokalny wynik nie jest dowodem i nie może zamykać zadania.
+**Testy uruchamia wyłącznie GitHub Actions.** AV-engineer nie uruchamia testów, serwera PHP, MySQL ani Playwright lokalnie. Opisane niżej komendy i pliki identyfikują suite CI, nie są instrukcją lokalnego uruchamiania. Lokalny wynik nie jest dowodem i nie może zamykać zadania.
 
 - PR → `.github/workflows/ci.yml` → wymagany check `PHP + API + UI`.
 - `main` → ten sam workflow → dopiero po `success` startuje deploy.
@@ -20,12 +20,12 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Apply database schema | migracja `app/db/migrate.php` na MySQL 8.4 |
 | Role recheck tests | decyzje login i cron recheck na mocku Discord |
 | Discord events tests | DB/sync, DST, UPSERT, soft delete |
-| Macro events tests | normalizacja FF/TradingView, UTC, soft delete |
+| Macro events tests | normalizacja FF/TradingView, poprzedni pełny tydzień i pełne tygodnie +1…+3 (także cold-start), API −14/+35 dni, pusty/odfiltrowany feed, partial/error, zachowanie ostatnich dobrych danych |
 | Quotes tests | cache, TTL, fallback, E2E notowań |
 | Demo state tests | przesunięcie dat fixture demo, idempotencja, plany jako punkt zaczepienia |
 | Wearables E2E | OAuth2/PKCE, rotacja tokenów, UI, bezpieczeństwo |
-| API E2E | health, sesja, CSRF, stan, events, macro, admin, eksport |
-| UI E2E | 15 widoków, live, prop, makro, zapisy, odznaki |
+| API E2E | health, sesja, CSRF, stan, events, macro (kształt, impact i UTC), admin, eksport |
+| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia i poziomy, historyczna checklista przy zmianie konfiguracji, wymagany SL, import CSV bez fikcyjnych metryk/PnL, statystyki i niezależny kalendarz PnL |
 | Tax E2E | PIT-38, CSV/PDF, wpłaty/wypłaty |
 | PWA E2E | manifest, SW, instalacja, push, offline |
 | UI empty-state E2E | puste pola po sukcesie z `[]` |
@@ -137,21 +137,27 @@ Test nie używa prawdziwego Discorda ani danych klientów.
 
 Test nie wymaga Chrome ani PHP — chroni kontrakt adresów przed regresją przy zmianach w routingu.
 
-## Makro — 21 scenariuszy
+## Makro — zakres CI
 
-`npm run test:macro` uruchamia `tests/macro-events.test.php`:
+CI uruchamia `tests/macro-events.test.php`; AV-engineer nie uruchamia tej suite lokalnie:
 
 - normalizacja ForexFactory: High→3, Medium→2, Low/Holiday pomijane,
+- rzeczywiste nakładanie okna ForexFactory niedziela–niedziela UTC i TradingView: FF ma priorytet, a rekordy TV poza jego oknem pozostają aktywne,
 - konwersja oryginalnego ISO z offsetem na UTC,
 - stabilny `external_id` i opis z prognozą/poprzednim odczytem,
 - normalizacja TradingView: importance 1→3, 0→2, filtr szumu i mapowanie kraju na walutę,
 - UPSERT bez duplikatów,
 - soft delete po braku w feedzie i przywrócenie po powrocie,
-- okno źródła: FF czyści TV w swoim zakresie,
-- pusta lista nie czyści widoku,
-- `syncState` (status, świeżość, licznik).
+- poprzedni pełny tydzień oraz pełne tygodnie TradingView +1, +2 i +3; ostatnia sekunda tygodnia +3 wchodzi do wyniku, a wyłączna granica początku +4 już nie,
+- cold-start synchronizacji z pustą tabelą wypełnia wydarzenia z poprzedniego tygodnia, bieżącego tygodnia FF i tygodnia +3 TV,
+- okno API obejmuje poprzedni pełny tydzień przy nawigacji kalendarza oraz granice −14/+35 dni,
+- soft delete ograniczony do zakresu danego feedu; ForexFactory nie usuwa dalszych tygodni TradingView,
+- pusty sukces czyści wyłącznie własny zakres, a brak jawnych granic nie czyści danych,
+- poprawna lista feedu zawierająca wyłącznie rekordy odfiltrowane soft-delete'uje stare dane w swoim oknie; pusty obiekt JSON, nieprawidłowy kraj FF i niepoprawne `importance` TV są błędami i nie czyszczą dobrych danych,
+- błędy TradingView i ForexFactory w `sync()` zapisują `partial`/`error`, `lastError`, zachowują `lastSuccessAt` i ostatnie dobre rekordy,
+- `syncState` (status, świeżość, licznik i błąd częściowego feedu); UI sygnalizuje `partial`/`error`/stale bez czyszczenia danych.
 
-Test używa lokalnej bazy testowej; nie pobiera feedów z sieci.
+Suite używa bazy testowej skonfigurowanej przez workflow CI; nie pobiera feedów z sieci.
 
 ## API — 23 scenariusze
 
@@ -164,7 +170,7 @@ Test używa lokalnej bazy testowej; nie pobiera feedów z sieci.
 - callback ze złym `state` = 400,
 - `/api/me` z sesją,
 - `/api/events` z sesją,
-- `/api/macro-events` z sesją (kształt, impact 2/3, UTC ISO),
+- `/api/macro-events` z sesją (kształt, impact 2/3 i UTC ISO),
 - `/api/admin/events` bez uprawnień = 403,
 - GET/PUT state + MySQL,
 - round-trip `prop.challenges` i `selectedId` przez MySQL,
@@ -202,21 +208,27 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - live i konsultacja z `/api/events`,
 - harmonogram tygodnia i strip,
 - nawigacja 15 widoków (w tym prop),
-- plan dnia: lista rynku (w tym własna nazwa) i chipy biasu, poziomy, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie,
-- pulpit: podgląd salda portfela, skrót do „Konto i zasady” i edycja salda konta,
-- kalkulator: wybór portfela ustawia saldo/MM, wybór R:R 1:1–1:5 lub własny, SL/TP zgodne z wybranym stosunkiem,
-- statystyki: kalendarz PnL dla 7 dni, miesiąca i nawigacji okresu,
+- plan dnia: wiele niezależnych planów dla daty, wybór planu/rynku, poziomy wsparcia, oporu, płynności i POI, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie,
+- pulpit: rozwijana lista kont, podgląd salda tylko przy kompletnych danych, brak arbitralnych limitów przy wielu planach, skrót do „Konto i zasady”, edycja salda i etykieta „Kapitał startowy”,
+- ręczna transakcja: SL wymagany, R:R elastyczne bez stałego minimum, checklista bez minimalnego progu zapisu; ręczny wybór punktów zachowuje się przy edycji,
+- CSV: brak PnL bez danych do wyliczenia pomija wiersz; jawny PnL 0 zostaje break-even; brakujące MAE/MFE, opłaty, czas i checklista nie są zamieniane na zera ani wartości domyślne; eksport dziennika zachowuje MAE/MFE i nie zapisuje nieznanej opłaty jako zero,
+- metryki: puste MAE/MFE nie tworzą punktu na wykresie ani średniej; koszt „Za wczesne wyjście” pomija niezmierzone MFE/R,
+- zamknięcie tylko wynikiem: cena wyjścia pozostaje pusta, a R liczone jest z SL; pusty wynik jest traktowany jako transakcja otwarta, nie break-even,
+- dziennik: nowy wpis widoczny od razu i niezależnie od konta wyłączonego ze statystyk; filtry po zapisie są czyszczone,
+- pulpit: puste saldo nie pokazuje fałszywej zmiany −100%,
+- kalkulator: wybór portfela ustawia saldo/MM, gotowe R:R 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własne; SL/TP zgodne z wybranym stosunkiem,
+- statystyki: zakres ogólny pozostaje niezależny od kalendarza PnL przy zmianie obu zakresów; kalendarz PnL ma własny zakres 7/30 dni lub miesiąc i nawigację okresu,
 - akademia: „Dołącz” dopiero 15 min przed startem, własny czas przypomnienia, harmonogram tydzień/miesiąc, kategorie nagrań i odtwarzanie z linku, słownik z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady,
 - filtry dziennika, szczegóły transakcji,
 - nagłówek: brak technicznego statusu bazy, ukryty chip giełd bez połączeń, ticker z `/api/quotes`,
 - tryb ochronny: deterministyczne 2 straty dnia i obejście limitu,
-- kalkulator, statystyki, integracje MCP Mentora (adres, zakładki ChatGPT/Claude/Grok, kopiowanie, dostępność, allowlista Claude), akademia,
+- kalkulator, statystyki, integracje MCP Mentora (adres, zakładki ChatGPT/Claude/Grok, kopiowanie, status pill zgodny z lokalną konfiguracją `/api/mcp` — bez twierdzeń o zdalnej dostępności, kontrolowany fallback na błąd API, allowlista Claude), akademia,
 - prop: 9 szablonów, nowy challenge + 4 KPI,
 - prop: walidacja formularza i XSS w nazwie,
 - prop: alarm limitu + banner na pulpicie,
 - prop: archiwum, empty state i przywrócenie,
 - prop: zapis w MySQL, reload i usunięcie,
-- kalendarz + makro-widget z API, nawigacja tygodni makro (poprzedni/ten/następny/+2) i powrót, check-in, profil,
+- kalendarz + makro-widget z API, nawigacja tygodni makro (poprzedni, bieżący i +1…+3) i powrót, check-in, profil,
 - 8 odznak niezależnie (próg, podpowiedź, pusty stan, poziom z licznika),
 - nowa transakcja i zamknięcie,
 - przywrócenie stanu demo,
@@ -254,16 +266,15 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 
 To emulacja Chromium. Instalacja na fizycznym iPhone (Safari → Do ekranu początkowego) i powiadomienia iOS wymagają testu ręcznego; patrz „Czego testy nie obejmują”.
 
-## MCP 3.1 - OAuth, 79 narzędzi, zapis, zgoda w rozmowie, kosz, panel
+## MCP 3.2 - OAuth, zapis, zgoda w rozmowie, kosz, panel
 
 | Test | Zakres |
 | --- | --- |
 | `php tests/mcp-migration-upgrade.test.php` | CI-only symulacja schematu sprzed migracji 20261116, dodanie fingerprintów, kolacje case-sensitive i ponowne wykonanie migracji |
-| `php tests/mcp.test.php` | gotowość z brakującymi metrykami urządzenia, propozycje, case-sensitive klucze propozycji i decyzji, kod jednorazowy, zatwierdzenie bez kodu (`confirmed`), fingerprint idempotencji decyzji (akcja i payload, także replay legacy), zysk i break-even, konflikt rewizji, TTL, ochrona danych giełdowych, `target_missing`, izolacja, audyt |
-| `php tests/mcp-tools.test.php` | silniki bez HTTP i DB: Metrics (null vs zero, break-even), widoczność transakcji konta wyłączonego i zgodność filtrów analitycznych także dla legacy kont, zgodność z planem, ryzyko i tryb ochronny, raporty per grupa, kalkulator, PIT-38, odznaki, screeny |
-| `php tests/mcp-write.test.php` | rejestr 30 operacji zapisu (wszystkie bezpośrednie), 33 schematy wejścia z `idempotencyKey`, `confirmed` w `approve_proposal`, formuły check-inu i planu, walidacja set-upów, kosza i przywracania, zaostrzanie reguł ryzyka, prop, transakcje i screeny bez bazy |
-| `node tests/mcp-tools.e2e.mjs` | dashboard pobiera metryki aktywnego Oura tylko z `alphavault.health`, a bez scope nie ujawnia aktywnego urządzenia; brak metryk pozostaje `null`; transakcja na koncie `include=false` pozostaje na listach i w szczegółach; break-even, case-sensitive klucze i fingerprint idempotencji payloadu; pełne cykle 33 narzędzi zapisu, propozycje, kosz, konflikt `expectedRevision`, 6 workflow i spójność analityki |
-| `node tests/mcp.e2e.mjs` | OAuth 2.1 + PKCE, DCR, consent, token/refresh/revoke, jeden zakres `alphavault.read` daje 79 narzędzi, brak `alphavault.write`, cykl `create_trade`/`update_trade`/`close_trade`/`delete_trade`/`restore_deleted_record`, `approve_proposal` z `confirmed: true` bez kodu, `reject_proposal`, pilot, prompts, `MCP_WRITES_ENABLED=false/true` |
+| `php tests/mcp.test.php` | gotowość z brakującymi metrykami urządzenia, wymagany SL, propozycje, case-sensitive klucze propozycji i decyzji, kod jednorazowy, zatwierdzenie bez kodu (`confirmed`), fingerprint idempotencji decyzji (akcja i payload, także replay legacy), zysk i break-even, konflikt rewizji, TTL, ochrona danych giełdowych, `target_missing`, izolacja, audyt |
+| `php tests/mcp-tools.test.php` | silniki bez HTTP i DB: Metrics (null vs zero, break-even), puste MAE/MFE w API, dokładne dopasowanie rynku bez kolizji prefiksów, widoczność transakcji konta wyłączonego, zgodność z planem, ryzyko i tryb ochronny, raporty per grupa, kalkulator, PIT-38, odznaki, screeny |
+| `php tests/mcp-write.test.php` | rejestr 30 operacji zapisu (wszystkie bezpośrednie), 33 schematy wejścia z `idempotencyKey`, `confirmed` w `approve_proposal`, wymagany SL, ścisłe MAE/MFE, formuły check-inu i planu, walidacja setupów, kosza i przywracania, reguły ryzyka, prop, transakcje i screeny bez bazy |
+| `node tests/mcp-tools.e2e.mjs` | dashboard pobiera metryki Oura tylko z `alphavault.health`; jawna zgoda health-only nie obiecuje dostępu do tradingu ani zapisu; brak metryk pozostaje `null`; `include=false`, break-even, fingerprint idempotencji; pełne cykle 33 narzędzi, pominięte MFE zachowuje pomiar, jawne `null` go czyści, propozycje, kosz i workflow |
 | `node tests/mcp-login.e2e.mjs` | logowanie Discord na mocku: rola OK, brak roli, brak członkostwa, duplikat konta, `POST /oauth/authorize` z obcym `Origin` (303, bez `bad_origin`), decyzja zgody z obcego `Origin` i sfałszowany CSRF bez wydania kodu, `GET /oauth/connected` + `POST /oauth/connected/revoke` (`Origin: null` z poprawnym CSRF = 302 i unieważniony token, obcy `Origin` i zły CSRF = 403) |
 | `node tests/mcp-ui.e2e.mjs` | panel: dwie propozycje, diff, opcjonalny kod do rozmowy, approve, reject, reload, trwałość i brak błędów JS |
 | `node tests/prop-parity.mjs` | parytet `PropChallengeService.php` z `public/js/prop.js` na wspólnych fixtures |
@@ -322,8 +333,9 @@ Naprawa istniejących plików: `node scripts/fix-mojibake.mjs --write <plik>`. N
 - prop challenge,
 - Discord DB/sync,
 - makro DB/sync,
+- przesuwanie dat fixture demo,
+- UI tradingowe: wiele planów dnia, dziennik/checklista/SL, rozwijane konta i niezależne zakresy statystyk PnL,
 - notowania,
-- prop challenge,
 - urządzenia (API + UI + konfiguracja),
 - API e2e,
 - izolacja użytkowników,
@@ -377,4 +389,4 @@ npm run test:ui:integrations   # Playwright: formularze i dziennik
 
 Oba kroki są częścią `.github/workflows/ci.yml`. Lokalne uruchomienie jest dozwolone tylko dla developera i nie jest dowodem w raporcie AV-engineer.
 
-Zakres: OKX read-only i odrzucenie handlu, BingX `apiPermissions`, WEEX akceptacja klucza z handlem + rekonstrukcja fills, MetaApi `investorMode` i odrzucenie hasła z handlem, EA kod parowania + ingest + deduplikacja, UI formularze i licznik transakcji.
+Zakres: OKX read-only i odrzucenie handlu, BingX `apiPermissions`, WEEX akceptacja klucza z handlem + rekonstrukcja fills, MetaApi `investorMode` i odrzucenie hasła z handlem, EA kod parowania + ingest + deduplikacja, UI formularze i licznik transakcji. Brak PnL w źródle pomija transakcję zamiast tworzyć break-even; jawne zero PnL i zerowa opłata pozostają znane (WEEX break-even po opłatach, BingX wynik `0` przy nieznanych opłatach i czasie).

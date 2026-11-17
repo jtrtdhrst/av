@@ -249,11 +249,10 @@ final class PerformanceService
         }
         $reasons = [];
         foreach ($byDate as $date => $dayTrades) {
-            $plan = $this->plans->planFor($state, $date);
             usort($dayTrades, static fn (array $a, array $b): int => strcmp((string) ($a['date'] ?? ''), (string) ($b['date'] ?? '')));
-            $sequence = 0;
             foreach ($dayTrades as $trade) {
-                $sequence++;
+                $plan = $this->plans->planForTrade($state, $trade);
+                $sequence = $this->plans->tradeSequence($state, $trade, $plan, true);
                 $alignment = $this->plans->alignment($state, $trade, $plan, $sequence);
                 if (!$alignment['determined']) {
                     $undetermined[] = $trade;
@@ -353,28 +352,39 @@ final class PerformanceService
             );
         }
 
-        $perDay = [];
-        $plans = $this->plans->plans($state);
+        $perPlan = [];
+        $planById = [];
         foreach ($trades as $trade) {
             $date = Dates::dateKey((string) ($trade['date'] ?? ''));
             if ($date === null) {
                 continue;
             }
-            $perDay[$date] = ($perDay[$date] ?? 0) + 1;
+            $plan = $this->plans->planForTrade($state, $trade);
+            if ($plan === null) {
+                continue;
+            }
+            $planId = (string) ($plan['id'] ?? $date);
+            $key = $date . '#' . $planId;
+            $perPlan[$key] = ($perPlan[$key] ?? 0) + 1;
+            $planById[$key] = $plan;
         }
         $overPlan = [];
-        foreach ($perDay as $date => $count) {
-            $plan = $plans[$date] ?? null;
+        foreach ($perPlan as $key => $count) {
+            [$date, $planId] = explode('#', $key, 2);
+            $plan = $planById[$key] ?? null;
             $maxTrades = $plan !== null ? $this->plans->planMaxTrades($plan) : null;
             if ($maxTrades !== null && $count > $maxTrades) {
-                $overPlan[$date] = ['count' => $count, 'limit' => $maxTrades];
+                $overPlan[$key] = ['date' => $date, 'planId' => $planId, 'count' => $count, 'limit' => $maxTrades];
             }
         }
-        if (count($overPlan) >= 2) {
+        $overPlanDates = array_values(array_unique(array_column(array_values($overPlan), 'date')));
+        if (count($overPlanDates) >= 2) {
             $ids = [];
             foreach ($trades as $trade) {
                 $date = Dates::dateKey((string) ($trade['date'] ?? ''));
-                if ($date !== null && isset($overPlan[$date])) {
+                $plan = $this->plans->planForTrade($state, $trade);
+                $key = $date !== null && $plan !== null ? $date . '#' . (string) ($plan['id'] ?? $date) : '';
+                if ($key !== '' && isset($overPlan[$key])) {
                     $ids[] = $trade;
                 }
             }
@@ -382,8 +392,8 @@ final class PerformanceService
             $items[] = $this->pattern(
                 'over_trading',
                 'Przekraczanie limitu transakcji z planu',
-                'W ' . count($overPlan) . ' dniach liczba transakcji przekroczyła limit z planu dnia. Wynik netto tych dni: ' . $metrics['net'] . ' ' . Metrics::CURRENCY . '.',
-                ['days' => array_keys($overPlan), 'trades' => count($ids), 'net' => $metrics['net']],
+                'W ' . count($overPlanDates) . ' dniach liczba transakcji przekroczyła limit planu dla danego rynku. Wynik netto tych dni: ' . $metrics['net'] . ' ' . Metrics::CURRENCY . '.',
+                ['days' => $overPlanDates, 'plans' => array_values($overPlan), 'trades' => count($ids), 'net' => $metrics['net']],
                 count($ids),
                 $window['range'],
                 $metrics

@@ -117,9 +117,70 @@
     ['plans', 'trades', 'setups', 'accounts', 'flows', 'checkins', 'chat', 'overrides', 'recordings'].forEach((k) => {
       if (!Array.isArray(s[k]) && k !== 'plans') s[k] = demo[k];
     });
-    if (!s.plans || typeof s.plans !== 'object') s.plans = {};
+    const rawHasPlans = !!raw && typeof raw === 'object' && Object.prototype.hasOwnProperty.call(raw, 'plans');
+    const plansInput = rawHasPlans ? raw.plans : s.plans;
+    const planSource = plansInput && typeof plansInput === 'object' ? plansInput : {};
+    const normalizedPlans = {};
+    const planRecords = [];
+    Object.entries(planSource).forEach(([rawKey, value]) => {
+      const entries = Array.isArray(value) ? value : [value];
+      entries.forEach((plan) => {
+        if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return;
+        const keyDate = String(rawKey).match(/^\d{4}-\d{2}-\d{2}/)?.[0] || '';
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(plan.date || '')) ? String(plan.date) : keyDate;
+        if (!date) return;
+        const marketSlug = String(plan.market || 'market').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'market';
+        const id = String(plan.id || ('legacy-' + date + '-' + marketSlug + '-' + (planRecords.length + 1)));
+        const levels = Array.isArray(plan.levels) ? plan.levels.map((level) => {
+          if (!level || typeof level !== 'object') return level;
+          const type = String(level.type || '').trim().toLowerCase();
+          return {
+            ...level,
+            price: String(level.price ?? level.value ?? ''),
+            type: ['liquidity', 'płynność'].includes(type) ? 'Liquidity'
+              : type === 'poi' ? 'POI'
+                : ['resistance', 'opór', 'opor'].includes(type) ? 'Opór'
+                    : ['support', 'wsparcie'].includes(type) ? 'Wsparcie'
+                      : level.type || 'Wsparcie'
+          };
+        }) : [];
+        const normalized = { ...plan, id, date, levels };
+        planRecords.push({ rawKey, date, id, plan: normalized });
+      });
+    });
+    const recordsByDate = new Map();
+    planRecords.forEach((record) => {
+      if (!recordsByDate.has(record.date)) recordsByDate.set(record.date, []);
+      recordsByDate.get(record.date).push(record);
+    });
+    const usedPlanIds = new Set();
+    recordsByDate.forEach((records, date) => {
+      const primaryIndex = records.findIndex((record) => record.rawKey === date);
+      if (primaryIndex > 0) records.unshift(records.splice(primaryIndex, 1)[0]);
+      records.forEach((record, index) => {
+        let id = record.id;
+        if (usedPlanIds.has(id)) {
+          const baseId = id;
+          let suffix = 2;
+          do { id = baseId + '-' + suffix++; } while (usedPlanIds.has(id));
+        }
+        let storageKey = index === 0 ? date : date + '#' + id;
+        while (Object.prototype.hasOwnProperty.call(normalizedPlans, storageKey)) {
+          const baseId = id;
+          let suffix = 2;
+          do { id = baseId + '-' + suffix++; } while (usedPlanIds.has(id));
+          storageKey = date + '#' + id;
+        }
+        usedPlanIds.add(id);
+        normalizedPlans[storageKey] = { ...record.plan, id, date };
+      });
+    });
+    s.plans = normalizedPlans;
     if (!s.recordings || !Array.isArray(s.recordings)) s.recordings = [];
     if (!s.settings) s.settings = {};
+    if (Array.isArray(s.settings.checklist)) {
+      s.settings.checklist = s.settings.checklist.map((item) => item === 'R:R ≥ 2' ? 'R:R zgodne z planem' : item);
+    }
     const mins = Number(s.settings.liveReminderMinutes);
     s.settings.liveReminderMinutes = [5, 15, 30, 60].includes(mins) ? mins : 15;
     if (!s.prop || typeof s.prop !== 'object') s.prop = { challenges: [], selectedId: null };
@@ -135,6 +196,29 @@
     const legacyTax = Number(raw?.tax?.version || 0) < AV.TAX_VERSION;
     const state = AV.normalize(raw, AV.buildEmpty(), { migrateDemoSeed: !opts.isDemo && legacyTax });
     return opts.isDemo ? state : AV.cleanLegacyDemoSeed(state);
+  };
+
+  AV.allPlans = (state = AV.state) => Object.entries(state?.plans || {}).flatMap(([key, value], index) => {
+    const entries = Array.isArray(value) ? value : [value];
+    return entries.filter((plan) => plan && typeof plan === 'object' && !Array.isArray(plan)).map((plan, planIndex) => {
+      const date = String(plan.date || key).slice(0, 10);
+      const marketSlug = String(plan.market || 'market').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'market';
+      return { ...plan, date, id: String(plan.id || ('legacy-' + date + '-' + marketSlug + '-' + (index + planIndex + 1))) };
+    });
+  });
+  AV.plansForDate = (state, date) => AV.allPlans(state).filter((plan) => plan.date === date);
+  AV.planById = (state, id) => id == null ? null : AV.allPlans(state).find((plan) => plan.id === String(id)) || null;
+  AV.storePlan = (state, plan) => {
+    if (!state.plans || typeof state.plans !== 'object') state.plans = {};
+    const date = String(plan.date || '');
+    if (!plan.id) plan.id = AV.uid('plan');
+    let key = Object.keys(state.plans).find((candidate) => state.plans[candidate]?.id === plan.id);
+    if (!key) {
+      key = Object.prototype.hasOwnProperty.call(state.plans, date) ? date + '#' + plan.id : date;
+      while (Object.prototype.hasOwnProperty.call(state.plans, key) && state.plans[key]?.id !== plan.id) key = date + '#' + AV.uid('plan');
+    }
+    state.plans[key] = { ...plan, id: String(plan.id), date };
+    return state.plans[key];
   };
 
   AV.load = () => {
@@ -465,6 +549,7 @@
     } catch (err) {
       // Błąd API zachowuje ostatni dobry zestaw; sukces z [] czyści widok.
       AV.api.macroError = err.message;
+      if (AV.renderCalendar) AV.renderCalendar();
       return false;
     }
   };
@@ -852,11 +937,17 @@
     const names = AV.includedAccounts(state);
     return state.trades.filter((t) => !t.account || names.includes(t.account));
   };
-  AV.closedTrades = (state) => AV.includedTrades(state).filter((t) => t.result != null);
-  AV.openTrades = (state) => AV.includedTrades(state).filter((t) => t.result == null);
+  const hasKnownTradeResult = (trade) => {
+    if (trade?.result == null) return false;
+    if (typeof trade.result === 'string' && trade.result.trim() === '') return false;
+    return Number.isFinite(Number(trade.result));
+  };
+  AV.hasKnownTradeResult = hasKnownTradeResult;
+  AV.closedTrades = (state) => AV.includedTrades(state).filter(hasKnownTradeResult);
+  AV.openTrades = (state) => AV.includedTrades(state).filter((t) => !hasKnownTradeResult(t));
 
   AV.rangeTrades = (state, days) => {
-    const all = AV.includedTrades(state).filter((t) => t.result != null);
+    const all = AV.includedTrades(state).filter(hasKnownTradeResult);
     if (!days || days === 'all') return all;
     const from = AV.startOfDay(AV.addDays(new Date(), -days + 1));
     return all.filter((t) => new Date(t.date) >= from);
@@ -901,41 +992,73 @@
       });
       return Object.values(map).sort((a, b) => b.net - a.net);
     };
-    const full = trades.filter((t) => t.checklist >= (t.checkTotal || 7));
-    const part = trades.filter((t) => t.checklist < (t.checkTotal || 7));
+    const checklistTrades = trades.filter((t) => t.checklist != null);
+    const checklistTotal = (trade) => Number(trade.checkTotal) > 0 ? Number(trade.checkTotal) : 7;
+    const full = checklistTrades.filter((t) => t.checklist >= checklistTotal(t));
+    const part = checklistTrades.filter((t) => t.checklist < checklistTotal(t));
     const slTrades = trades.filter((t) => t.sl && t.sl !== 'brak');
     const planTrades = trades.filter((t) => AV.tradePlanMatch(state, t));
+    const finiteValue = (value) => {
+      if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    };
+    const optionalMetric = (value) => {
+      const number = finiteValue(value);
+      return number == null || number < 0 ? null : number;
+    };
+    const feeValues = trades.map((trade) => finiteValue(trade.fee));
+    const fees = trades.length > 0 && feeValues.every((value) => value !== null)
+      ? feeValues.reduce((sum, value) => sum + value, 0)
+      : null;
     const errMap = {};
+    let unpricedEarlyExits = 0;
     trades.forEach((t) => {
       (t.errors || []).forEach((e) => {
+        const positiveEarlyExit = e === 'Za wczesne wyjście' && Number(t.result) > 0;
+        const realizedR = finiteValue(t.r);
+        const mfe = optionalMetric(t.mfe);
+        if (positiveEarlyExit && (
+          realizedR == null || !Number.isFinite(realizedR) || realizedR === 0 ||
+          mfe == null || !Number.isFinite(mfe) || mfe < 0
+        )) {
+          unpricedEarlyExits++;
+          return;
+        }
         errMap[e] = errMap[e] || { key: e, n: 0, cost: 0 };
         errMap[e].n++;
-        if (e === 'Za wczesne wyjście' && t.result > 0 && t.r != null) {
-          const risk = Math.abs(t.result / t.r);
-          errMap[e].cost += t.result - t.mfe * risk;
+        if (positiveEarlyExit) {
+          const risk = Math.abs(Number(t.result) / realizedR);
+          errMap[e].cost += Number(t.result) - mfe * risk;
         } else {
-          errMap[e].cost += t.result;
+          errMap[e].cost += Number(t.result) || 0;
         }
       });
     });
     const errors = Object.values(errMap).sort((a, b) => a.cost - b.cost);
     const avg = (arr, f) => {
-      const values = arr.map(f).filter((v) => v != null && Number.isFinite(Number(v)));
-      return values.length ? values.reduce((s, v) => s + Number(v), 0) / values.length : null;
+      const values = arr.map((trade) => finiteValue(f(trade))).filter((value) => value != null);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     };
+    const measuredWins = wins.filter((trade) =>
+      optionalMetric(trade.mae) != null && optionalMetric(trade.mfe) != null &&
+      finiteValue(trade.r) != null && Number(trade.r) !== 0
+    );
     return {
       n, wins: wins.length, losses: losses.length, winRate: n ? wins.length / n * 100 : 0,
       net, gp, gl, pf: gl ? gp / gl : gp ? 99 : 0, expR, avgWin, avgLoss,
       maxDD, maxDDpct, curve, byGrade, bySession: group('session'), byEmotion: group('emotion'),
-      bySetup: group('setup'), errors,
+      bySetup: group('setup'), errors, unpricedEarlyExits,
       withSL: n ? slTrades.length / n * 100 : 0,
       withSLCount: slTrades.length,
       planRate: n ? planTrades.length / n * 100 : 0,
       planCount: planTrades.length,
-      fees: trades.reduce((s, t) => s + (Number(t.fee) || 0), 0),
+      fees,
       full: { n: full.length, wr: full.length ? full.filter((t) => t.result > 0).length / full.length * 100 : 0, net: full.reduce((s, t) => s + t.result, 0) },
       part: { n: part.length, wr: part.length ? part.filter((t) => t.result > 0).length / part.length * 100 : 0, net: part.reduce((s, t) => s + t.result, 0) },
-      avgMaeWin: avg(wins, (t) => t.mae), avgMfeWin: avg(wins, (t) => t.mfe), avgExitR: avg(wins, (t) => t.r),
+      avgMaeWin: avg(measuredWins, (t) => optionalMetric(t.mae)),
+      avgMfeWin: avg(measuredWins, (t) => optionalMetric(t.mfe)),
+      avgExitR: avg(measuredWins, (t) => t.r), maeSampleCount: measuredWins.length,
       avgDurWin: avg(wins, (t) => t.durationMin), avgDurLoss: avg(losses, (t) => t.durationMin),
       shiftedSL: trades.filter((t) => (t.errors || []).includes('Przesunięty SL')).length,
       daily: AV.dailyMap(trades)
@@ -1099,9 +1222,9 @@
     const today = AV.todayStats(state);
     const lock = AV.lockInfo(state);
     const todayKey = AV.dateKey(new Date());
-    const todayPlan = (state.plans || {})[todayKey];
+    const todayPlans = AV.plansForDate(state, todayKey);
     const todayPlanTrades = today.arr;
-    const planOK = todayPlan ? todayPlanTrades.filter((t) => AV.tradePlanMatch(state, t)).length : 0;
+    const planOK = todayPlans.length ? todayPlanTrades.filter((t) => AV.tradePlanMatch(state, t)).length : 0;
     const afterLoss = [];
     closed.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((t, i, arr) => {
       if (i === 0) return;
@@ -1126,8 +1249,10 @@
       if (t.result > 0) hours[bucket].w++;
     });
     const worstHour = Object.entries(hours).sort((x, y) => (x[1].w / x[1].n) - (y[1].w / y[1].n))[0];
-    const full = closed.filter((t) => t.checklist >= 7);
-    const part = closed.filter((t) => t.checklist < 7);
+    const checklistTrades = closed.filter((t) => t.checklist != null && t.checklist !== '');
+    const checklistTotal = (trade) => Number(trade.checkTotal) > 0 ? Number(trade.checkTotal) : 7;
+    const full = checklistTrades.filter((t) => Number(t.checklist) >= checklistTotal(t));
+    const part = checklistTrades.filter((t) => Number(t.checklist) < checklistTotal(t));
     const events = AV.buildEvents();
     const next = events.filter((e) => e.imp === 3 && new Date(e.date) > new Date()).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
     const macroDays = new Set(events.filter((e) => e.imp === 3).map((e) => AV.dateKey(new Date(e.date))));
@@ -1343,33 +1468,65 @@
 
   /* ---------- plan dnia ---------- */
   AV.planTemplate = (dateKey) => ({
-    date: dateKey, market: '', bias: '', why: '',
+    id: null, date: dateKey, market: '', bias: '', why: '',
     levels: [{ type: 'Opór', price: '', note: '' }],
     ifMain: '', thenMain: '', ifAlt: '', thenAlt: '',
     risk: '', maxTrades: '', until: '', notDo: '',
     approvedAt: null
   });
+  AV.marketMatchesPlan = (plan, pair) => {
+    if (!plan) return false;
+    const normalize = (value) => {
+      const raw = String(value || '').trim().toUpperCase()
+        .replace(/\.(?:R|RAW|PRO|ECN|CASH|SPOT|M)$/i, '')
+        .replace(/[_-]/g, '/');
+      const parts = raw.split('/').filter(Boolean);
+      if (parts.length > 1) {
+        if (parts[1] === 'SWAP' || parts[1] === 'PERP') return parts[0];
+        return parts[0] + '/' + parts[1];
+      }
+      const flat = parts[0] || raw;
+      for (const quote of ['USDT', 'USDC', 'BUSD', 'FDUSD', 'USD', 'EUR', 'GBP', 'JPY', 'PLN', 'BTC', 'ETH']) {
+        if (flat.endsWith(quote) && flat.length > quote.length) {
+          return flat.slice(0, -quote.length) + '/' + quote;
+        }
+      }
+      return flat;
+    };
+    const normalizedPair = normalize(pair);
+    if (!normalizedPair) return false;
+    const pairBase = normalizedPair.split('/')[0];
+    const markets = [
+      ...(Array.isArray(plan.markets) ? plan.markets : []),
+      plan.market
+    ].map((market) => String(market || '').trim().toUpperCase()).filter(Boolean);
+    return markets.some((market) => {
+      const normalizedMarket = normalize(market);
+      return normalizedMarket === normalizedPair ||
+        (!normalizedMarket.includes('/') && normalizedMarket === pairBase);
+    });
+  };
   AV.planMatchesTrade = (plan, pair, dir) => {
-    if (!plan || !plan.approvedAt) return false;
-    const market = String(plan.market || '').toUpperCase();
-    const base = String(pair || '').toUpperCase().split('/')[0];
-    if (!market || !base || market !== base) return false;
+    if (!plan || !plan.approvedAt || !AV.marketMatchesPlan(plan, pair)) return false;
     if (plan.bias === 'long') return dir === 'l';
     if (plan.bias === 'short') return dir === 's';
     return false;
   };
   AV.tradePlanMatch = (state, trade) => {
     if (!trade) return false;
-    const plan = (state.plans || {})[AV.dateKey(new Date(trade.date))];
-    return AV.planMatchesTrade(plan, trade.pair, trade.dir);
+    const plans = AV.plansForDate(state, AV.dateKey(new Date(trade.date)));
+    if (plans.length === 0) return false;
+    if (plans.length === 1) return AV.planMatchesTrade(plans[0], trade.pair, trade.dir);
+    const marketPlans = plans.filter((plan) => AV.marketMatchesPlan(plan, trade.pair));
+    return marketPlans.length === 1 && AV.planMatchesTrade(marketPlans[0], trade.pair, trade.dir);
   };
   AV.planAdherence = (state) => {
     const days = [];
     let approved = 0;
     for (let i = 1; i <= 5; i++) {
       const d = AV.addDays(new Date(), -i);
-      const p = (state.plans || {})[AV.dateKey(d)];
-      const ok = !!(p && p.approvedAt);
+      const p = AV.plansForDate(state, AV.dateKey(d));
+      const ok = p.some((plan) => plan.approvedAt);
       if (ok) approved++;
       days.push({ d, ok });
     }

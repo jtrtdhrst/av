@@ -38,7 +38,7 @@ scripts/           # deploy produkcyjny i generator dokumentacji
 
 ## Development lokalny
 
-**Weryfikacja i wdrożenie idą wyłącznie przez GitHub Actions.** AV-engineer nie uruchamia lokalnie testów, serwera PHP, MySQL ani Playwright. Poniższe polecenia są dla człowieka-developera i nie są dowodem w raporcie.
+**Weryfikacja i wdrożenie idą wyłącznie przez GitHub Actions.** AV-engineer nie uruchamia lokalnie testów, serwera PHP, MySQL ani Playwright. Poniższe nazwy opisują suite i ich zakres; AV-engineer nie wykonuje tych poleceń lokalnie, a dowodem jest wynik CI.
 
 Wymagania: PHP 8.3 z `pdo_mysql`, `curl`, `mbstring`; MySQL 8.x/MariaDB; Node.js 24 do testów.
 
@@ -54,20 +54,21 @@ npm ci
 npm test                 # API: 23 scenariusze
 npm run test:prop        # silnik prop challenge: 27 scenariuszy
 npm run test:router      # adresy podstron (hash routing): 18 scenariuszy
-npm run test:ui          # UI: 15 widoków, Akademia, kalkulator, kalendarz PnL, makro
+npm run test:ui          # UI: rozwijane konta, wiele planów, historyczna checklista bez fikcyjnych wyborów, wymagany SL, elastyczne R:R, result-only close bez fabrykowanej ceny wyjścia, pusty wynik jako otwarty, eksport CSV z MAE/MFE, dziennik niezależny od statystyk
 npm run test:tax         # PIT-38: 8 scenariuszy (MySQL + UI)
 npm run test:isolation   # izolacja użytkowników: 9 scenariuszy
 npm run test:pwa         # PWA mobile: manifest, offline, brak przepełnienia 390/1024 px
 npm run test:ui:empty    # puste pola: 12 scenariuszy (osobny serwer)
 npm run test:events      # Discord DB/sync + DST: 24 scenariusze
-npm run test:macro       # kalendarz makro DB/sync: 21 scenariuszy
+npm run test:macro       # makro DB/sync: FF, poprzedni pełny tydzień + TradingView +1…+3 także cold-start, priorytet FF, partial/error, retencja, API −14/+35 dni
 npm run test:quotes      # notowania rynkowe: 14 scenariuszy
 npm run test:demo-state  # daty fixture demo: 15 scenariuszy
 npm run test:roles       # rola: login + cron recheck: 18 scenariuszy
 npm run test:wearables   # urządzenia zdrowotne API + UI: 42 scenariusze
 npm run test:mcp          # MCP 3.2: OAuth, 79 narzędzi w jednym zakresie, create→delete→restore (MySQL + PHP)
 npm run test:mcp:tools    # MCP: 79/79 wywołań narzędzi, odizolowane fixture'y, daty/paginacja, zapisy, analityka i workflow
-npm run test:mcp:write    # MCP: rejestr operacji, routing zgody, schematy i formuły bez bazy
+npm run test:mcp:write    # MCP: operacje zapisu, wymagany SL, MFE pominięte/null, wiele planów, round-trip poziomów
+npm run test:mcp:contract # MCP: selektory, statusy i zgodność planów, filtry statystyk oraz checklisty
 npm run test:mcp:login    # mock Discord: rola, brak roli, duplikat konta
 npm run test:mcp:ui       # panel propozycji: diff, kod do rozmowy, approve, reject, reload
 npm run test:mcp:prop     # parytet PHP ↔ JS silnika prop challenge
@@ -131,7 +132,7 @@ Ręcznie: `/usr/bin/php /home/platne/serwer445119/public_html/alphavault.pl/.app
 
 ## CI/CD
 
-- `ci.yml`: dokumentacja, PHP lint, MySQL 8.4, migracja, Discord DB/sync, API e2e, UI e2e, empty-state.
+- `ci.yml`: dokumentacja, PHP lint, MySQL 8.4, migracja, Discord DB/sync, makro z pełnymi tygodniami +1…+3, API e2e, UI e2e (plany, dziennik, konta, PnL i nawigacja makro), empty-state.
 - `monitor-production.yml`: co 15 min health + `sync.status`/`stale`.
 - `deploy-alphavault.yml`: lint, SSH, backup, rsync, migracja, health check.
 - `main` jest chroniony: wymagany PR i check `PHP + API + UI`, linear history, `enforce_admins`, bez force push/delete.

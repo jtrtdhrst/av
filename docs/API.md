@@ -1,6 +1,6 @@
 # Alpha Vault — API i logowanie
 
-Wersja: **3.9.0** · backend: **PHP 8.3** · baza: **MySQL/MariaDB** · sesje: **HttpOnly cookie** · OAuth: **Discord, Oura**
+Wersja backendu: **4.2.0** · PHP: **8.3** · baza: **MySQL/MariaDB** · sesje: **HttpOnly cookie** · OAuth: **Discord, Oura**
 
 Aplikacja jest serwowana z tego samego originu co API. Frontend zapisuje cały stan użytkownika przez `PUT /api/state`; `localStorage` jest tylko fallbackiem offline i jest namespace'owany po `user.id` (`alphavault.state.v3.<id>.*`).
 
@@ -110,7 +110,7 @@ Publiczny. Sprawdza MySQL i konfigurację.
 {
   "ok": true,
   "service": "alpha-vault",
-  "version": "3.9.2",
+  "version": "4.2.0",
   "db": { "ok": true, "version": "11.8.6-MariaDB", "latencyMs": 1 },
   "uptime": 123,
   "now": "2026-11-12T14:30:00Z",
@@ -268,7 +268,7 @@ Każde wydarzenie zawiera m.in. `id`, `url` (kanoniczny link `https://discord.co
 
 ### 3.9. `GET /api/macro-events`
 
-Wymaga sesji. Zwraca publikacje makro z MySQL, zsynchronizowane przez CRON z publicznych feedów (bieżący tydzień: ForexFactory; następny tydzień: TradingView), oraz stan synchronizacji. Zakres: od 8 dni wstecz do 21 dni do przodu.
+Wymaga sesji. Zwraca publikacje makro z MySQL oraz stan synchronizacji. CRON pobiera bieżący tydzień ForexFactory w oknie niedziela 00:00–następna niedziela 00:00 UTC oraz poprzedni pełny tydzień i pełne tygodnie +1, +2 i +3 TradingView, liczone od poniedziałku 00:00 UTC; końce okien są wyłączne. Dzięki pobieraniu poprzedniego tygodnia także cold-start pustej bazy od razu wypełnia historię. Przy nakładaniu okien ForexFactory ma priorytet, a wydarzenia TradingView poza jego oknem są zachowywane. API filtruje rekordy od 14 dni wstecz do około 35 dni naprzód; górna granica jest limitem odpowiedzi, nie gwarancją dostępności feedu poza pełnym tygodniem TV +3. Błąd TradingView zachowuje ostatnie dobre wydarzenia i zwraca `sync.status=partial`; błąd ForexFactory zwraca `sync.status=error`. Oba stany udostępniają `sync.lastError` i nie usuwają poprzednich danych. UI sygnalizuje synchronizację częściową lub nieudaną.
 
 ```json
 {
@@ -289,13 +289,14 @@ Wymaga sesji. Zwraca publikacje makro z MySQL, zsynchronizowane przez CRON z pub
   "sync": {
     "status": "success",
     "lastSuccessAt": "2026-11-12T21:45:00Z",
+    "lastError": null,
     "eventsCount": 42,
     "stale": false
   }
 }
 ```
 
-`impact`: `3` = ★★★, `2` = ★★. `startAt` jest w UTC ISO; `startIso` zachowuje oryginalny offset źródła. `status`: `never`, `running`, `success`, `partial` (bieżący tydzień OK, następny niedostępny) lub `error`. Sukces z `events: []` czyści widok; błąd API po stronie UI zachowuje ostatni dobry zestaw.
+`impact`: `3` = ★★★, `2` = ★★. `startAt` jest w UTC ISO; `startIso` zachowuje oryginalny offset źródła. `status`: `never`, `running`, `success`, `partial` (ForexFactory dla bieżącego tygodnia zapisany, ale feed TradingView dla poprzedniego tygodnia lub tygodni +1…+3 nie jest dostępny) lub `error`; `lastError` zawiera szczegół błędu synchronizacji albo `null`. Sukces z `events: []` czyści jawne okno; błąd API po stronie UI zachowuje ostatni dobry zestaw i wyświetla ostrzeżenie.
 
 ### 3.10. `GET /api/admin/events`
 
@@ -515,9 +516,13 @@ Panel MCP: status, scope i oczekujące propozycje zmian.
 
 - Wymaga sesji panelu (`401` bez logowania).
 - Zwraca `{endpoint, enabled, writesEnabled, scopes, proposals[], proposalCount, audit[]}`.
-- `scopes` odzwierciedla zakresy serwera MCP: `alphavault.read` (wszystkie 79 narzędzi: 46 odczytu
-  i 33 zapisu) oraz `alphavault.health` (dane zdrowotne, osobna zgoda). Nie ma zakresu
-  `alphavault.write`; wszystkie operacje zapisu działają bezpośrednio, a `propose_change`/`approve_proposal` są opcjonalne.
+- `enabled` i `writesEnabled` są konfiguracją prezentowaną przez panel Alpha Vault; endpoint nie sprawdza zdalnej dostępności ani konfiguracji `mcp.alphavault.pl`.
+- `scopes` odzwierciedla zakresy serwera MCP: `alphavault.read` (46 narzędzi odczytu oraz — gdy
+  `MCP_WRITES_ENABLED=true` — 33 narzędzia zapisu) oraz `alphavault.health` (dane fizjologiczne
+  urządzeń, osobna zgoda). Nie ma zakresu `alphavault.write`; przy włączonym zapisie 30 operacji
+  działa bezpośrednio, a `propose_change`/`approve_proposal` są opcjonalne.
+- Odmowa jedynego żądanego scope’u `alphavault.health` kończy autoryzację błędem `access_denied`;
+  brak zgody nie jest zastępowany zakresem `alphavault.read`.
 - `proposals` zawiera `proposalId`, `kind`, `target`, `baseRevision`, `diffHash`, `changes`,
   `before`, `after`, `diff`, `status`, `canApprove`, `approvalCodeActive`, `approvalCodeExpiresAt`,
   `createdAt`, `expiresAt`, `clientName`.
@@ -537,7 +542,9 @@ Zatwierdzenie lub odrzucenie propozycji MCP.
 - `reject` nie zmienia `user_states`.
 - Błędy: `not_found` (404), `proposal_closed` (409), `proposal_expired` (409),
   `revision_conflict` (409), `state_too_large` (413).
-- Endpoint nie jest dostępny przez MCP. Zatwierdzanie przez agenta wymaga kodu z 3.23.
+- Endpoint nie jest dostępny przez MCP. `approve_proposal` wymaga `confirmed: true` i zgodnego `diffHash`;
+  klient powinien wysłać flagę po zgodzie użytkownika, ale serwer nie analizuje treści rozmowy.
+  Kod z 3.23 jest opcjonalny i jest sprawdzany, gdy agent go poda.
 
 ### 3.23. `POST /api/mcp/proposals/{id}/approval-code`
 

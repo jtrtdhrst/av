@@ -92,11 +92,12 @@
       const res = await AV.apiFetch('/api/mcp');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      const label = !data.enabled ? 'MCP · WYŁĄCZONY' : data.writesEnabled ? 'MCP · ZAPIS' : 'MCP · TYLKO ODCZYT';
+      const writesEnabled = data.writesEnabled === true;
+      const label = writesEnabled ? 'MCP · ZAPIS' : 'MCP · TYLKO ODCZYT';
       el.innerHTML = '<span class="mcp-dot"></span>' + label;
-      el.dataset.state = data.enabled ? (data.writesEnabled ? 'write' : 'read') : 'off';
+      el.dataset.state = writesEnabled ? 'write' : 'read';
     } catch {
-      el.innerHTML = '<span class="mcp-dot"></span>MCP · STATUS NIEDOSTĘPNY';
+      el.innerHTML = '<span class="mcp-dot"></span>MCP · KONFIGURACJA NIEDOSTĘPNA';
       el.dataset.state = 'unknown';
     }
   };
@@ -342,8 +343,10 @@
   AV.savePlanDraft = () => {
     if (!AV.state) return null;
     const p = AV.readPlanForm();
-    AV.planStore()[AV.planDate] = p;
+    AV.planId = p.id;
+    AV.storePlan(AV.state, p);
     AV.save();
+    AV.renderPlan();
     AV.renderPlanSide();
     return p;
   };
@@ -361,8 +364,11 @@
   };
   AV.commitPlan = async (p, message) => {
     if (!AV.state) return false;
-    AV.planStore()[AV.planDate] = p;
+    if (!p.id) p.id = AV.planId || AV.uid('plan');
+    AV.planId = p.id;
+    AV.storePlan(AV.state, p);
     AV.saveNow();
+    AV.renderPlan();
     AV.renderPlanSide();
     if (AV.api.pushing) await AV.waitForPushIdle();
     let saved = await AV.pushStateImmediate();
@@ -388,8 +394,24 @@
       } else {
         AV.ui.planHistOpen = false;
         AV.planDate = b.dataset.day === '0' ? AV.dateKey(new Date()) : AV.dateKey(AV.addDays(new Date(), -1));
+        AV.planId = null;
         AV.renderPlan();
       }
+    });
+    $('#planSelect')?.addEventListener('change', (e) => {
+      AV.planId = e.target.value || null;
+      AV.renderPlan();
+    });
+    $('#addPlan')?.addEventListener('click', () => {
+      const plan = AV.planTemplate(AV.planDate);
+      plan.id = AV.uid('plan');
+      AV.storePlan(AV.state, plan);
+      AV.planId = plan.id;
+      AV.ui.planHistOpen = false;
+      AV.saveNow();
+      AV.renderPlan();
+      AV.renderDashboard();
+      AV.toast('Dodano plan. Wybierz rynek i uzupełnij szczegóły.');
     });
     $('#planMarketSelect')?.addEventListener('change', (e) => {
       const v = e.target.value;
@@ -436,9 +458,12 @@
       AV.renderPlan(); AV.renderDashboard(); AV.renderSettings();
     });
     $('#copyPlan')?.addEventListener('click', async () => {
-      const y = AV.planStore()[AV.dateKey(AV.addDays(new Date(AV.planDate + 'T12:00:00'), -1))];
+      const yesterday = AV.dateKey(AV.addDays(new Date(AV.planDate + 'T12:00:00'), -1));
+      const current = AV.planById(AV.state, AV.planId);
+      const y = AV.plansForDate(AV.state, yesterday).find((item) => item.market === current?.market) || AV.plansForDate(AV.state, yesterday)[0];
       if (!y) { AV.toast('Brak planu z poprzedniego dnia'); return; }
       const copy = AV.clone(y);
+      copy.id = AV.uid('plan');
       copy.date = AV.planDate; copy.approvedAt = null;
       await AV.commitPlan(copy, 'Skopiowano plan z poprzedniego dnia.');
       AV.renderPlan();
@@ -447,6 +472,7 @@
       const el = e.target.closest('[data-plan-open]');
       if (!el) return;
       AV.planDate = el.dataset.planOpen;
+      AV.planId = el.dataset.planId || null;
       AV.ui.planHistOpen = false;
       AV.renderPlan();
       $('#planEditor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -502,11 +528,19 @@
     const t = AV.state.trades.find((x) => x.id === id);
     if (!t) return;
     AV.ui.editId = id;
-    AV.ui.ntChecks = {};
-    const points = AV.state.settings.checklist || [];
-    points.forEach((p, i) => AV.ui.ntChecks[p] = i < (t.checklist || 0));
+    const source = String(t.source ?? '').trim().toLowerCase();
+    AV.ui.ntExecutionLocked = !!t.extId || (source !== '' && !['manual', 'panel', 'ręcznie', 'recznie'].includes(source));
+    AV.ui.ntChecklistTouched = false;
     AV.ui.ntGradeManual = true;
+    AV.ui.ntChecks = {};
     AV.ui.ntScreens = AV.clone(t.screens || {});
+    const checkedItems = Array.isArray(t.checklistItems)
+      ? t.checklistItems
+      : [];
+    AV.ui.ntChecklistHistory = checkedItems;
+    const points = AV.checklistPoints(AV.state, checkedItems);
+    AV.showView('nowa');
+    AV.renderNewTradeForm();
     AV.setVal('#ntPair', t.pair);
     AV.setVal('#ntEntry', t.entry);
     AV.setVal('#ntSize', t.size);
@@ -514,20 +548,27 @@
     AV.setVal('#ntTp', t.tp);
     AV.setVal('#ntNote', t.note);
     $$('#ntDir .chip').forEach((c) => c.classList.toggle('on', c.dataset.d === t.dir));
+    ['#ntPair', '#ntEntry', '#ntSize', '#ntSl', '#ntTp'].forEach((selector) => {
+      const input = $(selector);
+      if (input) input.disabled = AV.ui.ntExecutionLocked;
+    });
+    const direction = $('#ntDir');
+    direction?.classList.toggle('disabled', AV.ui.ntExecutionLocked);
+    if (direction) {
+      direction.setAttribute('aria-disabled', AV.ui.ntExecutionLocked ? 'true' : 'false');
+      direction.style.pointerEvents = AV.ui.ntExecutionLocked ? 'none' : '';
+    }
     $$('#ntSetup .chip').forEach((c) => c.classList.toggle('on', c.dataset.s === t.setup));
     $$('#ntEmotion .chip').forEach((c) => c.classList.toggle('on', c.textContent === t.emotion));
     $$('#errChips .chip.err').forEach((c) => c.classList.toggle('on', (t.errors || []).includes(c.textContent)));
     $$('.gp').forEach((g) => g.classList.toggle('on', g.dataset.g === t.grade));
+    points.forEach((p) => AV.ui.ntChecks[p] = checkedItems.includes(p));
     $('#tm').classList.remove('on');
-    AV.showView('nowa');
-    AV.renderNewTradeForm();
-    AV.ui.editId = id;
-    AV.ui.ntGradeManual = true;
-    AV.ui.ntChecks = {};
-    points.forEach((p, i) => AV.ui.ntChecks[p] = i < (t.checklist || 0));
+    AV.renderNTMeta();
     AV.renderChecklist();
     AV.renderDrops(t.screens || {});
     $$('.gp').forEach((g) => g.classList.toggle('on', g.dataset.g === t.grade));
+    AV.ui.ntGradeManual = true;
     AV.show('#cancelEdit', true);
     AV.setText('#saveTrade', 'Zapisz zmiany');
     AV.toast('Edytujesz transakcję z ' + AV.dateTimeShort(t.date));
@@ -549,15 +590,28 @@
     $('#ctExit', body).addEventListener('input', updateHint);
     updateHint();
     $('#ctSave', body).onclick = async () => {
-      const exit = AV.pnum($('#ctExit', body).value);
-      let result = $('#ctResult', body).value.trim() ? AV.pnum($('#ctResult', body).value) : null;
+      const exitText = $('#ctExit', body).value.trim();
+      const resultText = $('#ctResult', body).value.trim();
       const entry = AV.pnum(t.entry), size = AV.pnum(t.size);
-      if (result == null) result = (exit - entry) * size * (t.dir === 'l' ? 1 : -1);
+      let exit = null;
+      if (exitText) {
+        exit = AV.pnum(exitText);
+        if (!Number.isFinite(exit) || exit <= 0) { AV.toast('Cena wyjścia musi być liczbą dodatnią'); return; }
+      }
+      let result = resultText ? AV.pnum(resultText) : null;
+      if (result == null) {
+        if (exit == null) { AV.toast('Podaj cenę wyjścia albo wynik'); return; }
+        if (!(entry > 0) || !(size > 0)) { AV.toast('Brak ceny wejścia lub wielkości — podaj wynik ręcznie'); return; }
+        result = (exit - entry) * size * (t.dir === 'l' ? 1 : -1);
+      }
       if (!Number.isFinite(result)) { AV.toast('Podaj cenę wyjścia albo wynik'); return; }
-      const risk = t.sl !== 'brak' ? Math.abs(entry - AV.pnum(t.sl)) * size : Math.abs(entry * 0.01 * size);
-      t.exit = AV.fmt(exit, AV.dec(exit));
+      const slText = String(t.sl ?? '').trim();
+      const risk = slText !== '' && slText !== 'brak' && slText !== '—'
+        ? Math.abs(entry - AV.pnum(slText)) * size
+        : null;
+      t.exit = exit == null ? '' : AV.fmt(exit, AV.dec(exit));
       t.result = Math.round(result * 100) / 100;
-      t.r = risk ? Math.round(t.result / risk * 100) / 100 : 0;
+      t.r = risk != null && risk > 0 ? Math.round(t.result / risk * 100) / 100 : null;
       t.durationMin = Math.max(1, Math.round((Date.now() - new Date(t.date)) / 60000));
       t.mentor = t.result > 0
         ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
@@ -595,6 +649,7 @@
       AV.renderNTMeta(); AV.renderChecklist(); AV.saveDraft();
     }, 180)));
     $('#ntDir')?.addEventListener('click', (e) => {
+      if (AV.ui.ntExecutionLocked) return;
       const c = e.target.closest('.chip'); if (!c) return;
       $$('#ntDir .chip').forEach((x) => x.classList.toggle('on', x === c));
       AV.renderChecklist(); AV.renderNTMeta(); AV.saveDraft();
@@ -612,6 +667,7 @@
     $('#clList')?.addEventListener('click', (e) => {
       const row = e.target.closest('[data-cl]'); if (!row) return;
       const p = row.dataset.cl;
+      AV.ui.ntChecklistTouched = true;
       AV.ui.ntChecks[p] = !AV.ui.ntChecks[p];
       AV.renderChecklist(); AV.saveDraft();
     });
@@ -639,8 +695,9 @@
     });
     $('#saveTrade')?.addEventListener('click', () => AV.saveTrade());
     $('#cancelEdit')?.addEventListener('click', () => {
-      AV.ui.editId = null; AV.ui.ntScreens = {}; AV.ui.ntChecks = {}; AV.ui.ntGradeManual = false;
-      AV.safeDel(AV.draftKey());
+      const editing = !!AV.ui.editId;
+      AV.ui.editId = null; AV.ui.ntExecutionLocked = false; AV.ui.ntScreens = {}; AV.ui.ntChecks = {}; AV.ui.ntChecklistHistory = []; AV.ui.ntChecklistTouched = false; AV.ui.ntGradeManual = false;
+      if (!editing) AV.safeDel(AV.draftKey());
       AV.renderNewTradeForm(); AV.showView('trans'); AV.toast('Edycja anulowana');
     });
     $('#pastTrade')?.addEventListener('click', () => {
@@ -668,57 +725,91 @@
   AV.saveTrade = () => {
     const s = AV.state;
     if (AV.lockInfo(s).active) { AV.toast('Tryb ochronny: odblokuj dziennik, żeby zapisać transakcję'); return; }
-    const pair = $('#ntPair').value.trim().toUpperCase();
-    const entry = AV.pnum($('#ntEntry').value);
-    const sl = AV.pnum($('#ntSl').value);
-    const tp = AV.pnum($('#ntTp').value);
-    const size = AV.pnum($('#ntSize').value);
-    if (!pair) { AV.toast('Podaj parę'); return; }
-    if (!entry) { AV.toast('Podaj cenę wejścia'); return; }
-    if (!size) { AV.toast('Podaj wielkość pozycji'); return; }
-    if (sl && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? sl >= entry : sl <= entry)) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
-    if (tp && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? tp <= entry : tp >= entry)) { AV.toast('Take profit jest po złej stronie wejścia'); return; }
-    const checks = Object.values(AV.ui.ntChecks || {}).filter(Boolean).length;
-    const total = Object.keys(AV.ui.ntChecks || {}).length || (s.settings.checklist || []).length || 7;
-    const grade = $('.gp.on')?.dataset.g || (checks === total ? 'A' : checks >= Math.ceil(total * 0.7) ? 'B' : 'C');
+    const existingTrade = AV.ui.editId ? s.trades.find((trade) => trade.id === AV.ui.editId) : null;
+    const executionLocked = !!existingTrade && !!AV.ui.ntExecutionLocked;
+    const pair = executionLocked ? String(existingTrade.pair ?? '') : $('#ntPair').value.trim().toUpperCase();
+    const entry = executionLocked ? null : AV.pnum($('#ntEntry').value);
+    const sl = executionLocked ? null : AV.pnum($('#ntSl').value);
+    const tp = executionLocked ? null : AV.pnum($('#ntTp').value);
+    const size = executionLocked ? null : AV.pnum($('#ntSize').value);
+    const existingStop = String(existingTrade?.sl ?? '').trim();
+    const existingHasNoStop = !!existingTrade && (existingStop === '' || existingStop === 'brak' || existingStop === '—');
+    if (!executionLocked) {
+      if (!pair) { AV.toast('Podaj parę'); return; }
+      if (!entry) { AV.toast('Podaj cenę wejścia'); return; }
+      if (!size) { AV.toast('Podaj wielkość pozycji'); return; }
+      if (!sl && !existingHasNoStop) { AV.toast('Podaj stop loss'); return; }
+      if (sl && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? sl >= entry : sl <= entry)) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
+      if (tp && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? tp <= entry : tp >= entry)) { AV.toast('Take profit jest po złej stronie wejścia'); return; }
+    }
+    const checklistPoints = AV.checklistPoints(s, AV.ui.editId ? AV.ui.ntChecklistHistory : []);
+    const checklistItems = checklistPoints.filter((point) => AV.ui.ntChecks?.[point]);
+    const checks = checklistItems.length;
+    const total = checklistPoints.length;
+    const grade = $('.gp.on')?.dataset.g || (existingTrade ? (existingTrade.grade || '') : (checks === total ? 'A' : checks >= Math.ceil(total * 0.7) ? 'B' : 'C'));
     const errors = $$('#errChips .chip.err.on').map((c) => c.textContent);
-    const emotion = $('#ntEmotion .chip.on')?.textContent || 'Spokój';
-    const setup = $('#ntSetup .chip.on')?.dataset.s || 'Bez setupu';
+    const emotion = $('#ntEmotion .chip.on')?.textContent || (existingTrade ? (existingTrade.emotion || '') : 'Spokój');
+    const setup = $('#ntSetup .chip.on')?.dataset.s || (existingTrade ? (existingTrade.setup || '') : 'Bez setupu');
     const note = $('#ntNote').value.trim();
-    const plan = s.plans[AV.dateKey(new Date())];
-    const risk = sl ? Math.abs(entry - sl) * size : 0;
+    const dir = executionLocked ? existingTrade.dir : ($('#ntDir .chip.on')?.dataset.d || 'l');
+    const now = new Date();
+    const tradeDate = existingTrade?.date || now.toISOString();
+    const planAligned = executionLocked ? !!existingTrade.plan : AV.tradePlanMatch(s, { date: tradeDate, pair, dir });
+    const risk = executionLocked ? null : (sl ? Math.abs(entry - sl) * size : null);
     const cap = AV.totalCapital(s);
     const maxRiskPct = Number(s.settings.maxRisk) || 1;
-    const riskPct = risk && cap > 0 ? risk / cap * 100 : null;
+    const riskPct = risk != null && risk > 0 && cap > 0 ? risk / cap * 100 : null;
     const payload = {
-      pair, dir: $('#ntDir .chip.on')?.dataset.d || 'l',
-      entry: AV.fmt(entry, AV.dec(entry)), sl: sl ? AV.fmt(sl, AV.dec(entry)) : 'brak',
-      tp: tp ? AV.fmt(tp, AV.dec(entry)) : '—', size: AV.fmt(size, size < 1 ? 4 : 2),
-      grade, checklist: checks, checkTotal: total, errors, emotion, setup, note,
-      risk: risk ? Math.round(risk * 100) / 100 : 0,
-      riskPct: riskPct == null ? null : Math.round(riskPct * 100) / 100,
-      plan: AV.planMatchesTrade(plan, pair, $('#ntDir .chip.on')?.dataset.d || 'l'),
+      pair, dir,
+      entry: executionLocked ? existingTrade.entry : AV.fmt(entry, AV.dec(entry)),
+      sl: executionLocked ? existingTrade.sl : (sl ? AV.fmt(sl, AV.dec(entry)) : (existingHasNoStop ? existingStop : 'brak')),
+      tp: executionLocked ? existingTrade.tp : (tp ? AV.fmt(tp, AV.dec(entry)) : '—'),
+      size: executionLocked ? existingTrade.size : AV.fmt(size, size < 1 ? 4 : 2),
+      grade, checklist: checks, checklistItems, checkTotal: total, errors, emotion, setup, note,
+      ...(executionLocked ? {} : {
+        risk: risk == null ? null : Math.round(risk * 100) / 100,
+        riskPct: riskPct == null ? null : Math.round(riskPct * 100) / 100
+      }),
+      plan: planAligned,
       mentor: grade === 'A' ? 'Wzorowo: plan, pełna checklista, SL, spokojna głowa. Tak wyglądają Twoje najlepsze transakcje.' : grade === 'B' ? 'Setup z planu, drobne odstępstwa. Trzymaj się checklisty do końca.' : (errors.length ? 'Ocena C i ' + errors.length + ' ' + AV.plural(errors.length, 'błąd', 'błędy', 'błędów') + '. To nie pech, to decyzja. Wróć do planu.' : 'Ocena C: brak setupu albo pośpiech. Odczekaj i wróć z planem.')
     };
+    if (existingTrade && !executionLocked && (
+      existingTrade.entry !== payload.entry || existingTrade.sl !== payload.sl ||
+      existingTrade.size !== payload.size || existingTrade.dir !== payload.dir
+    )) {
+      const updatedRisk = sl ? Math.abs(entry - sl) * size : null;
+      const previousResult = Number(existingTrade.result);
+      payload.r = existingTrade.result != null && Number.isFinite(previousResult) && updatedRisk != null && updatedRisk > 0
+        ? Math.round(previousResult / updatedRisk * 100) / 100
+        : null;
+    }
+    if (AV.ui.editId && !AV.ui.ntChecklistTouched) {
+      delete payload.checklist;
+      delete payload.checklistItems;
+      delete payload.checkTotal;
+    }
     const persist = () => {
       if (AV.ui.editId) {
         const t = s.trades.find((x) => x.id === AV.ui.editId);
         if (t) Object.assign(t, payload, { screens: AV.ui.ntScreens || t.screens || {} });
         AV.toast('Zmiany zapisane');
       } else {
-        const now = new Date();
         const session = now.getHours() < 8 ? 'Azja' : now.getHours() < 13 ? 'Londyn' : now.getHours() < 22 ? 'Nowy Jork' : 'Po godzinach';
         s.trades.push({
-          id: AV.uid('manual'), date: now.toISOString(), exit: 'otwarta', result: null, r: null,
-          mae: null, mfe: null, durationMin: 0, fee: 0, source: 'Ręcznie', account: s.accounts.find((a) => a.include)?.name || 'Konto główne',
+          id: AV.uid('manual'), date: tradeDate, exit: 'otwarta', result: null, r: null,
+          mae: null, mfe: null, durationMin: 0, fee: 0, source: 'Ręcznie', account: s.accounts.find((a) => a.include)?.name || s.accounts[0]?.name || 'Konto główne',
           session, screens: AV.ui.ntScreens || {}, ...payload
         });
         AV.toast('Transakcja zapisana');
       }
-      AV.ui.editId = null; AV.ui.ntScreens = {}; AV.saveNow(); AV.safeDel(AV.draftKey());
+      const editing = !!AV.ui.editId;
+      AV.ui.editId = null; AV.ui.ntExecutionLocked = false; AV.ui.ntScreens = {}; AV.ui.ntChecklistHistory = []; AV.ui.ntChecklistTouched = false; AV.saveNow();
+      if (!editing) AV.safeDel(AV.draftKey());
+      AV.ui.jFilter = 'all'; AV.ui.jGrade = 'all'; AV.ui.jSearch = '';
+      if ($('#jSearch')) $('#jSearch').value = '';
       AV.renderAll(); AV.showView('trans');
     };
-    if (riskPct != null && riskPct > maxRiskPct + 1e-9) {
+    if (!executionLocked && riskPct != null && riskPct > maxRiskPct + 1e-9) {
       AV.confirm({
         title: 'Ryzyko powyżej limitu',
         text: 'Ta pozycja ryzykuje ' + AV.fmt(risk, 2) + ' ' + AV.curLabel() + ' (' + AV.fmt(riskPct, 2) + '% kapitału), a limit wynosi ' + AV.fmt(maxRiskPct, 2) + '%. Zapisać mimo to?',
@@ -850,7 +941,7 @@
     AV.calc.mode = c.mode === 'fx' ? 'fx' : 'crypto';
     AV.calc.dir = c.dir === 'short' ? 'short' : 'long';
     AV.calc.accountId = c.accountId || '';
-    AV.calc.rrMode = ['1', '2', '3', '5', 'custom'].includes(String(c.rrMode)) ? String(c.rrMode) : '3';
+    AV.calc.rrMode = ['1', '1.2', '1.5', '2', '3', '5', 'custom'].includes(String(c.rrMode)) ? String(c.rrMode) : '3';
     AV.calc.rrCustom = c.rrCustom || '';
     $$('#calcMode button').forEach((x) => x.classList.toggle('on', x.dataset.m === AV.calc.mode));
     $$('#cDir .chip').forEach((x) => x.classList.toggle('on', x.dataset.d === AV.calc.dir));
@@ -1684,11 +1775,12 @@
 
   /* ---------- eksport ---------- */
   AV.exportTradesCsv = () => {
-    const rows = [['Data', 'Para', 'Kierunek', 'Ocena', 'Checklista', 'Błędy', 'Emocja', 'Setup', 'Wejście', 'Wyjście', 'SL', 'TP', 'Wielkość', 'R', 'Wynik USDT', 'Opłata', 'Plan', 'Notatka']];
-    AV.includedTrades(AV.state).slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((t) => rows.push([
+    const rows = [['Data', 'Para', 'Kierunek', 'Ocena', 'Checklista', 'Błędy', 'Emocja', 'Setup', 'Wejście', 'Wyjście', 'SL', 'TP', 'Wielkość', 'R', 'MAE', 'MFE', 'Wynik USDT', 'Opłata', 'Plan', 'Notatka']];
+    AV.state.trades.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((t) => rows.push([
       new Date(t.date).toLocaleString('pl-PL'), t.pair, t.dir === 'l' ? 'LONG' : 'SHORT', t.grade,
-      t.checklist + '/7', (t.errors || []).join(' | '), t.emotion, t.setup, t.entry, t.exit, t.sl, t.tp, t.size,
-      t.r == null ? '' : t.r, t.result == null ? '' : t.result, t.fee || 0, t.plan ? 'tak' : 'nie', t.note
+      t.checklist == null ? '' : t.checklist + '/' + (Number(t.checkTotal) || 7), (t.errors || []).join(' | '), t.emotion, t.setup, t.entry, t.exit, t.sl, t.tp, t.size,
+      t.r == null ? '' : t.r, t.mae == null ? '' : t.mae, t.mfe == null ? '' : t.mfe,
+      t.result == null ? '' : t.result, t.fee == null ? '' : t.fee, t.plan ? 'tak' : 'nie', t.note
     ]));
     AV.download('alpha-vault-transakcje.csv', AV.toCsv(rows));
     AV.toast('Eksport CSV gotowy');

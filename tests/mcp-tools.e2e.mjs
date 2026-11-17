@@ -111,7 +111,8 @@ async function authorize(client, session, scope, grants = {}) {
   const page = await req('/oauth/authorize?' + q.toString(), { headers: { Cookie: 'mcp_session=' + session } });
   assert.equal(page.res.status, 200, page.text);
   assert.doesNotMatch(page.text, /name="grant_write"/, 'checkbox write nie powinien istnieć');
-  if (grants.health) assert.match(page.text, /name="grant_health"/);
+  if (scope.split(' ').includes('alphavault.read')) assert.match(page.text, /<strong>Zapis:<\/strong>/);
+  if (scope.split(' ').includes('alphavault.health')) assert.match(page.text, /name="grant_health"/);
   const { consentId, csrf } = parseConsent(page.text);
   const body = new URLSearchParams({ consent_id: consentId, csrf, decision: 'allow' });
   if (grants.health) body.set('grant_health', '1');
@@ -126,6 +127,41 @@ async function authorize(client, session, scope, grants = {}) {
   const code = loc.searchParams.get('code');
   assert.ok(code, 'brak code');
   return { code, verifier, redirectUri: client.redirect_uris[0] };
+}
+
+async function denyHealthOnlyWithoutConsent(client, session) {
+  const { challenge } = pkce();
+  const state = 'health-denied-' + crypto.randomBytes(8).toString('hex');
+  const query = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: client.redirect_uris[0],
+    scope: 'alphavault.health',
+    state,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    resource: BASE + '/mcp',
+  });
+  const page = await req('/oauth/authorize?' + query.toString(), {
+    headers: { Cookie: 'mcp_session=' + session },
+  });
+  assert.equal(page.res.status, 200, page.text);
+  assert.match(page.text, /name="grant_health"/);
+  assert.doesNotMatch(page.text, /<strong>Zapis:<\/strong>|danych tradingowych zapisanych/);
+  const { consentId, csrf } = parseConsent(page.text);
+  const denied = await req('/oauth/authorize', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: 'mcp_session=' + session,
+    },
+    body: new URLSearchParams({ consent_id: consentId, csrf, decision: 'allow' }).toString(),
+  });
+  assert.equal(denied.res.status, 302, denied.text);
+  const redirect = new URL(denied.res.headers.get('location'));
+  assert.equal(redirect.searchParams.get('state'), state);
+  assert.equal(redirect.searchParams.get('error'), 'access_denied');
+  assert.equal(redirect.searchParams.has('code'), false, 'odmowa jedynego scope’u nie może wydawać szerszego tokenu');
 }
 
 async function token(client, auth) {
@@ -204,6 +240,16 @@ async function main() {
     ['alphavault.health', 'alphavault.read']
   );
   const at = tokA.access_token;
+  const readOnlyAuth = await authorize(client, a.session, 'alphavault.read alphavault.health');
+  const readOnlyToken = await token(client, readOnlyAuth);
+  const readOnlyClaims = JSON.parse(Buffer.from(readOnlyToken.access_token.split('.')[1], 'base64url').toString('utf8'));
+  assert.equal(readOnlyClaims.scope, 'alphavault.read', 'bez checkboxa dane urządzenia nie otrzymują scope alphavault.health');
+  const readOnlyReadiness = await call(readOnlyToken.access_token, 'get_readiness_context', {});
+  assert.equal(readOnlyReadiness.healthAccess, 'scope_missing');
+  assert.equal(readOnlyReadiness.health, null);
+  assert.equal(readOnlyReadiness.readiness.score, 45, 'wynik z check-inu pozostaje dostępny bez danych urządzenia');
+  assert.equal(readOnlyReadiness.readiness.source, 'checkin');
+  await denyHealthOnlyWithoutConsent(client, a.session);
   const health = await req('/health');
   assert.equal(health.res.status, 200, health.text);
   assert.equal(health.json.revision, LOCAL_ENV.MCP_BUILD_SHA);
@@ -696,6 +742,32 @@ async function main() {
     }
     return result;
   };
+  const proposedAndReplayed = async (operation, args, idempotencyKey) => {
+    const request = {
+      operation,
+      args,
+      idempotencyKey,
+      expectedRevision: stateOf(a.userId).revision,
+    };
+    const proposal = await pending('propose_change', request);
+    const targetId = operation === 'plan.create'
+      ? String(proposal.target).split('#')[1]
+      : String(proposal.target).slice(String(proposal.target).indexOf(':') + 1);
+    assert.equal(proposal.preview.id, targetId, `${operation}: preview id must match target`);
+
+    const pendingReplay = await call(at, 'propose_change', request);
+    assert.equal(pendingReplay.duplicate, true, `${operation}: pending replay must be idempotent`);
+    assert.equal(pendingReplay.proposalId, proposal.proposalId);
+    assert.equal(pendingReplay.target, proposal.target);
+
+    await approve(proposal);
+    const approvedReplay = await call(at, 'propose_change', request);
+    assert.equal(approvedReplay.duplicate, true, `${operation}: approved replay must bypass stale expectedRevision`);
+    assert.equal(approvedReplay.status, 'approved');
+    assert.equal(approvedReplay.proposalId, proposal.proposalId);
+    assert.equal(approvedReplay.target, proposal.target);
+    return proposal;
+  };
 
   // --- 11.1. Transakcja: create → read → update → close ---
   const tradesBefore = stateA().trades.length;
@@ -710,6 +782,8 @@ async function main() {
   assert.ok(tradeResult.record.id.startsWith('manual_'), tradeResult.record.id);
   assert.equal(tradeResult.record.source, 'Ręcznie');
   assert.equal(tradeResult.record.result, null);
+  assert.equal(tradeResult.record.mae, null);
+  assert.equal(tradeResult.record.mfe, null);
   assert.equal(stateA().trades.length, tradesBefore + 1, 'zapis bezpośredni musi zmienić stan');
   const tradeId = tradeResult.record.id;
   const offsetTrade = await call(at, 'create_trade', {
@@ -722,7 +796,7 @@ async function main() {
   assert.equal(offsetTradeRead.trade.localDate, '2026-03-29');
   assert.equal(offsetTradeRead.trade.localTime, '00:30');
   await expectToolError(at, 'create_trade', {
-    pair: 'E2E/RELATIVE-DATE', dir: 'long', entry: 100, size: 1,
+    pair: 'E2E/RELATIVE-DATE', dir: 'long', entry: 100, size: 1, sl: 95,
     date: 'tomorrow', idempotencyKey: idem('trade-relative-date'),
   }, /data transakcji/i);
 
@@ -730,20 +804,47 @@ async function main() {
   assert.equal(readTrade.found, true);
   assert.equal(readTrade.trade.pair, 'E2E/USDT');
   assert.equal(readTrade.trade.grade, 'B');
+  assert.equal(readTrade.trade.mae, null);
+  assert.equal(readTrade.trade.mfe, null);
 
   const tradeUpdate = await call(at, 'update_trade', {
     tradeId, expectedRevision: offsetTrade.revision,
-    changes: { note: 'Poprawiona notatka', grade: 'A', setup: 'Pullback w trendzie', emotion: 'Skupienie' },
+    changes: { note: 'Poprawiona notatka', grade: 'A', setup: 'Pullback w trendzie', emotion: 'Skupienie', mae: 0.25, mfe: 0.75 },
     idempotencyKey: idem('trade-update'),
   });
   for (const field of ['grade', 'note', 'setup']) assert.ok(tradeUpdate.changes.includes(field), `${field} w diffie`);
   assert.equal(stateA().trades.find((row) => row.id === tradeId).note, 'Poprawiona notatka');
+  assert.equal(stateA().trades.find((row) => row.id === tradeId).mae, 0.25);
+  assert.equal(stateA().trades.find((row) => row.id === tradeId).mfe, 0.75);
+
+  const clearedMetrics = await call(at, 'update_trade', {
+    tradeId, changes: { mae: null, mfe: null }, idempotencyKey: idem('trade-metrics-clear'),
+  });
+  assert.equal(clearedMetrics.record.mae, null);
+  assert.equal(clearedMetrics.record.mfe, null);
+  const restoredMfe = await call(at, 'update_trade', {
+    tradeId, changes: { mfe: 0.75 }, idempotencyKey: idem('trade-metrics-restore'),
+  });
+  assert.equal(restoredMfe.record.mfe, 0.75);
+  for (const invalidMfe of ['', 'brak', '—']) {
+    await expectToolError(at, 'update_trade', {
+      tradeId, changes: { mfe: invalidMfe }, idempotencyKey: idem('trade-metrics-invalid'),
+    });
+  }
+  await expectToolError(at, 'close_trade', {
+    tradeId, exitPrice: 110, mfe: -0.25, idempotencyKey: idem('trade-close-negative-mfe'),
+  }, /nieujemną|mfe/i);
   assert.equal(stateA().trades.find((row) => row.id === tradeId).emotion, 'Skupienie');
   assert.match(stateA().trades.find((row) => row.id === tradeId).mentor, /Checklista niepełna \(5\/7\)/);
 
   await expectToolError(at, 'update_trade', {
     tradeId: 'ex1', changes: { entry: 1 }, idempotencyKey: idem('trade-update-ex'),
   }, /giełd/i);
+  for (const metric of ['mae', 'mfe']) {
+    await expectToolError(at, 'update_trade', {
+      tradeId: 'ex1', changes: { [metric]: 1 }, idempotencyKey: idem('trade-update-ex-metric'),
+    }, /giełd/i);
+  }
   await expectToolError(at, 'update_trade', {
     tradeId: 'nie-ma-takiej', changes: { note: 'x' }, idempotencyKey: idem('trade-update-missing'),
   }, /nie istnieje/i);
@@ -761,13 +862,28 @@ async function main() {
   }, /emocja/i);
 
   const closed = await call(at, 'close_trade', {
-    tradeId, exitPrice: 110, comment: 'Zamknięcie wg planu', idempotencyKey: idem('trade-close'),
+    tradeId, exitPrice: 110, mfe: null, comment: 'Zamknięcie wg planu', idempotencyKey: idem('trade-close'),
   });
   assert.equal(closed.applied, 'direct');
   assert.equal(closed.record.result, 20);
   assert.equal(closed.record.r, 2);
+  assert.equal(closed.record.mfe, null);
   assert.equal(closed.record.exit, '110');
   assert.match(closed.record.closedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  const preserveMfeCreated = await call(at, 'create_trade', {
+    pair: 'ETH/USDT', dir: 'long', entry: 100, size: 1, sl: 95,
+    idempotencyKey: idem('trade-close-preserve-create'),
+  });
+  const preserveMfeSet = await call(at, 'update_trade', {
+    tradeId: preserveMfeCreated.record.id, changes: { mfe: 0.5 },
+    idempotencyKey: idem('trade-close-preserve-set'),
+  });
+  assert.equal(preserveMfeSet.record.mfe, 0.5);
+  const preservedMfeClosed = await call(at, 'close_trade', {
+    tradeId: preserveMfeCreated.record.id, exitPrice: 101,
+    idempotencyKey: idem('trade-close-preserve-omit'),
+  });
+  assert.equal(preservedMfeClosed.record.mfe, 0.5, 'pominięte MFE nie może czyścić wcześniejszego pomiaru');
   await expectToolError(at, 'update_trade', {
     tradeId, changes: { result: null }, idempotencyKey: idem('trade-reopen'),
   }, /edytowalne/i);
@@ -874,6 +990,44 @@ async function main() {
   assert.equal(draftPlan.levels[0].value, '68000');
   assert.equal(draftPlan.approvedAt ?? null, null, 'szkic nie jest zatwierdzony');
 
+  const secondPlanProposal = await proposedAndReplayed(
+    'plan.create',
+    { date: planDate, market: 'SOL', bias: 'short', why: 'E2E second plan' },
+    idem('plan-create-second')
+  );
+  const secondPlanId = secondPlanProposal.target.split('#')[1];
+  assert.equal(
+    stateA().plans[planDate + '#' + secondPlanId]?.id,
+    secondPlanId,
+    JSON.stringify({ target: secondPlanProposal.target, keys: Object.keys(stateA().plans) })
+  );
+  const ambiguousPlans = await call(at, 'get_day_plan', { date: planDate });
+  assert.equal(ambiguousPlans.plan, null);
+  assert.equal(ambiguousPlans.plans.length, 2);
+  assert.ok(ambiguousPlans.plans.every((plan) => plan.status === 'draft'));
+  const selectedPlanById = await call(at, 'get_day_plan', { date: planDate, planId: draftPlan.id });
+  const selectedPlanByMarket = await call(at, 'get_day_plan', { date: planDate, market: 'SOL' });
+  assert.equal(selectedPlanById.plan.id, draftPlan.id);
+  assert.equal(selectedPlanByMarket.plan.id, secondPlanId);
+  const ambiguousPlanContext = await call(at, 'get_day_plan_context', { date: planDate });
+  const selectedPlanContext = await call(at, 'get_day_plan_context', { date: planDate, planId: secondPlanId });
+  assert.equal(ambiguousPlanContext.plan, null);
+  assert.equal(ambiguousPlanContext.plans.length, 2);
+  assert.equal(selectedPlanContext.plan.id, secondPlanId);
+  const selectedPlanCompliance = await call(at, 'get_day_plan_compliance', { date: planDate, market: 'SOL' });
+  const unmatchedPlanCompliance = await call(at, 'get_day_plan_compliance', {
+    date: planDate, planId: 'missing-plan',
+  });
+  assert.equal(selectedPlanCompliance.hasData, true);
+  assert.equal(selectedPlanCompliance.days[0].planId, secondPlanId);
+  assert.equal(unmatchedPlanCompliance.hasData, false);
+  assert.deepEqual(unmatchedPlanCompliance.days, []);
+  const deleteSecondPlan = await pending('delete_day_plan', {
+    date: planDate, planId: secondPlanId, idempotencyKey: idem('plan-delete-second'),
+  });
+  await approve(deleteSecondPlan);
+  assert.equal((await call(at, 'get_day_plan', { date: planDate })).plan.id, draftPlan.id);
+
   const planUpdate = await call(at, 'update_day_plan', {
     date: planDate, changes: { risk: '0.25%', maxTrades: 1 }, idempotencyKey: idem('plan-update'),
   });
@@ -968,6 +1122,18 @@ async function main() {
   assert.match(String(restoredTrade.trade.note), /Poprawiona notatka/);
 
   // --- 11.8. Konta, wpłaty i wypłaty ---
+  const proposedAccountName = 'E2E Proposal Account ' + crypto.randomBytes(2).toString('hex');
+  const proposedAccount = await proposedAndReplayed('account.create', {
+    name: proposedAccountName, exchange: 'OKX', type: 'Futures', currency: 'USDT',
+    start: 0, balance: 0, primary: false,
+  }, idem('account-create-proposal'));
+  const proposedAccountId = proposedAccount.target.split(':')[1];
+  assert.equal(
+    (await call(at, 'get_accounts', {})).items.some((row) => row.id === proposedAccountId && row.name === proposedAccountName),
+    true,
+    'proposed account must use the stable target ID'
+  );
+
   const accountName = 'E2E Account ' + crypto.randomBytes(2).toString('hex');
   const accountCreate = await pending('create_account', {
     name: accountName, exchange: 'OKX', type: 'Futures', currency: 'USDT',
@@ -1016,6 +1182,18 @@ async function main() {
   const renamedAccount = (await call(at, 'get_accounts', {})).items.find((row) => row.id === account.id);
   assert.equal(renamedAccount.name, accountName + ' v2');
   assert.equal(renamedAccount.goal, 'E2E cel');
+
+  const proposedFlow = await proposedAndReplayed('flow.create', {
+    amount: 25, type: 'Wpłata', account: accountName + ' v2', currency: 'USDT',
+    date: YESTERDAY, op: 'E2E propozycja wpłaty',
+  }, idem('flow-create-proposal'));
+  const proposedFlowId = proposedFlow.target.split(':')[1];
+  assert.equal(
+    (await call(at, 'get_account_transactions', { limit: 100 })).items
+      .some((row) => row.id === proposedFlowId && row.operation === 'E2E propozycja wpłaty'),
+    true,
+    'proposed flow must use the stable target ID'
+  );
 
   const flowCreate = await pending('create_account_transaction', {
     amount: 250, type: 'Wpłata', account: accountName + ' v2', currency: 'USDT', date: YESTERDAY,
@@ -1074,6 +1252,19 @@ async function main() {
   }, /reason/i);
 
   // --- 11.10. Prop challenge ---
+  const proposedPropName = 'E2E Proposal Prop ' + crypto.randomBytes(2).toString('hex');
+  const proposedProp = await proposedAndReplayed('prop.create', {
+    name: proposedPropName, templateId: 'ftmo-1step', account: 'WEEX', accountSize: 10000,
+    startBalance: 10000, startDate: TODAY, endDate: dayKey(30),
+  }, idem('prop-create-proposal'));
+  const proposedPropId = proposedProp.target.split(':')[1];
+  assert.equal(
+    (await call(at, 'get_prop_challenges', {})).items
+      .some((row) => row.id === proposedPropId && row.name === proposedPropName),
+    true,
+    'proposed prop challenge must use the stable target ID'
+  );
+
   const propName = 'E2E Prop ' + crypto.randomBytes(2).toString('hex');
   const propCreate = await pending('create_prop_challenge', {
     name: propName, templateId: 'ftmo-1step', account: 'WEEX', accountSize: 10000,
@@ -1168,6 +1359,22 @@ async function main() {
     null,
     'odrzucona propozycja nie może zmienić stanu'
   );
+
+  const expiryDate = dayKey(-24);
+  await call(at, 'create_checkin', {
+    date: expiryDate, mood: 'Spokój', energy: 2, idempotencyKey: idem('expiry-checkin'),
+  });
+  const expiryRequest = {
+    operation: 'checkin.delete',
+    args: { date: expiryDate },
+    idempotencyKey: idem('expiry-proposal'),
+  };
+  const expiryProposal = await call(at, 'propose_change', expiryRequest);
+  assert.equal(expiryProposal.status, 'pending');
+  runPhp(path.join(ROOT, 'tests', 'mcp-helper.php'), ['expire', expiryProposal.proposalId]);
+  const expiredReplay = await call(at, 'propose_change', expiryRequest);
+  assert.equal(expiredReplay.duplicate, true);
+  assert.equal(expiredReplay.status, 'expired', 'retry must not report an expired proposal as pending');
 
   // --- 11.13. Idempotencja i konflikt wersji ---
   const replayKey = idem('replay-direct');

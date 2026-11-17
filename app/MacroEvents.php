@@ -7,18 +7,19 @@ namespace AlphaVault;
  * Kalendarz makro: publiczne feedy -> MySQL -> /api/macro-events -> UI.
  *
  * Bieżący tydzień: oficjalny JSON ForexFactory (impact High/Medium).
- * Następny tydzień: publiczne events API TradingView (importance 1/0),
+ * Poprzedni pełny tydzień i kolejne trzy tygodnie: TradingView (importance 1/0),
  * bo ForexFactory publikuje JSON tylko dla bieżącego tygodnia.
  *
- * Zapisujemy wyłącznie publikacje ★★ i ★★★. Sukces synchronizacji
- * z pustą listą czyści okno; błąd zachowuje ostatni dobry zestaw, bo
- * soft delete wykonuje się tylko po udanym pobraniu danego feedu.
+ * Zapisujemy wyłącznie publikacje ★★ i ★★★. Udany feed z jawnym oknem
+ * (także pusty) aktualizuje wyłącznie ten zakres; błąd zachowuje ostatni
+ * dobry zestaw. Pusta lista bez okna jest no-op.
  */
 final class MacroEvents
 {
     private const FF_THIS_WEEK_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
     private const TV_EVENTS_URL = 'https://economic-calendar.tradingview.com/events';
     private const IMPACT_MAP = ['high' => 3, 'medium' => 2];
+    private const FF_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CAD', 'AUD', 'CHF', 'NZD'];
     private const TV_IMPORTANCE_MAP = [1 => 3, 0 => 2];
     private const TV_COUNTRIES = ['US', 'EU', 'GB', 'JP', 'CN', 'CA', 'AU', 'CH', 'NZ'];
     private const TV_CURRENCY_MAP = [
@@ -39,17 +40,19 @@ final class MacroEvents
         'personal income', 'earnings', 'current account', 'factory orders',
         'industrial orders', 'leading index',
     ];
-    private const FETCH_WINDOW_DAYS_BACK = 8;
-    private const FETCH_WINDOW_DAYS_FORWARD = 21;
+    private const FETCH_WINDOW_DAYS_BACK = 14;
+    private const FETCH_WINDOW_DAYS_FORWARD = 35;
     private const STALE_AFTER_SECONDS = 1800;
     private const LOCK_NAME = 'alphavault_macro_sync';
+    private readonly ?\Closure $feedFetcher;
 
-    /** @param list<string> $feedUrls */
+    /** @param callable(string, list<string>): mixed $feedFetcher Optional deterministic feed source for CI tests. */
     public function __construct(
         private readonly Config $config,
         private readonly Db $db,
-        private readonly array $feedUrls = [],
+        ?callable $feedFetcher = null,
     ) {
+        $this->feedFetcher = $feedFetcher === null ? null : \Closure::fromCallable($feedFetcher);
     }
 
     public function sync(): array
@@ -73,43 +76,48 @@ final class MacroEvents
         }
 
         try {
+            $windowNow = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+            $ffWindow = self::forexFactoryWindowUtc($windowNow);
+            $tvWindow = self::tradingViewWindowUtc($windowNow);
+
             $ffRows = $this->fetchForexFactory();
             $ffNormalized = self::normalizeForexFactory($ffRows);
-            if ($ffRows !== [] && $ffNormalized === []) {
-                throw new \RuntimeException('Feed ForexFactory nie zawiera rozpoznanych publikacji.');
+            if (!self::hasForexFactoryFeedShape($ffRows)) {
+                throw new \RuntimeException('Feed ForexFactory ma nieprawidłowy kształt.');
             }
 
             $tvRows = null;
             $tvNormalized = [];
+            $tvError = null;
             try {
-                $tvRows = $this->fetchTradingViewNextWeek();
-                $tvNormalized = self::normalizeTradingView($tvRows);
+                $fetchedTvRows = $this->fetchTradingView($windowNow);
+                $normalizedTvRows = self::normalizeTradingView($fetchedTvRows);
+                if (!self::hasTradingViewFeedShape($fetchedTvRows)) {
+                    throw new \RuntimeException('Feed TradingView ma nieprawidłowy kształt.');
+                }
+                $tvRows = $fetchedTvRows;
+                $tvNormalized = $normalizedTvRows;
             } catch (\Throwable $err) {
-                $this->log('TradingView next week unavailable: ' . $err->getMessage());
+                $tvError = substr($err->getMessage(), 0, 500);
+                $this->log('TradingView future weeks unavailable: ' . $err->getMessage());
             }
 
-            $result = $this->syncPayload(
+            $result = $this->syncNormalizedFeeds(
                 $ffNormalized,
+                $tvRows === null ? null : $tvNormalized,
                 $started,
-                'forexfactory',
-                true,
-                self::currentWeekWindowUtc()[0],
-                self::currentWeekWindowUtc()[1]
+                $ffWindow,
+                $tvWindow
             );
-            if ($tvRows !== null && $tvNormalized !== []) {
-                [$tvFrom, $tvTo] = self::nextWeekWindowUtc();
-                $tvResult = $this->syncPayload($tvNormalized, $started, 'tradingview', false, $tvFrom, $tvTo);
-                $result['events_count'] += $tvResult['events_count'];
-                $result['updated_count'] += $tvResult['updated_count'];
-            }
 
             $status = $tvRows === null ? 'partial' : 'success';
             $this->db->execute(
                 'UPDATE macro_sync_state
-                    SET last_success_at = UTC_TIMESTAMP(), last_status = ?, last_error = NULL,
+                    SET last_success_at = CASE WHEN ? = \'success\' THEN UTC_TIMESTAMP() ELSE last_success_at END,
+                        last_status = ?, last_error = ?,
                         events_count = ?, updated_count = ?, duration_ms = ?, updated_at = UTC_TIMESTAMP()
                   WHERE id = 1',
-                [$status, $result['events_count'], $result['updated_count'], $result['duration_ms']]
+                [$status, $status, $tvError, $result['events_count'], $result['updated_count'], $result['duration_ms']]
             );
             $this->log(sprintf(
                 'sync %s: events=%d updated=%d duration=%dms',
@@ -139,6 +147,58 @@ final class MacroEvents
     }
 
     /**
+     * @param list<array<string,mixed>> $ffRows
+     * @param list<array<string,mixed>>|null $tvRows null means fetch failed
+     * @param array{0:string,1:string} $ffWindow
+     * @param array{0:string,1:string} $tvWindow
+     * @return array{events_count:int,updated_count:int,duration_ms:int}
+     */
+    private function syncNormalizedFeeds(
+        array $ffRows,
+        ?array $tvRows,
+        float $started,
+        array $ffWindow,
+        array $tvWindow
+    ): array {
+        $result = [
+            'events_count' => 0,
+            'updated_count' => 0,
+            'duration_ms' => 0,
+        ];
+        if ($tvRows !== null) {
+            // A successful empty feed clears only TradingView's requested window.
+            // On fetch failure this call is skipped, preserving its last good data.
+            $tvResult = $this->syncPayload(
+                $tvRows,
+                $started,
+                'tradingview',
+                false,
+                $tvWindow[0],
+                $tvWindow[1]
+            );
+            $result['events_count'] += $tvResult['events_count'];
+            $result['updated_count'] += $tvResult['updated_count'];
+            $result['duration_ms'] = $tvResult['duration_ms'];
+        }
+
+        // Apply ForexFactory last: its Sunday–Sunday window takes precedence
+        // over overlapping TradingView events and soft-deletes their duplicates.
+        $ffResult = $this->syncPayload(
+            $ffRows,
+            $started,
+            'forexfactory',
+            true,
+            $ffWindow[0],
+            $ffWindow[1]
+        );
+        $result['events_count'] += $ffResult['events_count'];
+        $result['updated_count'] += $ffResult['updated_count'];
+        $result['duration_ms'] = $ffResult['duration_ms'];
+
+        return $result;
+    }
+
+    /**
      * @param list<array<string, mixed>> $rows znormalizowane rekordy
      */
     public function syncPayload(
@@ -150,17 +210,30 @@ final class MacroEvents
         ?string $windowEnd = null,
     ): array {
         $started ??= microtime(true);
-        if ($rows === []) {
+        if ($rows === [] && ($windowStart === null || $windowEnd === null)) {
             return ['events_count' => 0, 'updated_count' => 0, 'duration_ms' => (int) round((microtime(true) - $started) * 1000)];
         }
 
-        $ids = array_map(static fn (array $event): string => $event['external_id'], $rows);
-        $starts = array_map(static fn (array $event): string => $event['starts_at_utc'], $rows);
-        $windowStart ??= min($starts);
-        if ($windowEnd === null) {
+        if ($rows !== []) {
+            $starts = array_map(static fn (array $event): string => $event['starts_at_utc'], $rows);
+            $windowStart ??= min($starts);
+        }
+        if ($windowEnd === null && $rows !== []) {
+            $starts = array_map(static fn (array $event): string => $event['starts_at_utc'], $rows);
             $max = new \DateTimeImmutable(max($starts), new \DateTimeZone('UTC'));
             $windowEnd = $max->modify('+1 second')->format('Y-m-d H:i:s');
         }
+        if ($windowStart === null || $windowEnd === null || $windowEnd <= $windowStart) {
+            throw new \InvalidArgumentException('Nieprawidłowe okno synchronizacji kalendarza makro.');
+        }
+
+        // Keep inserts and soft deletes inside exactly the same half-open UTC window.
+        $rows = array_values(array_filter(
+            $rows,
+            static fn (array $event): bool => $event['starts_at_utc'] >= $windowStart
+                && $event['starts_at_utc'] < $windowEnd
+        ));
+        $ids = array_map(static fn (array $event): string => $event['external_id'], $rows);
 
         $this->db->withTransaction(function (Db $db) use ($rows, $ids, $windowStart, $windowEnd, $source, $replaceAllSources): void {
             foreach ($rows as $event) {
@@ -198,9 +271,13 @@ final class MacroEvents
                 );
             }
 
-            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $notInClause = '';
+            $params = [$windowStart, $windowEnd];
+            if ($ids !== []) {
+                $notInClause = ' AND external_id NOT IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+                array_push($params, ...$ids);
+            }
             $sourceClause = $replaceAllSources ? '' : ' AND source = ?';
-            $params = [$windowStart, $windowEnd, ...$ids];
             if (!$replaceAllSources) {
                 $params[] = $source;
             }
@@ -209,7 +286,7 @@ final class MacroEvents
                     SET is_deleted = 1, deleted_at = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP()
                   WHERE is_deleted = 0
                     AND starts_at_utc >= ? AND starts_at_utc < ?
-                    AND external_id NOT IN (' . $placeholders . ')' . $sourceClause,
+                    ' . $notInClause . $sourceClause,
                 $params
             );
         });
@@ -249,7 +326,7 @@ final class MacroEvents
             if ($name === '' || $dateIso === '' || !isset(self::IMPACT_MAP[$impactKey])) {
                 continue;
             }
-            if (!preg_match('/^[A-Z]{3}$/', $currency)) {
+            if (!in_array($currency, self::FF_CURRENCIES, true)) {
                 continue;
             }
 
@@ -293,8 +370,8 @@ final class MacroEvents
             $name = trim((string) ($row['title'] ?? ''));
             $country = strtoupper(trim((string) ($row['country'] ?? '')));
             $dateIso = trim((string) ($row['date'] ?? ''));
-            $importance = (int) ($row['importance'] ?? -1);
-            if ($name === '' || $dateIso === '' || !isset(self::TV_IMPORTANCE_MAP[$importance])) {
+            $importance = self::tradingViewImportance($row['importance'] ?? null);
+            if ($name === '' || $dateIso === '' || $importance === null || $importance === -1) {
                 continue;
             }
             $currency = self::TV_CURRENCY_MAP[$country] ?? '';
@@ -376,13 +453,14 @@ final class MacroEvents
     public function syncState(): array
     {
         $row = $this->db->queryOne(
-            'SELECT last_attempt_at, last_success_at, last_status, events_count, duration_ms
+            'SELECT last_attempt_at, last_success_at, last_status, last_error, events_count, duration_ms
                FROM macro_sync_state WHERE id = 1'
         );
         if ($row === null) {
             return [
                 'status' => 'never',
                 'lastSuccessAt' => null,
+                'lastError' => null,
                 'eventsCount' => 0,
                 'stale' => true,
             ];
@@ -395,6 +473,7 @@ final class MacroEvents
         return [
             'status' => (string) ($row['last_status'] ?? 'never'),
             'lastSuccessAt' => $lastSuccess,
+            'lastError' => $row['last_error'] !== null ? (string) $row['last_error'] : null,
             'eventsCount' => (int) ($row['events_count'] ?? 0),
             'stale' => $stale,
         ];
@@ -407,14 +486,17 @@ final class MacroEvents
     }
 
     /** @return list<array<string, mixed>> */
-    private function fetchTradingViewNextWeek(): array
+    private function fetchTradingView(\DateTimeImmutable $now): array
     {
         $utc = new \DateTimeZone('UTC');
-        $nextSunday = (new \DateTimeImmutable('now', $utc))->modify('next sunday')->setTime(0, 0);
-        $nextSaturday = $nextSunday->modify('+6 days')->setTime(23, 59, 59);
+        [$fromUtc, $toExclusiveUtc] = self::tradingViewWindowUtc($now);
+        $from = new \DateTimeImmutable($fromUtc, $utc);
+        // Ask through the exclusive boundary to avoid millisecond gaps in the final second.
+        // syncPayload filters any event returned exactly at this boundary.
+        $to = new \DateTimeImmutable($toExclusiveUtc, $utc);
         $url = self::TV_EVENTS_URL
-            . '?from=' . rawurlencode($nextSunday->format('Y-m-d\TH:i:s.000\Z'))
-            . '&to=' . rawurlencode($nextSaturday->format('Y-m-d\TH:i:s.000\Z'))
+            . '?from=' . rawurlencode($from->format('Y-m-d\TH:i:s.000\Z'))
+            . '&to=' . rawurlencode($to->format('Y-m-d\TH:i:s.000\Z'))
             . '&countries=' . rawurlencode(implode(',', self::TV_COUNTRIES));
 
         $rows = $this->fetchJson($url, [
@@ -428,9 +510,28 @@ final class MacroEvents
         return $decoded;
     }
 
-    /** @return array<string, mixed> */
+    /** @return array<mixed> */
     private function fetchJson(string $url, array $extraHeaders): array
     {
+        if ($this->feedFetcher !== null) {
+            $decoded = ($this->feedFetcher)($url, $extraHeaders);
+            if ($url === self::FF_THIS_WEEK_URL) {
+                if (!is_array($decoded) || !array_is_list($decoded)) {
+                    throw new \RuntimeException('ForexFactory zwrócił nieprawidłową listę wydarzeń.');
+                }
+                return self::feedRowsToArrays($decoded);
+            }
+            if ($decoded instanceof \stdClass) {
+                $decoded = get_object_vars($decoded);
+            }
+            $tvRows = is_array($decoded) ? ($decoded['result'] ?? null) : null;
+            if (!is_array($tvRows) || !array_is_list($tvRows)) {
+                throw new \RuntimeException('TradingView zwrócił nieprawidłową listę wydarzeń.');
+            }
+            $decoded['result'] = self::feedRowsToArrays($tvRows);
+            return $decoded;
+        }
+
         $attempt = 0;
         $lastStatus = 0;
         $lastError = '';
@@ -469,11 +570,7 @@ final class MacroEvents
                 continue;
             }
 
-            $decoded = json_decode((string) $raw, true);
-            if (!is_array($decoded)) {
-                throw new \RuntimeException('Kalendarz makro zwrócił nieprawidłowy JSON.');
-            }
-            return $decoded;
+            return self::decodeJsonFeed((string) $raw, $url);
         }
 
         throw new \RuntimeException(sprintf(
@@ -481,6 +578,32 @@ final class MacroEvents
             $lastStatus,
             $lastError !== '' ? ': ' . $lastError : ''
         ));
+    }
+
+    /** @return array<mixed> */
+    private static function decodeJsonFeed(string $raw, string $url): array
+    {
+        try {
+            $decoded = json_decode($raw, false, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $err) {
+            throw new \RuntimeException('Kalendarz makro zwrócił nieprawidłowy JSON.', 0, $err);
+        }
+        if ($url === self::FF_THIS_WEEK_URL) {
+            if (!is_array($decoded) || !array_is_list($decoded)) {
+                throw new \RuntimeException('ForexFactory zwrócił nieprawidłową listę wydarzeń.');
+            }
+            return self::feedRowsToArrays($decoded);
+        }
+        if (!$decoded instanceof \stdClass) {
+            throw new \RuntimeException('TradingView zwrócił nieprawidłowy obiekt kalendarza.');
+        }
+        $payload = get_object_vars($decoded);
+        $tvRows = $payload['result'] ?? null;
+        if (!is_array($tvRows) || !array_is_list($tvRows)) {
+            throw new \RuntimeException('TradingView zwrócił nieprawidłową listę wydarzeń.');
+        }
+        $payload['result'] = self::feedRowsToArrays($tvRows);
+        return $payload;
     }
 
     private function acquireLock(): bool
@@ -510,6 +633,114 @@ final class MacroEvents
         return implode(' · ', $parts);
     }
 
+    /** @param list<mixed> $rows */
+    private static function hasForexFactoryFeedShape(array $rows): bool
+    {
+        if ($rows === []) {
+            return true;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                return false;
+            }
+            $titleValue = $row['title'] ?? null;
+            $countryValue = $row['country'] ?? null;
+            $impactValue = $row['impact'] ?? null;
+            $dateValue = $row['date'] ?? null;
+            if (!is_string($titleValue) || !is_string($countryValue) || !is_string($impactValue) || !is_string($dateValue)) {
+                return false;
+            }
+            $title = trim($titleValue);
+            $country = strtoupper(trim($countryValue));
+            $impact = strtolower(trim($impactValue));
+            $date = $dateValue;
+            $currencyCountry = in_array($country, self::FF_CURRENCIES, true);
+            $countryValid = $impact === 'holiday'
+                ? ($currencyCountry || $country === 'ALL')
+                : $currencyCountry;
+            if ($title === '' || !$countryValid || !in_array($impact, ['high', 'medium', 'low', 'holiday'], true)
+                || !self::isParseableDate($date)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** @param list<mixed> $rows */
+    private static function hasTradingViewFeedShape(array $rows): bool
+    {
+        if ($rows === []) {
+            return true;
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                return false;
+            }
+            $titleValue = $row['title'] ?? null;
+            $countryValue = $row['country'] ?? null;
+            $dateValue = $row['date'] ?? null;
+            if (!is_string($titleValue) || !is_string($countryValue) || !is_string($dateValue)) {
+                return false;
+            }
+            $title = trim($titleValue);
+            $country = strtoupper(trim($countryValue));
+            $importance = self::tradingViewImportance($row['importance'] ?? null);
+            $date = $dateValue;
+            if ($title === '' || !isset(self::TV_CURRENCY_MAP[$country]) || $importance === null
+                || !self::isParseableDate($date)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static function tradingViewImportance(mixed $value): ?int
+    {
+        if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value)
+            || floor((float) $value) !== (float) $value) {
+            return null;
+        }
+        $importance = (int) $value;
+        return in_array($importance, [-1, 0, 1], true) ? $importance : null;
+    }
+
+    /** @param list<mixed> $rows @return list<mixed> */
+    private static function feedRowsToArrays(array $rows): array
+    {
+        return array_map(
+            static fn (mixed $row): mixed => $row instanceof \stdClass ? get_object_vars($row) : $row,
+            $rows
+        );
+    }
+
+    private static function isParseableDate(string $date): bool
+    {
+        if (preg_match(
+            '/^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|z|[+-]\d{2}:\d{2})$/D',
+            $date,
+            $parts
+        ) !== 1) {
+            return false;
+        }
+        if (!checkdate((int) $parts[2], (int) $parts[3], (int) $parts[1])
+            || (int) $parts[4] > 23
+            || (int) $parts[5] > 59
+            || (int) $parts[6] > 59) {
+            return false;
+        }
+        if (strtoupper($parts[7]) === 'Z') {
+            return true;
+        }
+        if (preg_match('/^[+-](\d{2}):(\d{2})$/', $parts[7], $offset) !== 1) {
+            return false;
+        }
+        $offsetHours = (int) $offset[1];
+        $offsetMinutes = (int) $offset[2];
+
+        return $offsetMinutes <= 59
+            && ($offsetHours < 14 || ($offsetHours === 14 && $offsetMinutes === 0));
+    }
+
     private static function scalar(mixed $value): string
     {
         if (is_int($value) || is_float($value)) {
@@ -525,22 +756,49 @@ final class MacroEvents
         return $events;
     }
 
-    /** @return array{0:string,1:string} start i koniec okna (koniec wyłączny) */
-    private static function currentWeekWindowUtc(): array
+    /**
+     * ForexFactory publishes its current week Sunday–Sunday (UTC).
+     *
+     * @return array{0:string,1:string} start and exclusive end in UTC
+     */
+    public static function forexFactoryWindowUtc(?\DateTimeImmutable $now = null): array
     {
         $utc = new \DateTimeZone('UTC');
-        $now = new \DateTimeImmutable('now', $utc);
+        $now = ($now ?? new \DateTimeImmutable('now', $utc))->setTimezone($utc);
         $daysSinceSunday = (int) $now->format('w');
-        $start = $now->modify('-' . $daysSinceSunday . ' days')->setTime(0, 0);
+        $start = $now->setTime(0, 0)->modify('-' . $daysSinceSunday . ' days');
+
         return [$start->format('Y-m-d H:i:s'), $start->modify('+7 days')->format('Y-m-d H:i:s')];
     }
 
-    /** @return array{0:string,1:string} start i koniec okna (koniec wyłączny) */
-    private static function nextWeekWindowUtc(): array
+    /**
+     * Poniedziałek–poniedziałek UTC dla tygodnia względem bieżącego.
+     *
+     * @return array{0:string,1:string} start i koniec okna (koniec wyłączny)
+     */
+    public static function weekWindowUtc(int $weekOffset, ?\DateTimeImmutable $now = null): array
     {
         $utc = new \DateTimeZone('UTC');
-        $nextSunday = (new \DateTimeImmutable('now', $utc))->modify('next sunday')->setTime(0, 0);
-        return [$nextSunday->format('Y-m-d H:i:s'), $nextSunday->modify('+7 days')->format('Y-m-d H:i:s')];
+        $now = ($now ?? new \DateTimeImmutable('now', $utc))->setTimezone($utc);
+        $daysSinceMonday = (int) $now->format('N') - 1;
+        $start = $now->setTime(0, 0)->modify('-' . $daysSinceMonday . ' days');
+        if ($weekOffset !== 0) {
+            $start = $start->modify(sprintf('%+d weeks', $weekOffset));
+        }
+        return [$start->format('Y-m-d H:i:s'), $start->modify('+7 days')->format('Y-m-d H:i:s')];
+    }
+
+    /**
+     * TradingView window: previous full week and full weeks +1 through +3.
+     *
+     * @return array{0:string,1:string} start and exclusive end in UTC
+     */
+    public static function tradingViewWindowUtc(?\DateTimeImmutable $now = null): array
+    {
+        $now ??= new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $from = self::weekWindowUtc(-1, $now)[0];
+        $to = self::weekWindowUtc(4, $now)[0];
+        return [$from, $to];
     }
 
     private static function utcIso(string $utcDateTime): string

@@ -7,6 +7,7 @@ use AlphaVault\Config;
 use AlphaVault\Db;
 use AlphaVault\Mcp\Proposals\ProposalException;
 use AlphaVault\Mcp\Proposals\ProposalService;
+use AlphaVault\Mcp\Support\DayPlanRecords;
 use AlphaVault\Mcp\Write\WriteEngine;
 use AlphaVault\Mcp\Write\WriteException;
 use Mcp\Server\Exception\ToolCallException;
@@ -110,16 +111,20 @@ final class WriteTools
         ?float $exitPrice = null,
         ?float $result = null,
         ?string $comment = null,
-        ?float $mfe = null,
+        mixed $mfe = false,
         ?int $expectedRevision = null
     ): array {
-        return $this->write($context, 'trade.close', $this->compact([
+        $args = [
             'tradeId' => $tradeId,
             'exitPrice' => $exitPrice,
             'result' => $result,
             'comment' => $comment,
-            'mfe' => $mfe,
-        ]), $expectedRevision, $idempotencyKey);
+        ];
+        if ($mfe !== false) {
+            $args['mfe'] = $mfe;
+        }
+
+        return $this->write($context, 'trade.close', $this->compact($args, ['mfe']), $expectedRevision, $idempotencyKey);
     }
 
     public function deleteTrade(
@@ -291,10 +296,12 @@ final class WriteTools
         array $changes,
         string $idempotencyKey,
         ?string $date = null,
-        ?int $expectedRevision = null
+        ?int $expectedRevision = null,
+        ?string $planId = null
     ): array {
         return $this->write($context, 'plan.update', $this->compact([
             'date' => $date,
+            'planId' => $planId,
             'changes' => $changes,
         ]), $expectedRevision, $idempotencyKey);
     }
@@ -303,18 +310,20 @@ final class WriteTools
         RequestContext $context,
         string $idempotencyKey,
         ?string $date = null,
-        ?int $expectedRevision = null
+        ?int $expectedRevision = null,
+        ?string $planId = null
     ): array {
-        return $this->write($context, 'plan.approve', $this->compact(['date' => $date]), $expectedRevision, $idempotencyKey);
+        return $this->write($context, 'plan.approve', $this->compact(['date' => $date, 'planId' => $planId]), $expectedRevision, $idempotencyKey);
     }
 
     public function deleteDayPlan(
         RequestContext $context,
         string $idempotencyKey,
         ?string $date = null,
-        ?int $expectedRevision = null
+        ?int $expectedRevision = null,
+        ?string $planId = null
     ): array {
-        return $this->write($context, 'plan.delete', $this->compact(['date' => $date]), $expectedRevision, $idempotencyKey);
+        return $this->write($context, 'plan.delete', $this->compact(['date' => $date, 'planId' => $planId]), $expectedRevision, $idempotencyKey);
     }
 
     // ------------------------------------------------------------------
@@ -621,8 +630,8 @@ final class WriteTools
         RequestContext $context,
         string $proposalId,
         string $expectedDiffHash,
+        bool $confirmed,
         string $idempotencyKey,
-        bool $confirmed = false,
         ?string $confirmationCode = null
     ): array {
         [$userId, $client] = $this->guard($context);
@@ -636,7 +645,8 @@ final class WriteTools
                 $expectedDiffHash,
                 $confirmationCode,
                 $idempotencyKey,
-                $client
+                $client,
+                $confirmed
             );
         } catch (ProposalException $err) {
             throw new ToolCallException('[' . $err->errorCode . '] ' . $err->getMessage());
@@ -690,6 +700,33 @@ final class WriteTools
     {
         [$userId, $client] = $this->guard($context);
         try {
+            $existing = $this->db->queryOne(
+                'SELECT kind, target_ref, after_json FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ?',
+                [$userId, trim($idempotencyKey)]
+            );
+            $existingAfter = $existing !== null ? json_decode((string) ($existing['after_json'] ?? ''), true) : null;
+            if ($existing !== null
+                && (string) ($existing['kind'] ?? '') === 'write_op'
+                && is_array($existingAfter)
+                && (string) ($existingAfter['op'] ?? '') === $op) {
+                $proposal = $this->proposals->create(
+                    $userId,
+                    $client,
+                    'write_op',
+                    (string) ($existing['target_ref'] ?? ''),
+                    null,
+                    ['op' => $op, 'args' => $args],
+                    $idempotencyKey
+                );
+
+                return array_merge($proposal, [
+                    'ok' => true,
+                    'applied' => 'proposal',
+                    'operation' => $op,
+                    'note' => 'Powtórka klucza idempotencji zwróciła istniejącą propozycję. Nic nie zostało zapisane.',
+                ]);
+            }
+
             $row = $this->db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ?', [$userId]);
             $state = $row !== null ? json_decode((string) ($row['state'] ?? ''), true) : [];
             if (!is_array($state)) {
@@ -701,7 +738,11 @@ final class WriteTools
                     '[revision_conflict] Dane zmieniły się od czasu odczytu (oczekiwano wersji ' . $expectedRevision . ', jest ' . $revision . '). Odczytaj rekord ponownie.'
                 );
             }
-            $preview = $this->engine->preview($userId, $state, $op, $args);
+            $basePreview = $this->engine->preview($userId, $state, $op, $args);
+            $preparedTarget = $this->stableProposalTarget($userId, $state, $op, $basePreview, $idempotencyKey);
+            $preview = $preparedTarget !== null && $preparedTarget !== ''
+                ? $this->engine->preview($userId, $state, $op, $args, $preparedTarget)
+                : $basePreview;
             $proposal = $this->proposals->create(
                 $userId,
                 $client,
@@ -719,8 +760,10 @@ final class WriteTools
                 'applied' => 'proposal',
                 'operation' => $op,
                 'preview' => $preview['after'],
-                'note' => 'Nic nie zostało zapisane. Pokaż użytkownikowi diff i diffHash. Zapis wykona się po zatwierdzeniu w panelu AlphaVault kodem jednorazowym.',
+                'note' => 'Nic nie zostało zapisane. Pokaż użytkownikowi diff i diffHash. Po wyraźnym potwierdzeniu użytkownika wywołaj approve_proposal z confirmed=true; kod jednorazowy z panelu jest opcjonalny.',
             ]);
+        } catch (ToolCallException $err) {
+            throw $err;
         } catch (WriteException $err) {
             throw new ToolCallException('[' . $err->errorCode . '] ' . $err->getMessage());
         } catch (ProposalException $err) {
@@ -730,6 +773,66 @@ final class WriteTools
 
             throw new ToolCallException('[internal] Propozycja nie została utworzona z powodu błędu serwera.');
         }
+    }
+
+    /**
+     * Proposal IDs are derived from the idempotency key, so a retry produces
+     * the same preview target. Existing proposal rows reuse their stored target.
+     *
+     * @param array<string,mixed> $state
+     * @param array{target:string} $preview
+     */
+    private function stableProposalTarget(int $userId, array $state, string $op, array $preview, string $key): ?string
+    {
+        $resource = '';
+        $prefix = '';
+        $usedIds = [];
+        switch ($op) {
+            case 'plan.create':
+                $resource = 'plan';
+                $prefix = 'pl_';
+                foreach (DayPlanRecords::all($state) as $record) {
+                    $usedIds[] = $record['id'];
+                }
+                break;
+            case 'account.create':
+                $resource = 'account';
+                $prefix = 'acc';
+                $usedIds = array_map(static fn (array $row): string => (string) ($row['id'] ?? ''), (array) ($state['accounts'] ?? []));
+                break;
+            case 'flow.create':
+                $resource = 'flow';
+                $prefix = 'f';
+                $usedIds = array_map(static fn (array $row): string => (string) ($row['id'] ?? ''), (array) ($state['flows'] ?? []));
+                break;
+            case 'prop.create':
+                $resource = 'prop';
+                $prefix = 'prop_';
+                $usedIds = array_map(
+                    static fn (array $row): string => (string) ($row['id'] ?? ''),
+                    (array) ($state['prop']['challenges'] ?? [])
+                );
+                break;
+            default:
+                return null;
+        }
+
+        $date = '';
+        if ($op === 'plan.create') {
+            if (preg_match('/^plan:(\d{4}-\d{2}-\d{2})#/', (string) ($preview['target'] ?? ''), $match) !== 1) {
+                throw new ToolCallException('[invalid_proposal_target] Nie można ustalić daty planu z podglądu.');
+            }
+            $date = $match[1];
+        }
+        for ($attempt = 0; $attempt < 1024; $attempt++) {
+            $suffix = substr(hash('sha256', $userId . "\0" . trim($key) . "\0" . $op . "\0" . $attempt), 0, 12);
+            $id = $prefix . $suffix;
+            if (!in_array($id, $usedIds, true)) {
+                return $resource === 'plan' ? 'plan:' . $date . '#' . $id : $resource . ':' . $id;
+            }
+        }
+
+        throw new ToolCallException('[id_conflict] Nie można wygenerować unikalnego celu propozycji.');
     }
 
     /**
@@ -763,9 +866,13 @@ final class WriteTools
      * @param array<string,mixed> $args
      * @return array<string,mixed>
      */
-    private function compact(array $args): array
+    private function compact(array $args, array $preserveNull = []): array
     {
-        return array_filter($args, static fn (mixed $value): bool => $value !== null);
+        return array_filter(
+            $args,
+            static fn (mixed $value, int|string $key): bool => $value !== null || in_array($key, $preserveNull, true),
+            ARRAY_FILTER_USE_BOTH
+        );
     }
 
     private function canonical(mixed $value): mixed
