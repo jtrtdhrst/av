@@ -51,21 +51,25 @@ const fixture = {
   ],
   trades: []
 };
+// Pełne pola wykonania, żeby nowa walidacja stanu (TradeRules::validateTransition)
+// przy PUT /api/state nie odrzuciła seedu. Wyniki podatkowe zależą tylko od
+// `result`, `date`, `source` i `account` — te pola nie zmieniają oczekiwań.
+const exec = { dir: 'l', entry: '100', size: '1', sl: '95', exit: '101' };
 for (let i = 0; i < 47; i++) {
   fixture.trades.push({
     id: 'tax-w' + i, date: '2026-09-' + String((i % 27) + 1).padStart(2, '0') + 'T10:00:00.000Z',
-    pair: 'BTC/USDT', source: 'WEEX', account: 'WEEX', result: 1
+    pair: 'BTC/USDT', source: 'WEEX', account: 'WEEX', result: 1, ...exec
   });
 }
 for (let i = 0; i < 2; i++) {
   fixture.trades.push({
     id: 'tax-m' + i, date: '2026-10-0' + (i + 1) + 'T10:00:00.000Z',
-    pair: 'EUR/USD', source: 'MT5', account: 'MT5', result: 1
+    pair: 'EUR/USD', source: 'MT5', account: 'MT5', result: 1, ...exec
   });
 }
 fixture.trades.push({
   id: 'tax-old', date: '2025-11-01T10:00:00.000Z',
-  pair: 'ETH/USDT', source: 'WEEX', account: 'WEEX', result: 1
+  pair: 'ETH/USDT', source: 'WEEX', account: 'WEEX', result: 1, ...exec
 });
 
 const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
