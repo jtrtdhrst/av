@@ -1187,16 +1187,20 @@ try {
   await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
 
   const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
-  await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
-  await page.fill('#ntPair', 'ETH/USDT');
-  await page.waitForTimeout(250);
-  await page.fill('#ntNote', tradeNote);
-  await page.waitForTimeout(300);
   await page.evaluate(() => {
     AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
-    AV.ui.ntChecks = { 'Poziom z planu': false, 'Spokojna głowa': false };
+    AV.ui.ntChecks = {};
     AV.renderChecklist();
   });
+  await page.click('#ntDir [data-d="l"]');
+  await page.fill('#ntPair', 'ETH/USDT');
+  await page.waitForTimeout(250);
+  const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
+  const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
+  if (!initiallyChecked) await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
+  await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
+  await page.fill('#ntNote', tradeNote);
+  await page.waitForTimeout(250);
   const manualPlanLevel = await page.evaluate(() => ({
       matches: AV.tradePlanMatch(AV.state, { date: new Date().toISOString(), pair: 'ETH/USDT', dir: 'l' }),
     checked: document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on') || false,
@@ -1209,26 +1213,19 @@ try {
    log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
    await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
-  // Ensure the new-trade form is visible after the in-memory checklist setup.
-  await page.click('.navg button[data-v="nowa"]');
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
-  const setNtField = (id, value) => page.evaluate(({ id, value }) => {
-    const el = document.getElementById(id);
-    el.value = value;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  }, { id, value });
-  await setNtField('ntEntry', '100');
-  await setNtField('ntTp', '100.5');
-  await setNtField('ntSize', '1');
-  await page.evaluate(() => document.getElementById('saveTrade')?.click());
+  await page.fill('#ntEntry', '100');
+  await page.fill('#ntTp', '100.5');
+  await page.fill('#ntSize', '1');
+  await page.click('#saveTrade');
   const missingSl = await page.evaluate((before) => ({
     unchanged: AV.state.trades.length === before,
     message: document.querySelector('#toast')?.textContent || ''
   }), beforeTrades);
   log('nowa transakcja: SL wymagany', missingSl.unchanged && /stop loss/i.test(missingSl.message), JSON.stringify(missingSl));
 
-  await setNtField('ntSl', '99');
-  await page.evaluate(() => document.getElementById('saveTrade')?.click());
+  await page.fill('#ntSl', '99');
+  await page.click('#saveTrade');
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
