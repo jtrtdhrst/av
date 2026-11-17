@@ -9,7 +9,10 @@ import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
 const candidates = [
   process.env.CHROME_PATH,
@@ -331,6 +334,7 @@ try {
 
   // backup stanu po stronie klienta (do przywrócenia po testach zapisu)
   const backup = await page.evaluate(() => JSON.stringify(AV.state));
+  const fixtureUserId = await page.evaluate(async () => (await (await AV.apiFetch('/api/state')).json()).userId);
 
   // plan: chipy rynku/biasu, poziomy, zatwierdzenie i trwały zapis w MySQL
   await page.click('.navg button[data-v="plan"]');
@@ -1688,34 +1692,17 @@ try {
   const levelText = await page.locator('#levelBadge').innerText();
   log('odznaki: dynamiczny licznik i poziom', summaryText === `${badges.live.done} z ${badges.live.total} · poziom ${badges.live.level}` && levelText === 'poziom ' + badges.live.level, summaryText + ' / ' + levelText);
 
-  // przywróć stan demo i poczekaj na zapis do MySQL
-  await page.evaluate(async (raw) => {
-    clearTimeout(AV._pushTimer);
-    await AV.waitForPushIdle();
-    const latest = await AV.apiFetch('/api/state');
-    if (latest.ok) AV.api.revision = (await latest.json()).revision;
-    AV.state = AV.normalizeServer(JSON.parse(raw));
-    AV.saveNow();
-    clearTimeout(AV._pushTimer);
-    const saved = await AV.pushStateImmediate();
-    if (!saved) {
-      // Fall back to an explicit PUT with a freshly read revision.
-      const again = await AV.apiFetch('/api/state');
-      const rev = again.ok ? (await again.json()).revision : AV.api.revision;
-      await AV.apiFetch('/api/state', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: JSON.parse(raw), baseRevision: rev, ownerId: AV.currentUserId })
-      });
-    }
-  }, backup);
-  await page.waitForTimeout(300);
+  // Przywróć stan demo bezpośrednio w bazie: nowy backend blokuje
+  // usuwanie transakcji przez validateTransition przy zwykłym PUT /api/state.
+  execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+    env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+    input: JSON.stringify({ state: JSON.parse(backup) }),
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
   const restoredCount = await page.evaluate(async () => {
     const response = await AV.apiFetch('/api/state');
     const payload = await response.json();
-    AV.state = AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo });
-    AV.api.revision = payload.revision;
-    return AV.state.trades.length;
+    return Array.isArray(payload.state?.trades) ? payload.state.trades.length : -1;
   });
   log('przywrócenie stanu demo', restoredCount === 47, restoredCount);
 
