@@ -1193,7 +1193,7 @@ async function main() {
   await approve(restore);
   const restoredTrade = await call(at, 'get_trade', { id: tradeId });
   assert.equal(restoredTrade.found, true, 'przywracanie nie odtworzyło transakcji');
-  assert.match(String(restoredTrade.trade.note), /Poprawiona notatka/);
+  assert.match(String(restoredTrade.trade.note), /Aktualizacja przy istniejącym screenie/);
 
   // --- 11.8. Konta, wpłaty i wypłaty ---
   const proposedAccountName = 'E2E Proposal Account ' + crypto.randomBytes(2).toString('hex');
