@@ -1574,6 +1574,10 @@ try {
     clearTimeout(AV._pushTimer);
     return id;
   });
+  await page.evaluate(async () => {
+    const response = await AV.apiFetch('/api/state');
+    if (response.ok) AV.api.revision = (await response.json()).revision;
+  });
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
   await page.fill('#ctExit', '');
   await page.fill('#ctResult', '20');
