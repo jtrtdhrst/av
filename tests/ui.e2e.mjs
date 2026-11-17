@@ -1209,6 +1209,8 @@ try {
    log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
    await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
+  // Ensure the new-trade form is visible after the in-memory checklist setup.
+  await page.evaluate(() => AV.showView('nowa'));
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
