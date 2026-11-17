@@ -1687,10 +1687,22 @@ try {
   await page.evaluate(async (raw) => {
     clearTimeout(AV._pushTimer);
     await AV.waitForPushIdle();
+    const latest = await AV.apiFetch('/api/state');
+    if (latest.ok) AV.api.revision = (await latest.json()).revision;
     AV.state = AV.normalizeServer(JSON.parse(raw));
     AV.saveNow();
     clearTimeout(AV._pushTimer);
-    await AV.pushStateImmediate();
+    const saved = await AV.pushStateImmediate();
+    if (!saved) {
+      // Fall back to an explicit PUT with a freshly read revision.
+      const again = await AV.apiFetch('/api/state');
+      const rev = again.ok ? (await again.json()).revision : AV.api.revision;
+      await AV.apiFetch('/api/state', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: JSON.parse(raw), baseRevision: rev, ownerId: AV.currentUserId })
+      });
+    }
   }, backup);
   await page.waitForTimeout(300);
   const restoredCount = await page.evaluate(() => AV.state.trades.length);
