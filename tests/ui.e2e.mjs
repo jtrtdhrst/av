@@ -1546,9 +1546,11 @@ try {
       mentor: '', session: '', plan: false, screens: {}
     });
     AV.saveNow();
+    clearTimeout(AV._pushTimer);
     return id;
   });
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
+  await page.waitForSelector('#ctExit', { timeout: 10000 });
   await page.fill('#ctExit', '');
   await page.fill('#ctResult', '20');
   await page.click('#ctSave');
