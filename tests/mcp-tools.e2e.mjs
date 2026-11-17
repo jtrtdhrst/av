@@ -928,7 +928,7 @@ async function main() {
   }, /zamkniętej transakcji/i);
   const closeReview = await call(at, 'update_trade', {
     tradeId, expectedRevision: preservedMfeClosed.revision,
-    changes: { grade: 'A', note: 'Recenzja po zamknięciu' },
+    changes: { grade: 'B', note: 'Recenzja po zamknięciu' },
     idempotencyKey: idem('trade-closed-review'),
   });
   assert.deepEqual(closeReview.changes.slice().sort(), ['grade', 'mentor', 'note'].sort());
