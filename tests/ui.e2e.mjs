@@ -1531,20 +1531,22 @@ try {
   } else {
     log('dziennik: wpis widoczny przy koncie poza statystykami', false, 'nie znaleziono konta przypisanego do testowej transakcji');
   }
-  if (addedId) {
-    // Settle pending pushes and resync revision after the account-toggle
-    // section so the close save is not reverted by a stale-revision 409.
+  // In-memory manipulation tests may have reloaded state; re-discover the
+  // test trade by its unique note right before closing it.
+  const closeId = await page.evaluate((note) =>
+    AV.state.trades.find((t) => t.note === note && !AV.isTradeClosed(t))?.id || '', tradeNote);
+  if (closeId) {
     await page.evaluate(async () => {
       clearTimeout(AV._pushTimer);
       await AV.waitForPushIdle();
     });
-    await page.evaluate((id) => AV.closeTradeModal(id), addedId);
+    await page.evaluate((id) => AV.closeTradeModal(id), closeId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
     await page.fill('#ctExit', '105');
     const hasResultField = await page.locator('#ctResult').count();
     if (hasResultField) await page.fill('#ctResult', '5');
     await page.evaluate(() => document.getElementById('ctSave')?.click());
-    const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, addedId);
+    const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, closeId);
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
   const resultOnlyId = await page.evaluate(() => {
