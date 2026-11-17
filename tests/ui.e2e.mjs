@@ -1520,6 +1520,11 @@ try {
     log('dziennik: wpis widoczny przy koncie poza statystykami', false, 'nie znaleziono konta przypisanego do testowej transakcji');
   }
   if (addedId) {
+    const closeDiag = await page.evaluate((id) => {
+      const t = AV.state.trades.find((x) => x.id === id);
+      return t ? { result: t.result, closedAt: t.closedAt, closed: AV.isTradeClosed(t), exit: t.exit } : null;
+    }, addedId);
+    log('diag: close modal trade', !!closeDiag && !closeDiag.closed, JSON.stringify(closeDiag));
     await page.evaluate((id) => AV.closeTradeModal(id), addedId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
     await page.fill('#ctExit', '105');
