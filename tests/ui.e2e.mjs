@@ -1684,11 +1684,15 @@ try {
   log('odznaki: dynamiczny licznik i poziom', summaryText === `${badges.live.done} z ${badges.live.total} · poziom ${badges.live.level}` && levelText === 'poziom ' + badges.live.level, summaryText + ' / ' + levelText);
 
   // przywróć stan demo i poczekaj na zapis do MySQL
-  await page.evaluate((raw) => {
+  await page.evaluate(async (raw) => {
+    clearTimeout(AV._pushTimer);
+    await AV.waitForPushIdle();
     AV.state = AV.normalizeServer(JSON.parse(raw));
     AV.saveNow();
+    clearTimeout(AV._pushTimer);
+    await AV.pushStateImmediate();
   }, backup);
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(300);
   const restoredCount = await page.evaluate(() => AV.state.trades.length);
   log('przywrócenie stanu demo', restoredCount === 47, restoredCount);
 
