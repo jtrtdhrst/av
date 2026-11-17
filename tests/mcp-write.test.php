@@ -54,11 +54,15 @@ foreach ($schemaMethods as $method) {
     if (!in_array('idempotencyKey', $schema['required'] ?? [], true)) {
         $schemaProblems[] = $method . ':idempotencyKey';
     }
+    $keySchema = $schema['properties']['idempotencyKey'] ?? [];
+    if (($keySchema['minLength'] ?? null) !== 8 || ($keySchema['maxLength'] ?? null) !== 120) {
+        $schemaProblems[] = $method . ':idempotencyKey-length';
+    }
     if (($schema['additionalProperties'] ?? null) !== false) {
         $schemaProblems[] = $method . ':additionalProperties';
     }
 }
-check('Schematy: idempotencyKey i zamknięty kontrakt', $schemaProblems === [], implode(', ', $schemaProblems));
+check('Schematy: idempotencyKey 8-120 znaków i zamknięty kontrakt', $schemaProblems === [], implode(', ', $schemaProblems));
 check(
     'Schematy: approve_proposal wymaga confirmed i hash, kod panelu jest opcjonalny',
     in_array('confirmed', WriteSchemas::inputApproveProposal()['required'], true)
@@ -96,6 +100,13 @@ check('Operacje: decyzje nie są operacjami zapisu', !in_array('approve_proposal
 
 // --- Silnik na czystym stanie (bez DB) -------------------------------
 $engine = (new ReflectionClass(WriteEngine::class))->newInstanceWithoutConstructor();
+$longIdempotencyKeyError = '';
+try {
+    $engine->execute(1, 'trade.create', [], null, str_repeat('k', 121));
+} catch (WriteException $err) {
+    $longIdempotencyKeyError = $err->errorCode;
+}
+check('Silnik: idempotencyKey ponad schematowe 120 znaków odrzucony przed DB', $longIdempotencyKeyError === 'bad_request');
 $apply = static fn (array $state, string $op, array $args): array => $engine->apply(1, $state, $op, $args);
 $errorOf = static function (array $state, string $op, array $args) use ($engine): string {
     try {

@@ -67,7 +67,7 @@ npm run test:roles       # rola: login + cron recheck: 18 scenariuszy
 npm run test:wearables   # urządzenia zdrowotne API + UI: 42 scenariusze
 npm run test:mcp          # MCP 3.2: OAuth, 79 narzędzi w jednym zakresie, create→delete→restore (MySQL + PHP)
 npm run test:mcp:tools    # MCP: 79/79 wywołań, no-op bez rewizji, zamrożony snapshot, revision replay i redakcja screenów
-npm run test:mcp:write    # MCP: operacje zapisu, legacy close bez SL, walidacja kosza, precyzja i redakcja screenów
+npm run test:mcp:write    # MCP: operacje zapisu, klucze idempotencji 8–120 znaków, legacy close, kosz, precyzja i redakcja screenów
 npm run test:mcp:contract # MCP: selektory, statusy i zgodność planów, filtry statystyk oraz checklisty
 npm run test:mcp:login    # mock Discord: rola, brak roli, duplikat konta
 npm run test:mcp:ui       # panel propozycji: diff, kod do rozmowy, approve, reject, reload

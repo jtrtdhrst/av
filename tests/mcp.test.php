@@ -402,6 +402,7 @@ try {
     check('10c1. propozycja nie może ponownie użyć ID planu z innej daty', $collisionPlanError === 'plan_id_conflict');
 
     // 10d. write_op dla plan.create zapisuje dokładne ID z podglądu.
+    // MySQL JSON może zmienić kolejność kluczy obiektów po round-trip.
     $proposalDate = (new DateTimeImmutable('yesterday', Dates::tz()))->format('Y-m-d');
     $writeArgs = ['date' => $proposalDate, 'market' => 'SOL', 'bias' => 'long'];
     $writeEngine = new WriteEngine($db, $config);

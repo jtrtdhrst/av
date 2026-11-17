@@ -98,7 +98,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '422':
-          description: Nieprawidłowy kierunek, data, para (invalid_pair), liczby, wymagany SL, SL/TP, closedAt albo kształt listy transakcji/kosza; stan i rewizja bez zmian
+          description: Nieprawidłowy kierunek, data, para (invalid_pair), liczby, wymagany SL, SL/TP, closedAt, kształt listy transakcji/kosza albo nowy wpis w koszu bez dokładnego źródła (trade_trash_source_invalid); stan i rewizja bez zmian
           content:
             application/json:
               schema:

@@ -134,8 +134,8 @@ final class WriteEngine
         ?int $actorId = null,
     ): array {
         $key = trim($idempotencyKey);
-        if (mb_strlen($key) < 8 || mb_strlen($key) > 128) {
-            throw new WriteException('bad_request', 'idempotencyKey musi mieć 8-128 znaków.');
+        if (mb_strlen($key) < 8 || mb_strlen($key) > 120) {
+            throw new WriteException('bad_request', 'idempotencyKey musi mieć 8-120 znaków.');
         }
         $payloadHash = $this->requestHash($op, $args, $expectedRevision);
 

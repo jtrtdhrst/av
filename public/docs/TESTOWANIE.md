@@ -32,7 +32,7 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Tax E2E | PIT-38, CSV/PDF, wpłaty/wypłaty |
 | PWA E2E | manifest, SW, instalacja, push, offline |
 | UI empty-state E2E | puste pola po sukcesie z `[]` |
-| MCP unit/E2E | 79 narzędzi z runtime rejestru, regresje dat/metryk/transakcji, semantyczny no-op bez zmiany rewizji, snapshot propozycji z kontrolą rewizji replay, redakcja screenów w odpowiedziach/diffach/replay, fixture'y testowe blokowane poza odizolowanym CI |
+| MCP unit/E2E | 79 narzędzi z runtime rejestru, klucze idempotencji 8–120 znaków, regresje dat/metryk/transakcji, semantyczny no-op bez zmiany rewizji, snapshot propozycji z kontrolą rewizji replay, redakcja screenów w odpowiedziach/diffach/replay, fixture'y testowe blokowane poza odizolowanym CI |
 | MCP deploy guard | tylko `main` lub pełny SHA z `main` z udanym `ci.yml` dla dokładnego SHA; health revision i liczba narzędzi |
 
 ## Podatki PIT-38 — 8 scenariuszy

@@ -899,14 +899,50 @@ final class ProposalService
         $stateDiff = RecordDiff::stateBetween($currentState, $after['plannedState']);
         $actualDiff = $this->appendWriteOpStateDiff($actualDiff, $stateDiff);
         $storedDiff = json_decode((string) ($proposal['diff_json'] ?? '[]'), true);
-        if (!is_array($storedDiff)
-            || $this->canonicalJson($actualDiff) !== $this->canonicalJson($storedDiff)
+        $normalizedActualDiff = $this->normalizeDiffOrder($actualDiff);
+        $normalizedStoredDiff = is_array($storedDiff) ? $this->normalizeDiffOrder($storedDiff) : null;
+        if ($normalizedActualDiff === null
+            || $normalizedStoredDiff === null
+            || $this->canonicalJson($normalizedActualDiff) !== $this->canonicalJson($normalizedStoredDiff)
             || !hash_equals(
                 $this->diffHashFor($proposal),
-                $this->diffHash('write_op', (string) $proposal['target_ref'], $actualDiff)
+                $this->diffHash('write_op', (string) $proposal['target_ref'], $storedDiff)
             )) {
             throw new ProposalException('diff_mismatch', 'Podgląd zapisany w propozycji nie zgadza się z jej diffem.', 409);
         }
+    }
+
+    /**
+     * MySQL JSON may reorder object keys after persistence. Diff entries are
+     * semantically a set keyed by field, so normalize their order only for
+     * integrity comparison while preserving the stored diff and its hash.
+     *
+     * @param array<mixed> $diff
+     * @return list<array<string,mixed>>|null
+     */
+    private function normalizeDiffOrder(array $diff): ?array
+    {
+        if (!array_is_list($diff)) {
+            return null;
+        }
+        foreach ($diff as $change) {
+            if (!is_array($change)
+                || !is_string($change['field'] ?? null)
+                || !array_key_exists('before', $change)
+                || !array_key_exists('after', $change)) {
+                return null;
+            }
+        }
+        usort($diff, function (array $left, array $right): int {
+            $fieldOrder = strcmp($left['field'], $right['field']);
+            if ($fieldOrder !== 0) {
+                return $fieldOrder;
+            }
+
+            return strcmp($this->canonicalJson($left), $this->canonicalJson($right));
+        });
+
+        return $diff;
     }
 
     /**
