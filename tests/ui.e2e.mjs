@@ -1163,10 +1163,7 @@ try {
 
   await page.fill('#ntSl', '99');
   await page.click('#saveTrade');
-  await page.evaluate(async () => {
-    clearTimeout(AV._pushTimer);
-    await AV.pushStateImmediate();
-  });
+  await page.evaluate(() => clearTimeout(AV._pushTimer));
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
