@@ -1565,8 +1565,12 @@ try {
   });
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
   await page.waitForSelector('#ctExit', { timeout: 10000 });
-  await page.fill('#ctExit', '');
-  await page.fill('#ctResult', '20');
+  await page.evaluate(() => {
+    const exit = document.getElementById('ctExit');
+    const result = document.getElementById('ctResult');
+    if (exit) { exit.value = ''; exit.dispatchEvent(new Event('input', { bubbles: true })); }
+    if (result) { result.value = '20'; result.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
   await page.evaluate(() => document.getElementById('ctSave')?.click());
   const resultOnly = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
