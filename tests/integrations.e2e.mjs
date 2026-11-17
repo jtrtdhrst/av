@@ -216,7 +216,7 @@ try {
   assert.deepEqual(atomicAfter.json.state, atomicBefore.json.state, 'błędny batch nie może zmienić stanu');
   assert.equal(atomicAfter.json.state.trades.some((trade) => trade.extId === atomicGoodId), false);
   assert.equal(importMarkerExists(atomicBefore.json.userId, atomicGoodId), false, 'marker pierwszego importu musi wycofać transakcja');
-  log('OKX: błędny import wycofuje cały batch, stan, revision i marker');
+  log('OKX: błędny import wycofuje cały batch, stan, revision i marker', true);
 
   const bulkFixture = await connect('okx', {
     apiKey: 'okx-over-500', secretKey: 'okx-secret', passphrase: 'p',
@@ -396,10 +396,20 @@ try {
   assert.ok(okxConn.lastSyncAt);
   log('API: brak sekretów, maski i statusy', true);
 
+  const okxBeforeDelete = list.json.connections.filter((c) => c.provider === 'okx').length;
   const del = await req('/api/connections/' + okxId, { method: 'DELETE', headers: { Origin: BASE } });
   assert.equal(del.res.status, 200, del.text);
   const afterDelete = await req('/api/connections');
-  assert.equal(afterDelete.json.connections.filter((c) => c.provider === 'okx').length, 0);
+  assert.equal(
+    afterDelete.json.connections.some((c) => c.id === okxId),
+    false,
+    'usunięte połączenie nie może być na liście'
+  );
+  assert.equal(
+    afterDelete.json.connections.filter((c) => c.provider === 'okx').length,
+    okxBeforeDelete - 1,
+    'usunięcie zmniejsza liczbę połączeń OKX o jeden'
+  );
   log('OKX: odłączenie usuwa połączenie', true);
 
   const failed = results.filter((r) => !r.ok).length;
