@@ -1588,9 +1588,15 @@ try {
     JSON.stringify(emptyResultState));
 
   await page.evaluate(() => {
+    clearTimeout(AV._pushTimer);
     AV.ui.editId = null;
+    if (AV.lockInfo(AV.state).active) {
+      AV.state.overrides = AV.state.overrides || [];
+      AV.state.overrides.push({ date: AV.dateKey(new Date()), at: Date.now(), reason: 'E2E break-even' });
+    }
     AV.showView('nowa');
     AV.renderNewTradeForm();
+    AV.renderLock();
   });
   await page.fill('#ntPair', 'E2E-BE/USDT');
   await page.fill('#ntEntry', '100');
