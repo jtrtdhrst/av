@@ -222,6 +222,12 @@ final class RecordDiff
      */
     public static function redactValue(mixed $value, ?string $key = null): mixed
     {
+        // Idempotency: an already-redacted summary must not be hashed again,
+        // otherwise metadata such as `bytes` counts the 64-char digest string
+        // and the preview shows misleading sizes after repeated redaction.
+        if (self::isScreenSummary($value)) {
+            return $value;
+        }
         $normalizedKey = strtolower((string) $key);
         if ($normalizedKey === 'screens' || $normalizedKey === 'dataurl' || $normalizedKey === 'data_url') {
             return self::screenSummary($value);
@@ -237,6 +243,18 @@ final class RecordDiff
             $safe[$childKey] = self::redactValue($child, (string) $childKey);
         }
         return $safe;
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private static function isScreenSummary(mixed $value): bool
+    {
+        return is_array($value)
+            && count($value) === 2
+            && is_string($value['sha256'] ?? null)
+            && preg_match('/^[a-f0-9]{64}$/D', $value['sha256']) === 1
+            && is_int($value['bytes'] ?? null);
     }
 
     private static function screenSummary(mixed $value): array
