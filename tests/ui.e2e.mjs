@@ -1560,6 +1560,9 @@ try {
       mentor: '', session: '', plan: false, screens: {}
     });
     AV.saveNow();
+    // Cancel the deferred PUT: it would fire after the close's own save with a
+    // stale baseRevision and trigger a 409 reload that reverts the close.
+    clearTimeout(AV._pushTimer);
     return id;
   });
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
