@@ -1537,21 +1537,7 @@ try {
     await page.evaluate(async () => {
       clearTimeout(AV._pushTimer);
       await AV.waitForPushIdle();
-      const response = await AV.apiFetch('/api/state');
-      if (response.ok) {
-        const payload = await response.json();
-        AV.api.revision = payload.revision;
-        // Adopt the authoritative state so an in-flight 409 cannot swap it
-        // out mid-modal and leave the trade marked closed.
-        AV.state = AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo });
-      }
     });
-    await page.waitForTimeout(400);
-    const closeDiag2 = await page.evaluate((id) => {
-      const t = AV.state.trades.find((x) => x.id === id);
-      return { found: !!t, closed: t ? AV.isTradeClosed(t) : null, result: t?.result, closedAt: t?.closedAt };
-    }, addedId);
-    log('diag2: close modal', !closeDiag2.closed, JSON.stringify(closeDiag2));
     await page.evaluate((id) => AV.closeTradeModal(id), addedId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
     await page.fill('#ctExit', '105');
