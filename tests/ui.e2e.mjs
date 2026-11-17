@@ -1187,14 +1187,14 @@ try {
   await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
 
   const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
+  await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
+  await page.fill('#ntPair', 'ETH/USDT');
+  await page.waitForTimeout(250);
   await page.evaluate(() => {
     AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
     AV.ui.ntChecks = {};
     AV.renderChecklist();
   });
-  await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
-  await page.fill('#ntPair', 'ETH/USDT');
-  await page.waitForTimeout(250);
   const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
   const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
   if (!initiallyChecked) await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
