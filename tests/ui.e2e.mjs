@@ -1114,7 +1114,12 @@ try {
   await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
 
   const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    // The deferred PUT from #pastTrade (state.js schedulePush, 300 ms) would
+    // otherwise land between the mutations below and the assertions, reloading
+    // AV.state from the server (state.js 409 handler) and discarding them.
+    await AV.waitForPushIdle();
+    clearTimeout(AV._pushTimer);
     AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
     AV.ui.ntChecks = {};
     AV.renderChecklist();
