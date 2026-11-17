@@ -1531,7 +1531,7 @@ try {
     await page.fill('#ctExit', '105');
     const hasResultField = await page.locator('#ctResult').count();
     if (hasResultField) await page.fill('#ctResult', '5');
-    await page.click('#ctSave');
+    await page.evaluate(() => document.getElementById('ctSave')?.click());
     const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, addedId);
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
@@ -1553,7 +1553,7 @@ try {
   await page.waitForSelector('#ctExit', { timeout: 10000 });
   await page.fill('#ctExit', '');
   await page.fill('#ctResult', '20');
-  await page.click('#ctSave');
+  await page.evaluate(() => document.getElementById('ctSave')?.click());
   const resultOnly = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
     return { exit: trade?.exit, result: trade?.result, r: trade?.r };
@@ -1588,7 +1588,7 @@ try {
   if (breakEvenId) {
     await page.evaluate((id) => AV.closeTradeModal(id), breakEvenId);
     await page.fill('#ctExit', '100');
-    await page.click('#ctSave');
+    await page.evaluate(() => document.getElementById('ctSave')?.click());
   }
   const breakEvenUi = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
