@@ -1133,7 +1133,7 @@ async function main() {
     tradeId, position: 'before', idempotencyKey: deleteScreenshotKey,
   });
   assert.equal(JSON.stringify(deleteScreenshot).includes(png), false, 'diff propozycji usunięcia nie może ujawniać payloadu');
-  assert.ok(deleteScreenshot.preview?.trashId, 'usunięcie screenu powinno podać trashId w podglądzie');
+  assert.ok(deleteScreenshot.record?.trashId, 'usunięcie screenu powinno podać trashId w wyniku');
   const deleteScreenshotReplay = await call(at, 'delete_trade_screenshot', {
     tradeId, position: 'before', idempotencyKey: deleteScreenshotKey,
   });
@@ -1142,7 +1142,7 @@ async function main() {
   await approve(deleteScreenshot);
   assert.equal((await call(at, 'get_trade_screenshots', { tradeId })).screenshots.count, 0);
   const restoreScreenshot = await pending('restore_deleted_record', {
-    trashId: deleteScreenshot.preview.trashId, idempotencyKey: idem('shot-restore'),
+    trashId: deleteScreenshot.record.trashId, idempotencyKey: idem('shot-restore'),
   }, ['restored']);
   assert.equal(JSON.stringify(restoreScreenshot).includes(png), false, 'preview restore nie może ujawniać payloadu');
   await approve(restoreScreenshot);
