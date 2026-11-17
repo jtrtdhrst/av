@@ -1145,6 +1145,11 @@ try {
    log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
    await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
+  // Keep the note value stable across the re-render triggered by field edits.
+  await page.evaluate((note) => {
+    const noteEl = document.getElementById('ntNote');
+    if (noteEl) noteEl.value = note;
+  }, tradeNote);
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
@@ -1158,17 +1163,6 @@ try {
 
   await page.fill('#ntSl', '99');
   await page.click('#saveTrade');
-  // Let the save PUT settle and re-read authoritative state so a stray 409
-  // reload cannot drop the just-saved trade before the assertions below.
-  await page.evaluate(async () => {
-    await AV.waitForPushIdle();
-    const response = await AV.apiFetch('/api/state');
-    if (response.ok) {
-      const payload = await response.json();
-      AV.state = AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo });
-      AV.api.revision = payload.revision;
-    }
-  });
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
