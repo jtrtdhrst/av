@@ -1710,7 +1710,13 @@ try {
     }
   }, backup);
   await page.waitForTimeout(300);
-  const restoredCount = await page.evaluate(() => AV.state.trades.length);
+  const restoredCount = await page.evaluate(async () => {
+    const response = await AV.apiFetch('/api/state');
+    const payload = await response.json();
+    AV.state = AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo });
+    AV.api.revision = payload.revision;
+    return AV.state.trades.length;
+  });
   log('przywrócenie stanu demo', restoredCount === 47, restoredCount);
 
   // bramka roli: pełnoekranowa blokada panelu
