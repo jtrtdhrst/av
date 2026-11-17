@@ -1190,17 +1190,13 @@ try {
   await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
   await page.fill('#ntPair', 'ETH/USDT');
   await page.waitForTimeout(250);
+  await page.fill('#ntNote', tradeNote);
+  await page.waitForTimeout(300);
   await page.evaluate(() => {
     AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
-    AV.ui.ntChecks = {};
+    AV.ui.ntChecks = { 'Poziom z planu': false, 'Spokojna głowa': false };
     AV.renderChecklist();
   });
-  const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
-  const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
-  if (!initiallyChecked) await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
-  await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
-  await page.fill('#ntNote', tradeNote);
-  await page.waitForTimeout(250);
   const manualPlanLevel = await page.evaluate(() => ({
       matches: AV.tradePlanMatch(AV.state, { date: new Date().toISOString(), pair: 'ETH/USDT', dir: 'l' }),
     checked: document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on') || false,
