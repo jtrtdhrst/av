@@ -81,6 +81,11 @@ try {
   await page.click('#demoEnter');
   await page.waitForFunction(() => document.querySelector('#auth')?.classList.contains('hide'), null, { timeout: 15000 });
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated);
+  // The test drives many synchronous in-memory state mutations. The deferred
+  // 300 ms auto-push (state.js schedulePush) races with them and a stale-
+  // revision 409 reloads state mid-assertion. Explicit pushes in saveTrade /
+  // closeTradeModal still persist; suppress only the ambient timer.
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
   log('logowanie demo + sesja', await page.locator('#auth').evaluate((el) => el.classList.contains('hide')), 'cookie + sesja');
   log('start: jedno zapytanie o notowania', quoteRequests <= 1, quoteRequests + ' requestów');
 
