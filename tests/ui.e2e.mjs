@@ -1119,13 +1119,13 @@ try {
     AV.ui.ntChecks = {};
     AV.renderChecklist();
   });
-  await page.click('#ntDir [data-d="l"]');
+  await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
   await page.fill('#ntPair', 'ETH/USDT');
   await page.waitForTimeout(250);
-  const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
-  const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
-  if (!initiallyChecked) await planLevel.click();
-  await page.locator('#clList [data-cl="Poziom z planu"]').click();
+  const initiallyChecked = await page.evaluate(() =>
+    !!document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on'));
+  if (!initiallyChecked) await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
+  await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
   await page.fill('#ntNote', tradeNote);
   await page.waitForTimeout(250);
   const manualPlanLevel = await page.evaluate(() => ({
@@ -1138,7 +1138,7 @@ try {
   }));
     log('nowa transakcja: niejednoznaczne plany nie tworzą zgodności', !manualPlanLevel.matches && !manualPlanLevel.checked && manualPlanLevel.count === '0/2' && manualPlanLevel.checkedCount === 0, JSON.stringify(manualPlanLevel));
    log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
-   await page.locator('#clList [data-cl="Spokojna głowa"]').click();
+   await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
