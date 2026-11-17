@@ -634,6 +634,17 @@ final class WriteEngine
             $risk = $this->tradeRisk($state, $updated);
             $updated['risk'] = $risk['risk'];
             $updated['riskPct'] = $risk['riskPct'];
+        } elseif (!$exchange && !$executionFieldsChanged) {
+            // Legacy records stored unknown risk as 0. An annotation-only edit
+            // must not keep that placeholder as if risk were measured.
+            $slText = trim((string) ($updated['sl'] ?? ''));
+            if (in_array($slText, ['', 'brak', '—', '-'], true)
+                && array_key_exists('risk', $updated)
+                && (float) $updated['risk'] === 0.0
+            ) {
+                $updated['risk'] = null;
+                $updated['riskPct'] = null;
+            }
         }
 
         $state['trades'][$index] = $updated;
@@ -685,6 +696,10 @@ final class WriteEngine
         $duration = $openedAt === null ? 0 : max(1, (int) round(($closedAt->getTimestamp() - $openedAt->getTimestamp()) / 60));
 
         $updated = $trade;
+        if ($risk === null) {
+            $updated['risk'] = null;
+            $updated['riskPct'] = null;
+        }
         $updated['exit'] = $exitPrice === null ? null : $this->numText($exitPrice);
         $updated['result'] = $result;
         $updated['r'] = $risk !== null && $risk > 0 ? Numbers::round($result / $risk) : null;
