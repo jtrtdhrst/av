@@ -1192,7 +1192,7 @@ try {
     AV.ui.ntChecks = {};
     AV.renderChecklist();
   });
-  await page.click('#ntDir [data-d="l"]');
+  await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
   await page.fill('#ntPair', 'ETH/USDT');
   await page.waitForTimeout(250);
   const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
