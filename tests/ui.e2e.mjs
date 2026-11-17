@@ -1163,6 +1163,10 @@ try {
 
   await page.fill('#ntSl', '99');
   await page.click('#saveTrade');
+  await page.evaluate(async () => {
+    clearTimeout(AV._pushTimer);
+    await AV.pushStateImmediate();
+  });
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
@@ -1184,14 +1188,14 @@ try {
     JSON.stringify({ afterTrades, beforeTrades, journalImmediate }));
   await page.waitForTimeout(500);
   log('nowa transakcja: zapis', afterTrades === beforeTrades + 1, beforeTrades + ' → ' + afterTrades);
-  const addedTrade = await page.evaluate((note) => {
-    const t = AV.state.trades.find((x) => x.note === note);
+  const addedTrade = await page.evaluate((id) => {
+    const t = AV.state.trades.find((x) => x.id === id);
     return t ? {
       risk: t.risk, riskPct: t.riskPct, mae: t.mae, mfe: t.mfe, sl: t.sl, checklist: t.checklist,
       checkTotal: t.checkTotal, checklistItems: t.checklistItems || [], plan: t.plan, account: t.account,
       rr: Math.abs(AV.pnum(t.tp) - AV.pnum(t.entry)) / Math.abs(AV.pnum(t.entry) - AV.pnum(t.sl))
     } : null;
-  }, tradeNote);
+  }, addedId);
   log('nowa transakcja: ryzyko zapisane, MAE/MFE puste', !!addedTrade && addedTrade.risk === 1 && addedTrade.mae === null && addedTrade.mfe === null, JSON.stringify(addedTrade));
   const missingMetricDisplay = await page.evaluate((id) => {
     AV.openTrade(id);
