@@ -149,4 +149,4 @@ npm run test:integrations
 npm run test:ui:integrations
 ```
 
-Test integracji obejmuje atomowość importu, batch 501 rekordów oraz limity stron i brak kursora OKX. Wymagają mocka (`tests/fixtures/mock-providers.php`) i MySQL z `tests/config.test.json`. Szczegóły: [docs/TESTOWANIE.md](docs/TESTOWANIE.md).
+Test integracji obejmuje atomowość importu, batch 501 rekordów oraz limity stron i brak kursora OKX. CI generuje `tests/config.integrations.json` z bazowej konfiguracji testowej; lokalny AV-engineer nie uruchamia testów. Test wymaga mocka (`tests/fixtures/mock-providers.php`) i izolowanej bazy CI. Szczegóły: [docs/TESTOWANIE.md](docs/TESTOWANIE.md).

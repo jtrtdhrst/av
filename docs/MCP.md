@@ -119,7 +119,7 @@ zmiana stanu. Semantyczny no-op nie tworzy nowej rewizji ani audytu mutacji.
 | --- | --- |
 | `create_trade` | `trade.create` |
 | `update_trade` | `trade.update` (pola dziennika; MAE/MFE: nieujemna liczba albo `null` do wyczyszczenia; SL wymagany i nie można go usunąć; dane giełdowe zablokowane) |
-| `close_trade` | `trade.close` (przyjmuje `result` albo `exitPrice`; gdy podano tylko `exitPrice`, serwer wylicza wynik. Serwer wylicza R, ustawia `closedAt` i czas trwania; pominięte `mfe` zachowuje zapisany pomiar, jawne nieujemne `mfe` aktualizuje, a `null` czyści) |
+| `close_trade` | `trade.close` (wymaga `result` lub `exitPrice`; gdy podano tylko `exitPrice`, serwer wylicza wynik. Jeśli podano oba, zapisuje jawny `result` bez sprawdzania zgodności z `exitPrice`; sam `result` pozostawia `exit` puste. Serwer wylicza R, ustawia `closedAt` i czas trwania; pominięte `mfe` zachowuje zapisany pomiar, jawne nieujemne `mfe` aktualizuje, a `null` czyści) |
 | `create_trade_review` | `review.create` |
 | `update_trade_review` | `review.update` |
 | `create_setup` | `setup.create` |
@@ -173,7 +173,7 @@ Każde wywołanie zapisu przyjmuje:
 
 | Pole | Wymagane | Znaczenie |
 | --- | --- | --- |
-| `idempotencyKey` | tak | 8-128 znaków; powtórka zwraca zapisaną odpowiedź z `duplicate: true` |
+| `idempotencyKey` | tak | 8-120 znaków; powtórka zwraca zapisaną odpowiedź z `duplicate: true` |
 | `expectedRevision` | nie | optimistic lock na `user_states.revision`; niezgodność = `revision_conflict` (409); przy replayu `write_op` podana wartość musi zgadzać się z `baseRevision` propozycji |
 
 Odpowiedź bezpośrednia:

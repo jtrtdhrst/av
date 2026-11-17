@@ -718,6 +718,8 @@ final class WriteTools
                     $idempotencyKey,
                     ['op' => $op, 'args' => $args],
                     null,
+                    null,
+                    null,
                     $expectedRevision
                 );
                 $previewAfter = $proposal['_previewAfter'] ?? null;
@@ -771,7 +773,8 @@ final class WriteTools
                 ['op' => $op, 'args' => $args],
                 $preview['after'],
                 $revision,
-                $preview['stateChanges']
+                $preview['stateChanges'],
+                $expectedRevision
             );
             $previewAfter = $proposal['_previewAfter'] ?? $preview['after'];
             unset($proposal['_previewAfter']);

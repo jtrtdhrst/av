@@ -84,10 +84,10 @@ Legenda:
 | Widoczność wpisów | ✅ | dziennik pokazuje wszystkie transakcje; „W statystykach” na koncie nadal filtruje statystyki, nie listę dziennika |
 | Pusty dziennik | ✅ | CTA „Dodaj transakcję” i „Giełdy i API” bez tekstu zastępczego; „Brak transakcji spełniających filtry” tylko przy aktywnym filtrze |
 | Edycja transakcji | ✅ | formularz wypełniony danymi, zachowuje dokładny ręczny wybór punktów checklisty |
-| Integralność zapisu transakcji | ✅ | wspólne `TradeRules`: API/MCP walidują przejście stanu, importer waliduje mapowany rekord; nowe transakcje ręczne wymagają SL, wynik 0 lub poprawny `closedAt` oznacza zamknięcie, nieznany czas pozostaje pusty, ID i wykonanie zamkniętych/importowanych wpisów są niezmienne |
+| Integralność zapisu transakcji | ✅ | wspólne `TradeRules`: API/MCP walidują przejście stanu, importer waliduje mapowany rekord; nowe transakcje ręczne wymagają SL, każdy znany wynik liczbowy (w tym 0) lub poprawny `closedAt` oznacza zamknięcie, nieznany czas pozostaje pusty, ID i wykonanie zamkniętych/importowanych wpisów są niezmienne |
 | Rewizja i no-op | ✅ | zapis bez semantycznej zmiany zachowuje `revision` i `updatedAt`; nie tworzy audytu mutacji |
 | Weryfikacja źródła danych | ✅ | `source` przesłane przez klienta nie omija wymogu SL; import waliduje każdy zmapowany rekord i może zachować brak SL tylko wtedy, gdy giełda go nie dostarczyła |
-| Atomowość i czas importu | ✅ | rollback obejmuje batch połączenia, stan, rewizję i markery; CI pokrywa 501 rekordów, źródłowe `closedAt` i UTC `importedAt`; limit stron OKX nie kończy się cichym sukcesem |
+| Atomowość i czas importu | ✅ | rollback obejmuje batch połączenia, stan, rewizję i markery; CI pokrywa 501 rekordów, źródłowe `closedAt` i UTC `importedAt`; limit stron lub brak kursora OKX nie kończą się częściowym sukcesem |
 | Usunięcie transakcji | ✅ | potwierdzenie |
 | Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
 | Eksport CSV | ✅ | średnik + BOM (Excel PL) |

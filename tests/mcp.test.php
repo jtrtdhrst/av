@@ -133,6 +133,23 @@ try {
         ['pair' => 'X/USDT'],
         $liveRevision
     );
+    $lateWriteOpReplay = $service->create(
+        $userA,
+        'test-client',
+        'write_op',
+        'trade:missing-plan',
+        null,
+        ['op' => 'trade.create', 'args' => []],
+        'idem-write-plan-missing',
+        ['op' => 'trade.create', 'args' => []],
+        ['pair' => 'X/USDT'],
+        $liveRevision + 1
+    );
+    check(
+        'Propozycja write_op: równoległy replay bez expectedRevision zachowuje idempotencję',
+        ($lateWriteOpReplay['duplicate'] ?? false) === true
+        && ($lateWriteOpReplay['proposalId'] ?? null) === ($missingPlanProposal['proposalId'] ?? null)
+    );
     $missingPlanError = expectError(fn () => $service->approve($userA, $missingPlanProposal['proposalId'], $userA));
     check('Propozycja write_op: brak utrwalonego planu blokuje zatwierdzenie', $missingPlanError === 'proposal_plan_missing', $missingPlanError);
     $tradeService = new TradeService();

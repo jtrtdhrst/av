@@ -103,15 +103,18 @@ if (str_starts_with($path, '/okx/')) {
             out(['code' => '0', 'msg' => '', 'data' => $data]);
         }
         if ($apiKey === 'okx-missing-position-cursor') {
+            $after = (string) ($_GET['after'] ?? '');
+            $page = $after === '' ? 1 : 2;
             $data = [];
             for ($i = 0; $i < 100; $i++) {
                 $row = [
-                    'posId' => 'missing-cursor-' . sprintf('%03d', $i), 'instId' => 'SOL-USDT-SWAP', 'posSide' => 'long',
+                    'posId' => ($page === 1 ? 'position-page1-' : 'missing-cursor-page2-') . sprintf('%03d', $i),
+                    'instId' => 'SOL-USDT-SWAP', 'posSide' => 'long',
                     'openAvgPx' => '100', 'closeAvgPx' => '101', 'closeTotalPos' => '1',
                     'realizedPnl' => '1', 'fee' => '0', 'fundingFee' => '0', 'liqPenalty' => '0',
                     'openTime' => (string) ($now - 3600000), 'closeTime' => (string) ($now - 1800000),
                 ];
-                if ($i === 99) unset($row['posId']);
+                if ($page === 2 && $i === 99) unset($row['posId']);
                 $data[] = $row;
             }
             out(['code' => '0', 'msg' => '', 'data' => $data]);

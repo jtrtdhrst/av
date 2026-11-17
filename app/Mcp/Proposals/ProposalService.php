@@ -47,10 +47,11 @@ final class ProposalService
         ?array $before,
         array $after,
         string $idempotencyKey,
-        ?string $fingerprint = null,
+        string|array|null $fingerprint = null,
         ?array $diffAfter = null,
         ?int $expectedBaseRevision = null,
-        ?array $writeOpStateDiff = null
+        ?array $writeOpStateDiff = null,
+        ?int $expectedReplayRevision = null
     ): array
     {
         $key = trim($idempotencyKey);
@@ -79,7 +80,8 @@ final class ProposalService
             $payloadHash,
             $diffTarget,
             $expectedBaseRevision,
-            $writeOpStateDiff
+            $writeOpStateDiff,
+            $expectedReplayRevision
         ): array {
             // Serialize proposal creation with MCP writes before checking the
             // idempotency key and snapshot revision.
@@ -98,8 +100,8 @@ final class ProposalService
             );
             if ($existing !== null) {
                 $storedBaseRevision = $existing['base_revision'] ?? null;
-                if ($expectedBaseRevision !== null
-                    && ($storedBaseRevision === null || (int) $storedBaseRevision !== $expectedBaseRevision)) {
+                if ($expectedReplayRevision !== null
+                    && ($storedBaseRevision === null || (int) $storedBaseRevision !== $expectedReplayRevision)) {
                     throw new ProposalException(
                         'revision_conflict',
                         'Klucz idempotencji wskazuje propozycję z innej rewizji. Odczytaj stan ponownie.',
@@ -1514,7 +1516,7 @@ final class ProposalService
         return $source !== '' && !in_array($source, ['manual', 'panel', 'ręcznie', 'recznie'], true);
     }
 
-    private function duplicateOrConflict(array $row, array $after, ?string $fingerprint = null): array
+    private function duplicateOrConflict(array $row, array $after, string|array|null $fingerprint = null): array
     {
         $storedHash = $row['payload_hash'] !== null ? (string) $row['payload_hash'] : '';
         if ($storedHash !== '') {

@@ -253,7 +253,7 @@ try {
   log('OKX: historia przekraczająca limit stron zgłasza błąd zamiast cichego ucięcia', true);
 
   for (const [apiKey, marker] of [
-    ['okx-missing-position-cursor', 'okx:pos:missing-cursor-000'],
+    ['okx-missing-position-cursor', 'okx:pos:position-page1-000'],
     ['okx-missing-spot-cursor', 'prefix:okx:SOL-USDT:spot-closed-open:'],
   ]) {
     const cursorFixture = await connect('okx', { apiKey, secretKey: 'okx-secret', passphrase: 'p' });

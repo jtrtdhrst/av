@@ -26,6 +26,7 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Wearables E2E | OAuth2/PKCE, rotacja tokenów, UI, bezpieczeństwo |
 | API E2E | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, no-op zachowuje `revision` i ISO `updatedAt`, legacy close bez SL, stan, events, macro, admin, eksport i cleanup fixture |
 | UI E2E | 15 widoków, rozwijane konta, wiele planów dnia i poziomy, historyczna checklista przy zmianie konfiguracji, wymagany SL, brak sukcesu przy błędzie zapisu zamknięcia i round-trip przez API, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup stanu fixture |
+| Integracje E2E | mocki OKX/BingX/WEEX/MetaApi/EA, batch 501, rollback, czas źródłowy/UTC, limit stron i brak kursora bez częściowego importu |
 | Tax E2E | PIT-38, CSV/PDF, wpłaty/wypłaty |
 | PWA E2E | manifest, SW, instalacja, push, offline |
 | UI empty-state E2E | puste pola po sukcesie z `[]` |

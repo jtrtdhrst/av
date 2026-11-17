@@ -213,7 +213,7 @@ Wymaga sesji i poprawnego `Origin`. Akceptowany jest origin z `APP_URL` oraz jeg
 
 `ownerId` jest opcjonalny dla zgodności, ale klient zawsze go wysyła. Jeśli `ownerId` nie zgadza się z sesją (np. w karcie zalogowano inne konto), serwer zwraca `409 session_changed` i nie zapisuje stanu.
 
-Przed zapisem wspólne `TradeRules` sprawdza przejście transakcji. Nowa transakcja ręczna wymaga prawidłowego kierunku, daty, dodatnich `entry` i `size`, wymaganego `sl` po właściwej stronie ceny wejścia oraz `tp` po właściwej stronie, jeśli jest podany. Klient nie może pominąć wymogu SL przez ustawienie `source: "CSV"` lub innej wartości; wyjątek braku SL dotyczy wyłącznie zaufanej ścieżki importera, gdy źródło nie dostarcza tej danej. API i MCP walidują przejście całego stanu, a importer waliduje mapowany rekord. `long`/`short` są normalizowane do `l`/`s`, pusty wynik do `null`; wynik `0` i poprawny `closedAt` oznaczają zamknięcie. Brak `closedAt` pozostaje nieznany i nigdy nie jest uzupełniany automatycznie. Historyczny ręczny rekord bez SL można zamknąć, jeżeli bazowe pola wykonania pozostają niezmienione. ID istniejącej transakcji jest niezmienne, a pola wykonania zamkniętej lub importowanej transakcji nie mogą być zmieniane. Adnotacje pozostają edytowalne. Zapis odrzucony walidacją nie zmienia stanu ani rewizji. Semantyczny no-op zachowuje `revision` i `updatedAt`; `updatedAt` jest zwracane w ISO 8601 UTC.
+Przed zapisem wspólne `TradeRules` sprawdza przejście transakcji. Nowa transakcja ręczna wymaga prawidłowego kierunku, daty, pary, dodatnich `entry` i `size`, wymaganego `sl` po właściwej stronie ceny wejścia oraz `tp` po właściwej stronie, jeśli jest podany. Klient nie może pominąć wymogu SL przez ustawienie `source: "CSV"` lub innej wartości; wyjątek braku SL dotyczy wyłącznie zaufanej ścieżki importera, gdy źródło nie dostarcza tej danej. API i MCP walidują przejście całego stanu, a importer waliduje mapowany rekord. `long`/`short` są normalizowane do `l`/`s`, pusty wynik do `null`; każdy znany wynik liczbowy (w tym `0`) lub poprawny `closedAt` oznacza zamknięcie. Brak `closedAt` pozostaje nieznany i nigdy nie jest uzupełniany automatycznie. Historyczny ręczny rekord bez SL można zamknąć, jeżeli bazowe pola wykonania pozostają niezmienione. ID istniejącej transakcji jest niezmienne, a pola wykonania zamkniętej lub importowanej transakcji nie mogą być zmieniane. Adnotacje pozostają edytowalne. Zapis odrzucony walidacją nie zmienia stanu ani rewizji. Semantyczny no-op zachowuje `revision` i `updatedAt`; `updatedAt` jest zwracane w ISO 8601 UTC.
 
 Odpowiedź:
 
@@ -227,8 +227,8 @@ Odpowiedź:
 | 400 | `state` nie jest obiektem |
 | 401 | brak sesji |
 | 403 | złe `Origin` albo próba zmiany pól wykonania transakcji importowanej |
-| 409 | nieaktualne `baseRevision`, `session_changed`, próba zmiany ID lub pól wykonania zamkniętej transakcji |
-| 422 | nieprawidłowy kierunek, data, liczby, brak wymaganej SL, SL/TP, `closedAt`, kształt listy transakcji/kosza albo nowy wpis transakcji w koszu bez dokładnego źródła w aktywnym stanie (`trade_trash_source_invalid`) |
+| 409 | nieaktualne `baseRevision`, `session_changed`, uszkodzony poprzedni stan (`state_corrupt`), próba zmiany ID lub pól wykonania zamkniętej transakcji |
+| 422 | nieprawidłowy kierunek, data, para (`invalid_pair`), liczby, brak wymaganej SL, SL/TP, `closedAt`, kształt listy transakcji/kosza albo nowy wpis transakcji w koszu bez dokładnego źródła w aktywnym stanie (`trade_trash_source_invalid`) |
 | 413 | przekroczony `MAX_STATE_BYTES` |
 | 429 | limit 180 zapisów/min |
 

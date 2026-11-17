@@ -66,7 +66,7 @@ paths:
     put:
       tags: [API]
       summary: Zapisz cały stan po walidacji przejścia transakcji (optymistyczna rewizja)
-      description: TradeRules waliduje przejście stanu. Nowe transakcje ręczne wymagają SL; source podany przez klienta ani nowy wpis kosza nie omijają tego wymogu. Nowy wpis transakcji w koszu musi być dokładnym soft delete'em wcześniejszej aktywnej transakcji. Zaufany importer waliduje mapowany rekord i może zachować brak SL niedostarczanego przez źródło. Pusty wynik normalizuje się do null; wynik 0 lub poprawny closedAt oznacza zamknięcie, a brak closedAt pozostaje nieznany. ID istniejącej transakcji jest niezmienne, a pola wykonania transakcji zamkniętych/importowanych są chronione. Historyczny ręczny rekord bez SL można zamknąć bez zmian bazowych pól wykonania. Odrzucony zapis nie zmienia stanu ani rewizji, a semantyczny no-op zachowuje revision i updatedAt.
+      description: TradeRules waliduje przejście stanu. Nowe transakcje ręczne wymagają SL; source podany przez klienta ani nowy wpis kosza nie omijają tego wymogu. Nowy wpis transakcji w koszu musi być dokładnym soft delete'em wcześniejszej aktywnej transakcji. Zaufany importer waliduje mapowany rekord i może zachować brak SL niedostarczanego przez źródło. Pusty wynik normalizuje się do null; każdy znany wynik liczbowy (w tym 0) lub poprawny closedAt oznacza zamknięcie, a brak closedAt pozostaje nieznany. ID istniejącej transakcji jest niezmienne, a pola wykonania transakcji zamkniętych/importowanych są chronione. Historyczny ręczny rekord bez SL można zamknąć bez zmian bazowych pól wykonania. Odrzucony zapis nie zmienia stanu ani rewizji, a semantyczny no-op zachowuje revision i updatedAt.
       security: [{ cookieAuth: [] }]
       requestBody:
         required: true
@@ -92,13 +92,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Konflikt rewizji, session_changed albo próba zmiany ID/pól wykonania zamkniętej transakcji
+          description: Konflikt rewizji, session_changed, state_corrupt albo próba zmiany ID/pól wykonania zamkniętej transakcji
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '422':
-          description: Nieprawidłowy kierunek, data, liczby, wymagany SL, SL/TP, closedAt albo kształt listy transakcji/kosza; stan i rewizja bez zmian
+          description: Nieprawidłowy kierunek, data, para (invalid_pair), liczby, wymagany SL, SL/TP, closedAt albo kształt listy transakcji/kosza; stan i rewizja bez zmian
           content:
             application/json:
               schema:
@@ -176,7 +176,7 @@ paths:
         '422':
           description: Nieprawidłowa transakcja; batch połączenia wycofany
         '502':
-          description: Dostawca zwrócił historię przekraczającą limit stron; nie zapisano niepełnego batcha
+          description: OKX zgłosił limit stron albo pełną stronę bez kursora; nie zapisano niepełnego batcha
   /api/connections/{id}:
     delete:
       tags: [API]
