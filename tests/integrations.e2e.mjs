@@ -316,6 +316,14 @@ try {
   log('WEEX: klucz z handlem zaakceptowany', true, weexTradeKey.json.connection.keyMask);
 
   // ---------- MetaTrader / MetaApi ----------
+  // The new OKX regression fixtures add several connects; clear the shared
+  // per-IP rate-limit bucket so later connects are not falsely throttled.
+  const rateReset = spawnSync(php, ['tests/reset-integrations.php', '--rate-only'], {
+    cwd: ROOT,
+    env: { ...process.env, ALPHA_VAULT_CONFIG: CONFIG },
+    encoding: 'utf8'
+  });
+  assert.equal(rateReset.status, 0, rateReset.stderr || rateReset.stdout);
   const mt = await connect('mt5', { platform: 'mt5', server: 'Mock-Server', login: '81234567', password: 'investor', type: 'Live' });
   assert.equal(mt.res.status, 201, mt.text);
   const mtSync = await sync(mt.json.connection.id);
