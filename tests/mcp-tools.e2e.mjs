@@ -852,7 +852,7 @@ async function main() {
   assert.equal(stateA().trades.find((row) => row.id === tradeId).emotion, 'Skupienie');
   assert.match(stateA().trades.find((row) => row.id === tradeId).mentor, /Checklista niepełna \(5\/7\)/);
   const unchangedNote = stateA().trades.find((row) => row.id === tradeId).note;
-  const revisionBeforeNoOp = tradeUpdate.revision;
+  const revisionBeforeNoOp = stateA().revision;
   const noOpTradeUpdate = await call(at, 'update_trade', {
     tradeId, expectedRevision: revisionBeforeNoOp,
     changes: { note: unchangedNote }, idempotencyKey: idem('trade-update-noop'),
