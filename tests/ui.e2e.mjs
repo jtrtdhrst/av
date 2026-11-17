@@ -1547,6 +1547,11 @@ try {
       }
     });
     await page.waitForTimeout(400);
+    const closeDiag2 = await page.evaluate((id) => {
+      const t = AV.state.trades.find((x) => x.id === id);
+      return { found: !!t, closed: t ? AV.isTradeClosed(t) : null, result: t?.result, closedAt: t?.closedAt };
+    }, addedId);
+    log('diag2: close modal', !closeDiag2.closed, JSON.stringify(closeDiag2));
     await page.evaluate((id) => AV.closeTradeModal(id), addedId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
     await page.fill('#ctExit', '105');
