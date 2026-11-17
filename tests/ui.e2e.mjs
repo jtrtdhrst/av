@@ -1158,6 +1158,17 @@ try {
 
   await page.fill('#ntSl', '99');
   await page.click('#saveTrade');
+  // Let the save PUT settle and re-read authoritative state so a stray 409
+  // reload cannot drop the just-saved trade before the assertions below.
+  await page.evaluate(async () => {
+    await AV.waitForPushIdle();
+    const response = await AV.apiFetch('/api/state');
+    if (response.ok) {
+      const payload = await response.json();
+      AV.state = AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo });
+      AV.api.revision = payload.revision;
+    }
+  });
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
