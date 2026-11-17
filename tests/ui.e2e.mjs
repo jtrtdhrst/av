@@ -1144,28 +1144,6 @@ try {
   log('nowa transakcja: formularz pusty', !emptyForm.pair && !emptyForm.entry && !emptyForm.size && !emptyForm.sl && !emptyForm.tp && !emptyForm.note, JSON.stringify(emptyForm));
   log('nowa transakcja: checklista 0 i brak oceny', emptyForm.checklist === '0/7' && emptyForm.grades === 0, emptyForm.checklist + ' / ' + emptyForm.grades);
   log('nowa transakcja: limit i ryzyko osobno', emptyForm.risk.includes('Limit') && emptyForm.risk.includes('Ryzyko'), emptyForm.risk.slice(0, 100));
-  const closeSemantics = await page.evaluate(() => ({
-    longAlias: AV.tradeDirection('long'),
-    shortAlias: AV.tradeDirection('short'),
-    legacyUnknownTime: AV.isTradeClosed({ result: 0, closedAt: null }),
-    explicitTime: AV.isTradeClosed({ result: null, closedAt: '2026-11-17T10:30:00Z' }),
-    invalidDay: AV.isTradeClosed({ result: null, closedAt: '2026-02-30T10:30:00Z' }),
-    invalidHour: AV.isTradeClosed({ result: null, closedAt: '2026-11-17T25:30:00Z' }),
-    open: AV.isTradeClosed({ result: null, closedAt: null }),
-    closedAtOnlyLists: (() => {
-      const state = {
-        accounts: [{ name: 'A', include: true }],
-        trades: [{ id: 'closed_at_only', account: 'A', result: null, closedAt: '2026-11-17T10:30:00Z' }]
-      };
-      return AV.lifecycleClosedTrades(state).length === 1
-        && AV.openTrades(state).length === 0
-        && AV.closedTrades(state).length === 0;
-    })()
-  }));
-  log('status transakcji: aliasy kierunku i prawidłowy closedAt', closeSemantics.longAlias === 'l'
-    && closeSemantics.shortAlias === 's' && closeSemantics.legacyUnknownTime
-    && closeSemantics.explicitTime && closeSemantics.closedAtOnlyLists
-    && !closeSemantics.invalidDay && !closeSemantics.invalidHour && !closeSemantics.open, JSON.stringify(closeSemantics));
 
   await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
   const manualSlChecklist = await page.evaluate(() => {
@@ -1219,14 +1197,6 @@ try {
    await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
-  // The protection-mode override can be dropped by an intervening state
-  // round-trip; re-apply it so the trade form stays unlocked for this write.
-  await page.evaluate(() => {
-    if (AV.lockInfo(AV.state).active) {
-      AV.addOverride('Wpisuję wcześniejszą transakcję');
-      AV.renderLock();
-    }
-  });
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
   await page.fill('#ntSize', '1');
@@ -1808,6 +1778,29 @@ try {
   const summaryText = await page.locator('#badgeSummary').innerText();
   const levelText = await page.locator('#levelBadge').innerText();
   log('odznaki: dynamiczny licznik i poziom', summaryText === `${badges.live.done} z ${badges.live.total} · poziom ${badges.live.level}` && levelText === 'poziom ' + badges.live.level, summaryText + ' / ' + levelText);
+
+  const closeSemantics = await page.evaluate(() => ({
+    longAlias: AV.tradeDirection('long'),
+    shortAlias: AV.tradeDirection('short'),
+    legacyUnknownTime: AV.isTradeClosed({ result: 0, closedAt: null }),
+    explicitTime: AV.isTradeClosed({ result: null, closedAt: '2026-11-17T10:30:00Z' }),
+    invalidDay: AV.isTradeClosed({ result: null, closedAt: '2026-02-30T10:30:00Z' }),
+    invalidHour: AV.isTradeClosed({ result: null, closedAt: '2026-11-17T25:30:00Z' }),
+    open: AV.isTradeClosed({ result: null, closedAt: null }),
+    closedAtOnlyLists: (() => {
+      const state = {
+        accounts: [{ name: 'A', include: true }],
+        trades: [{ id: 'closed_at_only', account: 'A', result: null, closedAt: '2026-11-17T10:30:00Z' }]
+      };
+      return AV.lifecycleClosedTrades(state).length === 1
+        && AV.openTrades(state).length === 0
+        && AV.closedTrades(state).length === 0;
+    })()
+  }));
+  log('status transakcji: aliasy kierunku i prawidłowy closedAt', closeSemantics.longAlias === 'l'
+    && closeSemantics.shortAlias === 's' && closeSemantics.legacyUnknownTime
+    && closeSemantics.explicitTime && closeSemantics.closedAtOnlyLists
+    && !closeSemantics.invalidDay && !closeSemantics.invalidHour && !closeSemantics.open, JSON.stringify(closeSemantics));
 
   // Przywróć dokładny fixture serwera i zweryfikuj pełny round-trip przez API.
   await restoreUiFixture();
