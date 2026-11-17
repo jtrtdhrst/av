@@ -1396,7 +1396,11 @@ async function main() {
   assert.equal(proposedCreateReplay.diffHash, proposedCreate.diffHash);
   await approve(proposedCreate);
   const persistedFrozenTrade = stateA().trades.find((trade) => trade.id === frozenTrade.id);
-  assert.deepEqual(persistedFrozenTrade, frozenTrade, 'zatwierdzenie musi zapisać dokładny podgląd z propozycji');
+  assert.equal(persistedFrozenTrade.id, frozenTrade.id, 'zatwierdzenie musi zapisać ID z podglądu');
+  const { screens: _persistedScreens, ...persistedFields } = persistedFrozenTrade;
+  const { screens: _previewScreens, ...previewFields } = frozenTrade;
+  assert.deepEqual(persistedFields, previewFields, 'zatwierdzenie musi zapisać dokładny podgląd z propozycji');
+  assert.equal(JSON.stringify(_previewScreens).includes(png), false, 'podgląd nie może ujawniać payloadu screenu');
   await expectToolError(at, 'propose_change', {
     operation: 'trade.nuke', args: {}, idempotencyKey: idem('propose-bad'),
   });
