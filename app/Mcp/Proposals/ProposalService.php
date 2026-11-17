@@ -914,8 +914,8 @@ final class ProposalService
             // differ; the target diff, byte counts, stored diff hash, and
             // frozen-state hash remain strict so the approved snapshot is not
             // rewritten.
-            $legacyActualDiff = $this->normalizeDiffOrder($actualDiff, true);
-            $legacyStoredDiff = $this->normalizeDiffOrder($storedDiff, true);
+            $legacyActualDiff = $this->normalizeLegacyWriteOpDiff($actualDiff);
+            $legacyStoredDiff = $this->normalizeLegacyWriteOpDiff($storedDiff);
             $diffMatches = $legacyActualDiff !== null
                 && $legacyStoredDiff !== null
                 && $this->canonicalJson($legacyActualDiff) === $this->canonicalJson($legacyStoredDiff);
@@ -937,29 +937,19 @@ final class ProposalService
      * @param array<mixed> $diff
      * @return list<array<string,mixed>>|null
      */
-    private function normalizeDiffOrder(array $diff, bool $ignoreLegacyStateScreenHash = false): ?array
+    private function normalizeDiffOrder(array $diff): ?array
     {
         if (!array_is_list($diff)) {
             return null;
         }
-        foreach ($diff as &$change) {
+        foreach ($diff as $change) {
             if (!is_array($change)
                 || !is_string($change['field'] ?? null)
                 || !array_key_exists('before', $change)
                 || !array_key_exists('after', $change)) {
-                unset($change);
                 return null;
             }
-            if ($ignoreLegacyStateScreenHash && str_starts_with($change['field'], 'state.state.')) {
-                $change['field'] = substr($change['field'], strlen('state.'));
-            }
-            if ($ignoreLegacyStateScreenHash
-                && str_starts_with($change['field'], 'state.')) {
-                $change['before'] = $this->normalizeLegacyScreenSummaryHashes($change['before']);
-                $change['after'] = $this->normalizeLegacyScreenSummaryHashes($change['after']);
-            }
         }
-        unset($change);
         usort($diff, function (array $left, array $right): int {
             $fieldOrder = strcmp($left['field'], $right['field']);
             if ($fieldOrder !== 0) {
@@ -972,6 +962,33 @@ final class ProposalService
         return $diff;
     }
 
+    /**
+     * Compatibility view for proposals created before stable screen hashes
+     * and the state-diff prefix correction. Stored diff/hash remain untouched.
+     *
+     * @param array<mixed> $diff
+     * @return list<array<string,mixed>>|null
+     */
+    private function normalizeLegacyWriteOpDiff(array $diff): ?array
+    {
+        $normalized = $this->normalizeDiffOrder($diff);
+        if ($normalized === null) {
+            return null;
+        }
+        foreach ($normalized as &$change) {
+            if (str_starts_with($change['field'], 'state.state.')) {
+                $change['field'] = substr($change['field'], strlen('state.'));
+            }
+            if (str_starts_with($change['field'], 'state.')) {
+                $change['before'] = $this->normalizeLegacyScreenSummaryHashes($change['before']);
+                $change['after'] = $this->normalizeLegacyScreenSummaryHashes($change['after']);
+            }
+        }
+        unset($change);
+
+        return $this->normalizeDiffOrder($normalized);
+    }
+
     private function normalizeLegacyScreenSummaryHashes(mixed $value): mixed
     {
         if (!is_array($value)) {
@@ -979,6 +996,7 @@ final class ProposalService
         }
         if (count($value) === 2
             && is_string($value['sha256'] ?? null)
+            && preg_match('/^[a-f0-9]{64}$/D', $value['sha256']) === 1
             && is_int($value['bytes'] ?? null)) {
             $value['sha256'] = '[legacy-screen-hash]';
 
