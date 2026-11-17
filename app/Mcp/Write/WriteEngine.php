@@ -181,6 +181,7 @@ final class WriteEngine
             if (!is_array($state)) {
                 $state = [];
             }
+            $state = $this->normalizeLegacyUnknownRisk($state);
             $revision = (int) ($row['revision'] ?? 0);
             if ($expectedRevision !== null && $expectedRevision !== $revision) {
                 throw new WriteException(
@@ -306,6 +307,7 @@ final class WriteEngine
     ): array
     {
         $state = TradeRules::normalizeTradeDirections($state);
+        $state = $this->normalizeLegacyUnknownRisk($state);
         foreach (['trades', 'setups', 'checkins', 'accounts', 'flows'] as $container) {
             if (!isset($state[$container]) || !is_array($state[$container])) {
                 $state[$container] = [];
@@ -634,17 +636,6 @@ final class WriteEngine
             $risk = $this->tradeRisk($state, $updated);
             $updated['risk'] = $risk['risk'];
             $updated['riskPct'] = $risk['riskPct'];
-        } elseif (!$exchange && !$executionFieldsChanged) {
-            // Legacy records stored unknown risk as 0. An annotation-only edit
-            // must not keep that placeholder as if risk were measured.
-            $slText = trim((string) ($updated['sl'] ?? ''));
-            if (in_array($slText, ['', 'brak', '—', '-'], true)
-                && array_key_exists('risk', $updated)
-                && (float) $updated['risk'] === 0.0
-            ) {
-                $updated['risk'] = null;
-                $updated['riskPct'] = null;
-            }
         }
 
         $state['trades'][$index] = $updated;
@@ -696,10 +687,6 @@ final class WriteEngine
         $duration = $openedAt === null ? 0 : max(1, (int) round(($closedAt->getTimestamp() - $openedAt->getTimestamp()) / 60));
 
         $updated = $trade;
-        if ($risk === null) {
-            $updated['risk'] = null;
-            $updated['riskPct'] = null;
-        }
         $updated['exit'] = $exitPrice === null ? null : $this->numText($exitPrice);
         $updated['result'] = $result;
         $updated['r'] = $risk !== null && $risk > 0 ? Numbers::round($result / $risk) : null;
@@ -2473,6 +2460,54 @@ final class WriteEngine
             || $bias === ((string) ($trade['dir'] ?? 'l') === 's' ? 'short' : 'long');
 
         return $biasMatch && (new DayPlanService())->marketMatchesPlan($trade, $plan);
+    }
+
+    /**
+     * Legacy records without a stop loss stored unknown risk as 0. Normalize
+     * that placeholder to null before any operation so the before/after state
+     * stays consistent: a note-only edit must not look like a risk mutation
+     * (which would trigger whole-state validation of an open no-SL trade).
+     *
+     * @param array<string,mixed> $state
+     * @return array<string,mixed>
+     */
+    private function normalizeLegacyUnknownRisk(array $state): array
+    {
+        if (!is_array($state['trades'] ?? null)) {
+            return $state;
+        }
+        foreach ($state['trades'] as $index => $trade) {
+            if (!is_array($trade)
+                || !array_key_exists('risk', $trade)
+                || !$this->isLegacyUnknownRisk($trade)
+            ) {
+                continue;
+            }
+            $trade['risk'] = null;
+            if (array_key_exists('riskPct', $trade)) {
+                $trade['riskPct'] = null;
+            }
+            $state['trades'][$index] = $trade;
+        }
+
+        return $state;
+    }
+
+    /**
+     * @param array<string,mixed> $trade
+     */
+    private function isLegacyUnknownRisk(array $trade): bool
+    {
+        $slText = trim((string) ($trade['sl'] ?? ''));
+        if (!in_array($slText, ['', 'brak', '—', '-'], true)) {
+            return false;
+        }
+        $risk = $trade['risk'];
+        if ($risk === null || $risk === '') {
+            return false;
+        }
+
+        return is_numeric($risk) && (float) $risk === 0.0;
     }
 
     /**
