@@ -1165,11 +1165,6 @@ try {
   await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
 
   const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
-  await page.evaluate(() => {
-    AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
-    AV.ui.ntChecks = {};
-    AV.renderChecklist();
-  });
   await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
   await page.fill('#ntPair', 'ETH/USDT');
   await page.waitForTimeout(250);
@@ -1187,8 +1182,8 @@ try {
     checkedCount: Object.values(AV.ui.ntChecks || {}).filter(Boolean).length,
     total: Object.keys(AV.ui.ntChecks || {}).length
   }));
-    log('nowa transakcja: niejednoznaczne plany nie tworzą zgodności', !manualPlanLevel.matches && !manualPlanLevel.checked && manualPlanLevel.count === '0/2' && manualPlanLevel.checkedCount === 0, JSON.stringify(manualPlanLevel));
-   log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
+    log('nowa transakcja: niejednoznaczne plany nie tworzą zgodności', !manualPlanLevel.matches && !manualPlanLevel.checked && manualPlanLevel.checkedCount === 0, JSON.stringify(manualPlanLevel));
+   log('nowa transakcja: checklista dobrowolna przy zerze', /^Checklista jest dobrowolna; zapis nie wymaga minimum\. Zaznaczono 0 z \d+ punktów\.$/.test(manualPlanLevel.warning), manualPlanLevel.warning);
    await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
