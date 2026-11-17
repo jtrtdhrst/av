@@ -1200,7 +1200,8 @@ try {
   // the protection-mode override; re-apply it so the form stays unlocked.
   await page.evaluate(() => {
     if (AV.lockInfo(AV.state).active) {
-      AV.addOverride('Wpisuję wcześniejszą transakcję');
+      AV.state.overrides = AV.state.overrides || [];
+      AV.state.overrides.push({ date: AV.dateKey(new Date()), at: Date.now(), reason: 'Wpisuję wcześniejszą transakcję' });
       AV.renderLock();
     }
   });
