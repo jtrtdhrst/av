@@ -11,6 +11,9 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use AlphaVault\Mcp\Proposals\ProposalService;
 use AlphaVault\Mcp\Support\Dates;
 
+require_once __DIR__ . '/mcp-test-environment.php';
+mcpLoadIsolatedCiConfig(dirname(__DIR__));
+
 [$config, $db] = require __DIR__ . '/../app/bootstrap.php';
 $userId = (int) ($argv[1] ?? 0);
 if ($userId <= 0) {

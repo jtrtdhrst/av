@@ -158,7 +158,7 @@
 
   P.notifyTradeClosed = (trade) => {
     if (!trade) return Promise.resolve('none');
-    const direction = trade.dir === 'l' ? 'LONG' : 'SHORT';
+    const direction = AV.tradeDirection(trade.dir) === 's' ? 'SHORT' : 'LONG';
     const result = trade.result == null
       ? ''
       : ' ' + (typeof AV.signed === 'function' ? AV.signed(trade.result, 2, ' USDT') : trade.result);

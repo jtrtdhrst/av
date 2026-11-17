@@ -8,6 +8,7 @@ use AlphaVault\Db;
 use AlphaVault\Mcp\Proposals\ProposalException;
 use AlphaVault\Mcp\Proposals\ProposalService;
 use AlphaVault\Mcp\Support\DayPlanRecords;
+use AlphaVault\Mcp\Support\RecordDiff;
 use AlphaVault\Mcp\Write\WriteEngine;
 use AlphaVault\Mcp\Write\WriteException;
 use Mcp\Server\Exception\ToolCallException;
@@ -18,14 +19,11 @@ use Mcp\Server\RequestContext;
  *
  * Wszystkie operacje przechodzą przez `WriteEngine`, więc walidacja, formuły,
  * audyt i format danych są wspólne z zatwierdzaniem propozycji. Narzędzia
- * dzielą się na dwie klasy:
+ * wszystkie 30 operacji może zapisywać bezpośrednio, a trzy narzędzia
+ * opcjonalnie tworzą propozycję `write_op` wymagającą jawnej decyzji:
  *
- * - bezpośrednie: notatki, transakcje, recenzje, setupy, plany (szkic),
- *   check-iny, screeny — zapis od razu, odpowiedź potwierdza revision,
- * - wymagające zatwierdzenia: usuwanie, finanse, reguły ryzyka, prop
- *   challenges, zatwierdzenie planu i przywracanie z kosza — narzędzie
- *   tworzy propozycję `write_op`, a zapis wykonuje się dopiero po decyzji
- *   człowieka w panelu AlphaVault.
+ * Propozycje nie są obowiązkową bramką dla żadnej operacji zapisu. Zatwierdzenie
+ * propozycji stosuje jej zamrożony snapshot po zgodności rewizji i diffHash.
  */
 final class WriteTools
 {
@@ -701,7 +699,8 @@ final class WriteTools
         [$userId, $client] = $this->guard($context);
         try {
             $existing = $this->db->queryOne(
-                'SELECT kind, target_ref, after_json FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ?',
+                'SELECT kind, target_ref, after_json
+                   FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ?',
                 [$userId, trim($idempotencyKey)]
             );
             $existingAfter = $existing !== null ? json_decode((string) ($existing['after_json'] ?? ''), true) : null;
@@ -716,14 +715,23 @@ final class WriteTools
                     (string) ($existing['target_ref'] ?? ''),
                     null,
                     ['op' => $op, 'args' => $args],
-                    $idempotencyKey
+                    $idempotencyKey,
+                    ['op' => $op, 'args' => $args],
+                    null,
+                    $expectedRevision
                 );
+                $previewAfter = $proposal['_previewAfter'] ?? null;
+                unset($proposal['_previewAfter']);
+                $alreadyApproved = (string) ($proposal['status'] ?? '') === 'approved';
 
                 return array_merge($proposal, [
                     'ok' => true,
                     'applied' => 'proposal',
                     'operation' => $op,
-                    'note' => 'Powtórka klucza idempotencji zwróciła istniejącą propozycję. Nic nie zostało zapisane.',
+                    'preview' => RecordDiff::redactValue($previewAfter),
+                    'note' => $alreadyApproved
+                        ? 'Ta propozycja została już zatwierdzona. Nie wykonano ponownego zapisu.'
+                        : 'Powtórka klucza idempotencji zwróciła istniejącą propozycję; nie utworzono nowej zmiany.',
                 ]);
             }
 
@@ -749,17 +757,30 @@ final class WriteTools
                 'write_op',
                 $preview['target'],
                 $preview['before'],
-                ['op' => $op, 'args' => $args],
+                [
+                    'op' => $op,
+                    'args' => $args,
+                    'plannedState' => $preview['state'],
+                    'plannedPreview' => [
+                        'before' => $preview['before'],
+                        'after' => $preview['after'],
+                        'target' => $preview['target'],
+                    ],
+                ],
                 $idempotencyKey,
-                null,
-                $preview['after']
+                ['op' => $op, 'args' => $args],
+                $preview['after'],
+                $revision,
+                $preview['stateChanges']
             );
+            $previewAfter = $proposal['_previewAfter'] ?? $preview['after'];
+            unset($proposal['_previewAfter']);
 
             return array_merge($proposal, [
                 'ok' => true,
                 'applied' => 'proposal',
                 'operation' => $op,
-                'preview' => $preview['after'],
+                'preview' => RecordDiff::redactValue($previewAfter),
                 'note' => 'Nic nie zostało zapisane. Pokaż użytkownikowi diff i diffHash. Po wyraźnym potwierdzeniu użytkownika wywołaj approve_proposal z confirmed=true; kod jednorazowy z panelu jest opcjonalny.',
             ]);
         } catch (ToolCallException $err) {

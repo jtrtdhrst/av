@@ -14,6 +14,18 @@ const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
 const ORIGIN = new URL(BASE).origin;
 let cookie = '';
 const results = [];
+let fixtureUserId = 0;
+let fixtureBackup = null;
+
+function restoreDemoFixture() {
+  if (!fixtureUserId || !fixtureBackup) return;
+  execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+    env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+    input: JSON.stringify({ state: fixtureBackup }),
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  fixtureBackup = null;
+}
 
 function log(name, ok, info = '') {
   results.push({ name, ok, info });
@@ -106,6 +118,11 @@ async function main() {
   assert.equal(me.json.authenticated, true);
   assert.equal(me.json.user.isDemo, true);
   log('me z sesją', true, me.json.user.username);
+  fixtureUserId = Number(me.json.user.id);
+  const baseline = await req('/api/state');
+  assert.equal(baseline.res.status, 200, baseline.text);
+  assert.ok(baseline.json.state, 'brak bazowego stanu demo do odtworzenia');
+  fixtureBackup = JSON.parse(JSON.stringify(baseline.json.state));
 
   const events = await req('/api/events');
   assert.equal(events.res.status, 200, events.text);
@@ -162,8 +179,7 @@ async function main() {
   }
   log('GET /api/state', true, `rewizja ${state.json.revision}, transakcje ${state.json.state.trades.length}`);
 
-  const originalState = state.json.state;
-  const propBefore = JSON.parse(JSON.stringify(originalState.prop || null));
+  const originalState = JSON.parse(JSON.stringify(fixtureBackup));
   const propFixture = {
     id: 'prop_e2e_' + Date.now(),
     name: 'E2E Prop 10K',
@@ -214,15 +230,286 @@ async function main() {
   assert.equal(saved.json.state.prop.selectedId, propFixture.id);
   log('prop challenge zapisany w MySQL', true, savedProp.name);
 
+  const noOpPut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: saved.json.state, baseRevision: saved.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(noOpPut.res.status, 200, noOpPut.text);
+  assert.equal(noOpPut.json.revision, saved.json.revision, 'no-op must preserve revision');
+  assert.equal(noOpPut.json.updatedAt, saved.json.updatedAt, 'no-op must preserve updated_at');
+  log('PUT /api/state no-op nie podnosi rewizji', true, String(noOpPut.json.revision));
+
+  const aliasNoOpState = JSON.parse(JSON.stringify(saved.json.state));
+  const aliasNoOpTrade = aliasNoOpState.trades.find((trade) => trade.dir === 'l' || trade.dir === 's');
+  assert.ok(aliasNoOpTrade, 'demo state needs a trade direction for alias normalization');
+  aliasNoOpTrade.dir = aliasNoOpTrade.dir === 's' ? 'short' : 'long';
+  const aliasNoOpPut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: aliasNoOpState, baseRevision: noOpPut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(aliasNoOpPut.res.status, 200, aliasNoOpPut.text);
+  assert.equal(aliasNoOpPut.json.revision, noOpPut.json.revision, 'direction alias normalization is a no-op');
+  log('PUT /api/state alias kierunku nie podnosi rewizji', true);
+  const noTrashNoOpState = JSON.parse(JSON.stringify(aliasNoOpState));
+  assert.ok(!Array.isArray(noTrashNoOpState.trash) || noTrashNoOpState.trash.length === 0, 'API fixture should start with an empty trash');
+  delete noTrashNoOpState.trash;
+  const noTrashNoOpPut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: noTrashNoOpState, baseRevision: aliasNoOpPut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(noTrashNoOpPut.res.status, 200, noTrashNoOpPut.text);
+  assert.equal(noTrashNoOpPut.json.revision, aliasNoOpPut.json.revision, 'omitted empty trash must preserve revision');
+
+  const manualTradeWithoutStop = JSON.parse(JSON.stringify(saved.json.state));
+  manualTradeWithoutStop.trades.push({
+    id: 'e2e_missing_sl_' + Date.now(), date: '2026-11-17', pair: 'E2E/USDT', dir: 'l',
+    entry: '100', exit: 'otwarta', sl: '', tp: '110', size: '1', result: null, source: 'Ręcznie'
+  });
+  const rejectedMissingStop = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: manualTradeWithoutStop, baseRevision: saved.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedMissingStop.res.status, 422, rejectedMissingStop.text);
+  assert.equal(rejectedMissingStop.json.error, 'stop_loss_required');
+  const spoofedImportWithoutStop = JSON.parse(JSON.stringify(saved.json.state));
+  spoofedImportWithoutStop.trades.push({
+    id: 'e2e_spoofed_import_' + Date.now(), date: '2026-11-17', pair: 'E2E/USDT', dir: 'l',
+    entry: '100', exit: 'otwarta', sl: '', tp: '110', size: '1', result: null, source: 'CSV'
+  });
+  const rejectedSpoofedImport = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: spoofedImportWithoutStop, baseRevision: saved.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedSpoofedImport.res.status, 422, rejectedSpoofedImport.text);
+  assert.equal(rejectedSpoofedImport.json.error, 'stop_loss_required');
+  const spoofedTrashState = JSON.parse(JSON.stringify(saved.json.state));
+  spoofedTrashState.trash = Array.isArray(spoofedTrashState.trash) ? spoofedTrashState.trash : [];
+  spoofedTrashState.trash.push({
+    id: 'tr_e2e_spoofed_' + Date.now(),
+    kind: 'trade',
+    record: {
+      id: 'e2e_spoofed_trash_' + Date.now(), date: '2026-11-17', pair: 'E2E/USDT', dir: 'l',
+      entry: '100', exit: 'otwarta', sl: '', tp: '110', size: '1', result: null, source: 'CSV'
+    }
+  });
+  const rejectedSpoofedTrash = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: spoofedTrashState, baseRevision: saved.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedSpoofedTrash.res.status, 422, rejectedSpoofedTrash.text);
+  assert.equal(rejectedSpoofedTrash.json.error, 'trade_trash_source_invalid');
+
+  const invalidTradeDateState = JSON.parse(JSON.stringify(saved.json.state));
+  invalidTradeDateState.trades.push({
+    id: 'e2e_invalid_date_' + Date.now(), date: 'tomorrow', pair: 'E2E/USDT', dir: 'l',
+    entry: '100', exit: 'otwarta', sl: '90', tp: '110', size: '1', result: null, source: 'Ręcznie'
+  });
+  const rejectedTradeDate = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: invalidTradeDateState, baseRevision: saved.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedTradeDate.res.status, 422, rejectedTradeDate.text);
+  assert.equal(rejectedTradeDate.json.error, 'invalid_trade_date');
+  const malformedClosedAtState = JSON.parse(JSON.stringify(saved.json.state));
+  malformedClosedAtState.trades.push({
+    id: 'e2e_invalid_closed_at_' + Date.now(), date: '2026-11-17', pair: 'E2E/USDT', dir: 'l',
+    entry: '100', exit: '100', sl: '90', tp: '110', size: '1', result: 0,
+    closedAt: '2026-11-17T10:00:00Z\n', source: 'Ręcznie'
+  });
+  const rejectedMalformedClosedAt = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: malformedClosedAtState, baseRevision: saved.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedMalformedClosedAt.res.status, 422, rejectedMalformedClosedAt.text);
+  assert.equal(rejectedMalformedClosedAt.json.error, 'invalid_closed_at');
+  const unchangedAfterNewTradeValidation = await req('/api/state');
+  assert.equal(unchangedAfterNewTradeValidation.json.revision, saved.json.revision);
+  assert.deepEqual(unchangedAfterNewTradeValidation.json.state, saved.json.state);
+  log('PUT /api/state wymaga SL i poprawnej daty dla nowej transakcji', true);
+
+  const tradeIntegrityState = JSON.parse(JSON.stringify(saved.json.state));
+  const integrityTradeId = 'e2e_trade_rules_' + Date.now();
+  tradeIntegrityState.trades.push({
+    id: integrityTradeId, date: '2026-11-17T10:00:00Z', pair: ' E2E/USDT ', dir: 'long',
+    entry: '100,000000001', exit: 'otwarta', sl: '90', tp: '110', size: '1',
+    result: '', r: null, source: 'Ręcznie', account: 'WEEX', fee: 0,
+    mae: null, mfe: null, durationMin: 0
+  });
+  const validTradePut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: tradeIntegrityState, baseRevision: noOpPut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(validTradePut.res.status, 200, validTradePut.text);
+  const normalizedAliasState = await req('/api/state');
+  const normalizedIntegrityTrade = normalizedAliasState.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  assert.equal(normalizedIntegrityTrade.dir, 'l');
+  assert.equal(normalizedIntegrityTrade.pair, 'E2E/USDT');
+  assert.equal(normalizedIntegrityTrade.entry, '100.000000001');
+  assert.equal(normalizedIntegrityTrade.result, null, 'blank result must stay open and be normalized to null');
+  const staleIdenticalWrite = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: normalizedAliasState.json.state, baseRevision: noTrashNoOpPut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(staleIdenticalWrite.res.status, 409, staleIdenticalWrite.text);
+  assert.equal(staleIdenticalWrite.json.error, 'revision_conflict');
+  const objectTradeCollection = JSON.parse(JSON.stringify(normalizedAliasState.json.state));
+  objectTradeCollection.trades = { [integrityTradeId]: normalizedIntegrityTrade };
+  const rejectedObjectTradeCollection = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: objectTradeCollection, baseRevision: validTradePut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedObjectTradeCollection.res.status, 422, rejectedObjectTradeCollection.text);
+  assert.equal(rejectedObjectTradeCollection.json.error, 'invalid_trade_list');
+
+  for (const [field, value, expectedError] of [
+    ['sl', '105', 'invalid_stop_loss'],
+    ['tp', '95', 'invalid_take_profit']
+  ]) {
+    const invalidState = JSON.parse(JSON.stringify(tradeIntegrityState));
+    invalidState.trades.find((trade) => trade.id === integrityTradeId)[field] = value;
+    const invalidPut = await req('/api/state', {
+      method: 'PUT',
+      body: JSON.stringify({ state: invalidState, baseRevision: validTradePut.json.revision }),
+      headers: { Origin: ORIGIN }
+    });
+    assert.equal(invalidPut.res.status, 422, invalidPut.text);
+    assert.equal(invalidPut.json.error, expectedError);
+  }
+  const unchangedAfterRejectedWrites = await req('/api/state');
+  const unchangedTrade = unchangedAfterRejectedWrites.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  assert.equal(unchangedAfterRejectedWrites.json.revision, validTradePut.json.revision);
+  assert.equal(unchangedTrade.sl, '90');
+  assert.equal(unchangedTrade.tp, '110');
+  log('PUT /api/state odrzuca błędny SL/TP atomowo', true, unchangedTrade.id);
+
+  const closedTradeState = JSON.parse(JSON.stringify(tradeIntegrityState));
+  const closedFixture = closedTradeState.trades.find((trade) => trade.id === integrityTradeId);
+  Object.assign(closedFixture, { exit: '105', result: 5, r: 0.5, closedAt: null });
+  const closedTradePut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: closedTradeState, baseRevision: validTradePut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(closedTradePut.res.status, 200, closedTradePut.text);
+  assert.match(closedTradePut.json.updatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  const changedClosedExecution = JSON.parse(JSON.stringify(closedTradeState));
+  changedClosedExecution.trades.find((trade) => trade.id === integrityTradeId).entry = '101';
+  const rejectedClosedExecution = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: changedClosedExecution, baseRevision: closedTradePut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedClosedExecution.res.status, 409, rejectedClosedExecution.text);
+  assert.equal(rejectedClosedExecution.json.error, 'closed_trade_execution_readonly');
+
+  const invalidClosedState = JSON.parse(JSON.stringify(closedTradeState));
+  invalidClosedState.trades.reverse();
+  const invalidClosedTrade = invalidClosedState.trades.find((trade) => trade.id === integrityTradeId);
+  invalidClosedTrade.id = integrityTradeId + '_changed';
+  invalidClosedTrade.entry = '101';
+  const invalidClosedPut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: invalidClosedState, baseRevision: closedTradePut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(invalidClosedPut.res.status, 409, invalidClosedPut.text);
+  assert.equal(invalidClosedPut.json.error, 'trade_id_immutable');
+  const preservedHistoricalClose = await req('/api/state');
+  const historicalTrade = preservedHistoricalClose.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  assert.equal(historicalTrade.result, 5);
+  assert.equal(historicalTrade.closedAt, null);
+  assert.equal(preservedHistoricalClose.json.revision, closedTradePut.json.revision);
+  const annotatedClosedState = JSON.parse(JSON.stringify(preservedHistoricalClose.json.state));
+  const annotatedTrade = annotatedClosedState.trades.find((trade) => trade.id === integrityTradeId);
+  annotatedTrade.note = 'E2E: historyczne zamknięcie, czas nieznany';
+  const annotatedClosedPut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: annotatedClosedState, baseRevision: closedTradePut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(annotatedClosedPut.res.status, 200, annotatedClosedPut.text);
+  const afterAnnotation = await req('/api/state');
+  const annotatedStoredTrade = afterAnnotation.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  assert.equal(annotatedStoredTrade.entry, '100.000000001');
+  assert.equal(annotatedStoredTrade.exit, '105');
+  assert.equal(annotatedStoredTrade.result, 5);
+  assert.equal(annotatedStoredTrade.closedAt, null);
+  assert.equal(annotatedStoredTrade.note, 'E2E: historyczne zamknięcie, czas nieznany');
+  log('PUT /api/state blokuje wykonanie, ale pozwala na recenzję bez backfillu czasu', true, integrityTradeId);
+
+  const stateBeforeSoftDelete = await req('/api/state');
+  const softDeletedState = JSON.parse(JSON.stringify(stateBeforeSoftDelete.json.state));
+  const tradeToSoftDelete = softDeletedState.trades.find((trade) => trade.id === integrityTradeId);
+  softDeletedState.trades = softDeletedState.trades.filter((trade) => trade.id !== integrityTradeId);
+  softDeletedState.trash = Array.isArray(softDeletedState.trash) ? softDeletedState.trash : [];
+  softDeletedState.trash.push({
+    id: 'e2e_trash_' + integrityTradeId,
+    kind: 'trade',
+    label: 'E2E fixture',
+    record: tradeToSoftDelete,
+    deletedAt: new Date().toISOString()
+  });
+  const missingTrashIdState = JSON.parse(JSON.stringify(stateBeforeSoftDelete.json.state));
+  const missingIdTrade = missingTrashIdState.trades.find((trade) => trade.id === integrityTradeId);
+  missingTrashIdState.trades = missingTrashIdState.trades.filter((trade) => trade.id !== integrityTradeId);
+  missingTrashIdState.trash = Array.isArray(missingTrashIdState.trash) ? missingTrashIdState.trash : [];
+  missingTrashIdState.trash.push({ kind: 'trade', label: 'missing id fixture', record: missingIdTrade });
+  const rejectedMissingTrashId = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: missingTrashIdState, baseRevision: stateBeforeSoftDelete.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedMissingTrashId.res.status, 422, rejectedMissingTrashId.text);
+  assert.equal(rejectedMissingTrashId.json.error, 'missing_trash_id');
+  const softDeletePut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: softDeletedState, baseRevision: stateBeforeSoftDelete.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(softDeletePut.res.status, 200, softDeletePut.text);
+  log('PUT /api/state usuwa transakcję wyłącznie z kopią w koszu', true);
+
+  const tamperedTrashState = JSON.parse(JSON.stringify(softDeletedState));
+  tamperedTrashState.trash.find((entry) => entry.id === 'e2e_trash_' + integrityTradeId).record.result = 50;
+  const rejectedTrashTamper = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: tamperedTrashState, baseRevision: softDeletePut.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(rejectedTrashTamper.res.status, 409, rejectedTrashTamper.text);
+  assert.equal(rejectedTrashTamper.json.error, 'trade_trash_immutable');
+
+  const restoreTradeState = JSON.parse(JSON.stringify(softDeletedState));
+  const fixtureTrashId = 'e2e_trash_' + integrityTradeId;
+  const fixtureTrashIndex = restoreTradeState.trash.findIndex((entry) => entry.id === fixtureTrashId);
+  assert.notEqual(fixtureTrashIndex, -1, 'soft-deleted fixture must be present in trash');
+  const restoredFixture = restoreTradeState.trash[fixtureTrashIndex].record;
+  restoreTradeState.trash.splice(fixtureTrashIndex, 1);
+  restoredFixture.dir = restoredFixture.dir === 's' ? 'short' : 'long';
+  restoreTradeState.trades.push(restoredFixture);
   const wwwOrigin = ORIGIN.replace(/^(https?:\/\/)(?!www\.)/, '$1www.');
   const wwwPut = await req('/api/state', {
     method: 'PUT',
-    body: JSON.stringify({ state: originalState, baseRevision: saved.json.revision }),
+    body: JSON.stringify({ state: restoreTradeState, baseRevision: softDeletePut.json.revision }),
     headers: { Origin: wwwOrigin }
   });
   assert.equal(wwwPut.res.status, 200, wwwPut.text);
+  const restoredStateResponse = await req('/api/state');
+  const restoredApiTrade = restoredStateResponse.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  assert.equal(restoredApiTrade?.dir, 'l', 'restore normalizes a valid legacy direction alias');
   assert.ok(wwwPut.json.revision > saved.json.revision);
-  log('zapis z Origin www.* = 200', true, wwwOrigin);
+  log('restore z kosza + Origin www.* = 200', true, wwwOrigin);
 
   const conflict = await req('/api/state', {
     method: 'PUT',
@@ -256,16 +543,47 @@ async function main() {
   assert.ok(exportRes.json.state);
   log('GET /api/me/export', true);
 
-  // przywróć stan bez markera i bez fixture prop
-  delete originalState.meta.e2e;
-  originalState.prop = propBefore;
-  const restore = await req('/api/state', {
+  // Legacy manual records without SL may be closed only when execution fields
+  // remain unchanged. Seed this pre-existing record through the isolated CI
+  // fixture helper; the public API must not allow creating it without an SL.
+  const legacyState = JSON.parse(JSON.stringify(fixtureBackup));
+  const legacyTradeId = 'e2e_legacy_without_sl_' + Date.now();
+  legacyState.trades.push({
+    id: legacyTradeId, date: '2025-01-01T10:00:00Z', pair: 'LEGACY/USDT', dir: 'l',
+    entry: '100', exit: 'otwarta', sl: 'brak', tp: '110', size: '1',
+    result: null, r: null, source: 'Ręcznie'
+  });
+  execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+    env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+    input: JSON.stringify({ state: legacyState }),
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const legacyBefore = await req('/api/state');
+  const legacyClosedState = JSON.parse(JSON.stringify(legacyBefore.json.state));
+  const legacyTrade = legacyClosedState.trades.find((row) => row.id === legacyTradeId);
+  Object.assign(legacyTrade, { exit: '', result: 0, r: null, closedAt: null });
+  const legacyClosePut = await req('/api/state', {
     method: 'PUT',
-    body: JSON.stringify({ state: originalState, baseRevision: wwwPut.json.revision }),
+    body: JSON.stringify({ state: legacyClosedState, baseRevision: legacyBefore.json.revision }),
     headers: { Origin: ORIGIN }
   });
-  assert.equal(restore.res.status, 200, restore.text);
-  log('przywrócenie stanu demo', true, 'rewizja ' + restore.json.revision);
+  assert.equal(legacyClosePut.res.status, 200, legacyClosePut.text);
+  const legacyAfter = await req('/api/state');
+  const persistedLegacy = legacyAfter.json.state.trades.find((row) => row.id === legacyTradeId);
+  assert.equal(persistedLegacy.result, 0);
+  assert.equal(persistedLegacy.closedAt, null, 'legacy unknown close time must remain unknown');
+  log('PUT /api/state pozwala zamknąć historyczny wpis bez SL bez backfillu czasu', true);
+
+  // Restore the isolated demo fixture directly; production API correctly
+  // forbids physically erasing the test trade from its soft-delete history.
+  try {
+    restoreDemoFixture();
+  } catch (err) {
+    console.error('restore stdout:', err.stdout?.toString() || '');
+    console.error('restore stderr:', err.stderr?.toString() || '');
+    throw err;
+  }
+  log('przywrócenie izolowanego stanu demo po E2E', true, 'user=' + me.json.user.id);
 
   const logout = await req('/auth/logout', { method: 'POST', headers: { Origin: ORIGIN }, body: '{}' });
   assert.equal(logout.res.status, 200);
@@ -283,5 +601,12 @@ async function main() {
 
 main().catch((err) => {
   console.error('\nFAIL  test przerwany:', err.message);
+  try {
+    restoreDemoFixture();
+  } catch (restoreError) {
+    console.error('FAIL  nie udało się odtworzyć fixture:', restoreError.message);
+    console.error('restore stdout:', restoreError.stdout?.toString() || '');
+    console.error('restore stderr:', restoreError.stderr?.toString() || '');
+  }
   process.exitCode = 1;
 });

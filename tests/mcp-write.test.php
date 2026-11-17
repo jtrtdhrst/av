@@ -15,6 +15,9 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use AlphaVault\Mcp\Tools\WriteSchemas;
 use AlphaVault\Mcp\Write\WriteEngine;
 use AlphaVault\Mcp\Write\WriteException;
+use AlphaVault\Mcp\Support\RecordDiff;
+use AlphaVault\Mcp\Support\TradeService;
+use AlphaVault\TradeRules;
 
 $pass = 0;
 $fail = 0;
@@ -310,6 +313,14 @@ check(
     'Setup: duplikat przy zmianie nazwy',
     $errorOf($s3['state'], 'setup.update', ['setupId' => $s3['result']['id'], 'changes' => ['name' => 'S1']]) === 'setup_exists'
 );
+$setupDeleted = $apply($setup['state'], 'setup.delete', ['setupId' => $setup['result']['id']]);
+$setupCollision = $setupDeleted['state'];
+$setupCollision['setups'][] = ['id' => 'setup-new', 'name' => 'S1'];
+check(
+    'Kosz: przywrócenie setupu z kolizją nazwy zachowuje kosz',
+    $errorOf($setupCollision, 'restore.record', ['trashId' => $setupDeleted['result']['trashId']]) === 'restore_conflict'
+    && count($setupCollision['trash']) === 1
+);
 
 // Transakcje, kosz i przywracanie
 $trade = $apply($withAccount(), 'trade.create', [
@@ -443,6 +454,59 @@ check(
         'tradeId' => $tradeId, 'result' => 0, 'mfe' => '1',
     ]) === 'bad_number'
 );
+check('Transakcja: wspólna walidacja odrzuca SL LONG po złej stronie', $errorOf(
+    $trade['state'],
+    'trade.update',
+    ['tradeId' => $tradeId, 'changes' => ['sl' => 105]]
+) === 'invalid_stop_loss');
+check('Transakcja: wspólna walidacja odrzuca TP LONG po złej stronie', $errorOf(
+    $trade['state'],
+    'trade.update',
+    ['tradeId' => $tradeId, 'changes' => ['tp' => 99]]
+) === 'invalid_take_profit');
+check('Transakcja: błędny update pozostawia wejściowy stan bez zmian', $trade['state']['trades'][0]['sl'] === '95');
+$shortTrade = $apply($withAccount(), 'trade.create', [
+    'pair' => 'ETH/USDT', 'dir' => 'short', 'entry' => 100, 'size' => 2,
+    'sl' => 105, 'tp' => 90, 'date' => '2026-01-02', 'account' => 'WEEX',
+]);
+$shortId = $shortTrade['result']['id'];
+check('Transakcja: wspólna walidacja odrzuca SL SHORT po złej stronie', $errorOf(
+    $shortTrade['state'],
+    'trade.update',
+    ['tradeId' => $shortId, 'changes' => ['sl' => 95]]
+) === 'invalid_stop_loss');
+check('Transakcja: wspólna walidacja odrzuca TP SHORT po złej stronie', $errorOf(
+    $shortTrade['state'],
+    'trade.update',
+    ['tradeId' => $shortId, 'changes' => ['tp' => 105]]
+) === 'invalid_take_profit');
+$legacyLongAlias = $trade['state'];
+$legacyLongAlias['trades'][0]['dir'] = 'long';
+$closedLongAlias = $apply($legacyLongAlias, 'trade.close', [
+    'tradeId' => $tradeId, 'exitPrice' => 110,
+]);
+$legacyShortAlias = $shortTrade['state'];
+$legacyShortAlias['trades'][0]['dir'] = 'short';
+$closedShortAlias = $apply($legacyShortAlias, 'trade.close', [
+    'tradeId' => $shortId, 'exitPrice' => 90,
+]);
+check(
+    'Transakcja: alias long/short zachowuje znak wyniku przy zamykaniu',
+    (float) $closedLongAlias['result']['result'] === 20.0
+    && (float) $closedShortAlias['result']['result'] === 20.0
+    && (new TradeService())->sanitize($closedShortAlias['result'], true)['side'] === 'short'
+);
+$shortPartial = $apply($shortTrade['state'], 'trade.update', [
+    'tradeId' => $shortId,
+    'changes' => ['dir' => 'long', 'entry' => 100, 'sl' => 95, 'tp' => 110],
+]);
+check(
+    'Transakcja: częściowa aktualizacja waliduje końcowy stan i risk',
+    $shortPartial['result']['dir'] === 'l'
+    && $shortPartial['result']['sl'] === '95'
+    && $shortPartial['result']['tp'] === '110'
+    && (float) $shortPartial['result']['risk'] === 10.0
+);
 $mentorUpdate = $apply($trade['state'], 'trade.update', [
     'tradeId' => $tradeId,
     'changes' => ['grade' => 'A', 'checklist' => 5, 'checkTotal' => 7, 'emotion' => 'Skupienie'],
@@ -481,6 +545,138 @@ check(
     'Transakcja: wykonanie zamkniętej pozycji jest niezmienne',
     $errorOf($closedAtResultOnly['state'], 'trade.update', ['tradeId' => $tradeId, 'changes' => ['entry' => 101]]) === 'closed_trade_execution_readonly'
 );
+ $legacyClosed = $trade['result'];
+ $legacyClosed['exit'] = '100';
+ $legacyClosed['result'] = 0;
+ $legacyClosed['closedAt'] = null;
+ $legacyState = $trade['state'];
+ $legacyState['trades'][0] = $legacyClosed;
+$legacyNote = $apply($legacyState, 'trade.update', [
+     'tradeId' => $tradeId, 'changes' => ['note' => 'zachowaj czas jako nieznany'],
+ ]);
+$legacyOutput = (new TradeService())->sanitize($legacyNote['result'], true);
+check(
+    'Transakcja historyczna: wynik 0 bez closedAt pozostaje zamknięty i bez backfillu',
+    TradeRules::isClosed($legacyNote['result'])
+    && TradeRules::closedAtStatus($legacyNote['result']) === 'unknown'
+    && $legacyNote['result']['closedAt'] === null
+    && $legacyOutput['closed'] === true
+    && $legacyOutput['closedAtStatus'] === 'unknown'
+    && $legacyOutput['closedAt'] === null
+    && $errorOf($legacyState, 'trade.close', ['tradeId' => $tradeId, 'result' => 1]) === 'already_closed'
+);
+$malformedLegacy = ['trades' => [[
+    'id' => 'legacy-malformed', 'dir' => 'l', 'entry' => 'bad', 'size' => '',
+    'sl' => 'bad', 'result' => 3, 'closedAt' => null, 'source' => 'Ręcznie', 'note' => '',
+]]];
+$malformedReview = $apply($malformedLegacy, 'trade.update', [
+    'tradeId' => 'legacy-malformed', 'changes' => ['note' => 'adnotacja bez przeliczenia ryzyka'],
+]);
+check(
+    'Transakcja historyczna: edycja notatki nie przelicza ryzyka z błędnych starych liczb',
+    $malformedReview['result']['note'] === 'adnotacja bez przeliczenia ryzyka'
+    && $malformedReview['result']['entry'] === 'bad'
+    && $malformedReview['result']['size'] === ''
+);
+$timestampOnly = $legacyState;
+$timestampOnly['trades'][0]['result'] = null;
+$timestampOnly['trades'][0]['closedAt'] = '2026-11-17T10:30:00Z';
+check(
+    'Transakcja: jawny closedAt oznacza zamknięcie bez wyniku',
+    TradeRules::isClosed($timestampOnly['trades'][0])
+    && TradeRules::closedAtStatus($timestampOnly['trades'][0]) === 'known'
+    && (new TradeService())->sanitize($timestampOnly['trades'][0], true)['closed'] === true
+    && $errorOf($timestampOnly, 'trade.close', ['tradeId' => $tradeId, 'result' => 1]) === 'already_closed'
+);
+$identityBefore = ['trades' => [
+    $closedAtResultOnly['result'],
+    $shortTrade['result'],
+]];
+$identityAfterReordered = ['trades' => [
+    $shortTrade['result'],
+    array_replace($closedAtResultOnly['result'], ['id' => $tradeId . '_renamed', 'entry' => '101']),
+]];
+$droppedProtectedTrade = TradeRules::validateTransition($identityBefore, ['trades' => []]);
+$softDeletedProtectedTrade = TradeRules::validateTransition($identityBefore, [
+    'trades' => [$shortTrade['result']],
+    'trash' => [['id' => 'trash-close', 'kind' => 'trade', 'record' => $closedAtResultOnly['result']]],
+]);
+$idlessTrade = ['pair' => 'IDLESS/USDT', 'dir' => 'l', 'entry' => '10', 'size' => '1'];
+$idlessDelete = TradeRules::validateTransition(
+    ['trades' => [$idlessTrade]],
+    ['trades' => []]
+);
+$idlessSoftDeleteState = [
+    'trades' => [],
+    'trash' => [['id' => 'trash-idless', 'kind' => 'trade', 'record' => $idlessTrade]],
+];
+$idlessSoftDelete = TradeRules::validateTransition(
+    ['trades' => [$idlessTrade]],
+    $idlessSoftDeleteState
+);
+$idlessRestoreState = ['trades' => [$idlessTrade], 'trash' => []];
+$idlessRestore = TradeRules::validateTransition($idlessSoftDeleteState, $idlessRestoreState);
+$idlessMissingTrashId = TradeRules::validateTransition(
+    ['trades' => [$idlessTrade]],
+    ['trades' => [], 'trash' => [['kind' => 'trade', 'record' => $idlessTrade]]]
+);
+$malformedTrashEntry = TradeRules::validateTransition([], ['trades' => [], 'trash' => [null]]);
+$idlessMutation = TradeRules::validateTransition(
+    ['trades' => [$idlessTrade]],
+    ['trades' => [array_replace($idlessTrade, ['entry' => '11'])]]
+);
+$idlessNewTrade = TradeRules::validateTransition([], ['trades' => [$idlessTrade]]);
+$idlessDuplicate = TradeRules::validateTransition(
+    ['trades' => [$idlessTrade]],
+    ['trades' => [$idlessTrade, $idlessTrade]]
+);
+$idlessNoteEdit = TradeRules::validateTransition(
+    ['trades' => [$idlessTrade]],
+    ['trades' => [array_replace($idlessTrade, ['note' => 'adnotacja'])]]
+);
+$aliasWithExecutionChange = TradeRules::validateTransition(
+    ['trades' => [$closedAtResultOnly['result']]],
+    ['trades' => [array_replace($closedAtResultOnly['result'], ['dir' => 'long', 'entry' => '101'])]]
+);
+check(
+    'Transakcja: ochrona ID nie zależy od kolejności; usunięcie wymaga oryginału w koszu',
+    TradeRules::validateTransition($identityBefore, $identityAfterReordered)['error'] === 'trade_id_immutable'
+    && ($droppedProtectedTrade['error'] ?? '') === 'trade_id_immutable'
+    && $softDeletedProtectedTrade === null
+    && ($idlessDelete['error'] ?? '') === 'trade_id_immutable'
+    && $idlessSoftDelete === null
+    && $idlessRestore === null
+    && ($idlessMissingTrashId['error'] ?? '') === 'missing_trash_id'
+    && ($malformedTrashEntry['error'] ?? '') === 'invalid_trash_entry'
+    && ($idlessMutation['error'] ?? '') === 'trade_id_immutable'
+    && ($idlessNewTrade['error'] ?? '') === 'missing_trade_id'
+    && ($idlessDuplicate['error'] ?? '') === 'missing_trade_id'
+    && $idlessNoteEdit === null
+    && ($aliasWithExecutionChange['error'] ?? '') === 'closed_trade_execution_readonly'
+    && !TradeRules::executionChanged(
+        $closedAtResultOnly['result'],
+        array_replace($closedAtResultOnly['result'], ['dir' => 'long'])
+    )
+);
+$tradeTrashBefore = [
+    'trades' => [],
+    'trash' => [[
+        'id' => 'trash-closed',
+        'kind' => 'trade',
+        'record' => $closedAtResultOnly['result'],
+    ]],
+];
+$tradeTrashTamper = $tradeTrashBefore;
+$tradeTrashTamper['trash'][0]['record']['result'] = 50;
+$aliasTradeTrashRestore = [
+    'trades' => [array_replace($closedAtResultOnly['result'], ['dir' => 'long'])],
+    'trash' => [],
+];
+check(
+    'Transakcja w koszu: rekord jest niezmienny, alias kierunku nie blokuje restore',
+    (TradeRules::validateTransition($tradeTrashBefore, $tradeTrashTamper)['error'] ?? '') === 'trade_trash_immutable'
+    && TradeRules::validateTransition($tradeTrashBefore, $aliasTradeTrashRestore) === null
+);
 foreach (['session' => 'Asia', 'plan' => false] as $field => $value) {
     check(
         'Transakcja: kontekst zamkniętej pozycji niezmienny (' . $field . ')',
@@ -489,18 +685,44 @@ foreach (['session' => 'Asia', 'plan' => false] as $field => $value) {
         ]) === 'closed_trade_execution_readonly'
     );
 }
-$deleted = $apply($trade['state'], 'trade.delete', ['tradeId' => $tradeId]);
+$reviewedTrade = $apply($trade['state'], 'review.create', [
+    'tradeId' => $tradeId, 'grade' => 'A', 'note' => 'Recenzja do zachowania',
+]);
+$reviewDeleteWithoutAssociation = TradeRules::validateTransition($reviewedTrade['state'], [
+    'trades' => [],
+    'tradeReviews' => [],
+    'trash' => [['id' => 'trash-without-review', 'kind' => 'trade', 'record' => $trade['result']]],
+]);
 check(
-    'Transakcja: delete do kosza',
+    'Transakcja: cały-stan nie może zgubić recenzji przy soft delete',
+    ($reviewDeleteWithoutAssociation['error'] ?? '') === 'trade_review_delete_mismatch'
+);
+$deleted = $apply($reviewedTrade['state'], 'trade.delete', ['tradeId' => $tradeId]);
+check(
+    'Transakcja: delete do kosza zachowuje powiązaną recenzję',
     $deleted['state']['trades'] === [] && $deleted['state']['trash'][0]['kind'] === 'trade'
+    && $deleted['state']['tradeReviews'] === []
+    && $deleted['state']['trash'][0]['associatedReview'] === $reviewedTrade['state']['tradeReviews'][$tradeId]
     && $deleted['result']['trashId'] !== ''
 );
 $restored = $apply($deleted['state'], 'restore.record', ['trashId' => $deleted['result']['trashId']]);
-check('Kosz: przywracanie', count($restored['state']['trades']) === 1 && $restored['state']['trash'] === []);
+check(
+    'Kosz: przywracanie transakcji odtwarza recenzję',
+    count($restored['state']['trades']) === 1
+    && $restored['state']['trash'] === []
+    && $restored['state']['tradeReviews'][$tradeId] === $reviewedTrade['state']['tradeReviews'][$tradeId]
+);
 check('Kosz: brak wpisu', $errorOf($base(), 'restore.record', ['trashId' => 'tr_brak']) === 'trash_missing');
 $conflict = $deleted['state'];
 $conflict['trades'][] = $trade['result'];
-check('Kosz: konflikt identyfikatora', $errorOf($conflict, 'restore.record', ['trashId' => $deleted['result']['trashId']]) === 'restore_conflict');
+$reviewConflict = $deleted['state'];
+$reviewConflict['tradeReviews'][$tradeId] = ['tradeId' => $tradeId, 'grade' => 'B'];
+check(
+    'Kosz: konflikty przywracania nie konsumują rekordu ani recenzji',
+    $errorOf($conflict, 'restore.record', ['trashId' => $deleted['result']['trashId']]) === 'restore_conflict'
+    && $errorOf($reviewConflict, 'restore.record', ['trashId' => $deleted['result']['trashId']]) === 'restore_conflict'
+    && $reviewConflict['trash'][0]['associatedReview'] === $reviewedTrade['state']['tradeReviews'][$tradeId]
+);
 
 // Screeny
 $shot = $apply($trade['state'], 'screenshot.add', ['tradeId' => $tradeId, 'dataUrl' => $png, 'position' => 'before']);
@@ -509,6 +731,14 @@ check('Screen: zły data URL', $errorOf($trade['state'], 'screenshot.add', ['tra
 check('Screen: brak przed usunięciem', $errorOf($trade['state'], 'screenshot.delete', ['tradeId' => $tradeId, 'position' => 'before']) === 'screenshot_missing');
 $shotDeleted = $apply($shot['state'], 'screenshot.delete', ['tradeId' => $tradeId, 'position' => 'before']);
 check('Screen: usunięcie do kosza', $shotDeleted['state']['trash'][0]['kind'] === 'screenshot');
+$restoredShot = $apply($shotDeleted['state'], 'restore.record', ['trashId' => $shotDeleted['result']['trashId']]);
+$publicRestoreResult = RecordDiff::redactValue($restoredShot['result']);
+check(
+    'Screen: restore zachowuje payload w stanie, ale redaguje odpowiedź MCP',
+    $restoredShot['state']['trades'][0]['screens']['before'] === $png
+    && !str_contains(json_encode($publicRestoreResult) ?: '', $png)
+    && ($publicRestoreResult['record']['dataUrl']['bytes'] ?? 0) > 0
+);
 
 // Konta i wpłaty
 $account = $apply($base(), 'account.create', ['name' => 'K1', 'start' => 1000, 'currency' => 'USDT']);
@@ -553,6 +783,84 @@ $prop = $apply($base(), 'prop.create', ['name' => 'P1', 'templateId' => 'ftmo-1s
 check('Prop: tworzenie', $prop['result']['name'] === 'P1' && (float) $prop['result']['accountSize'] === 10000.0);
 check('Prop: nazwa wymagana', $errorOf($base(), 'prop.create', ['name' => ' ']) === 'invalid_prop_name');
 check('Prop: nieznane pole', $errorOf($prop['state'], 'prop.update', ['challengeId' => $prop['result']['id'], 'changes' => ['stopLoss' => 1]]) === 'field_not_editable');
+$propDiff = RecordDiff::between(
+    ['name' => 'Old', 'accountSize' => 10000, 'optional' => null],
+    ['name' => 'New', 'accountSize' => 10000.0]
+);
+check(
+    'Diff: int/float nie tworzy zmian, a null/missing jest widoczną zmianą',
+    array_column($propDiff, 'field') === ['name', 'optional']
+);
+check(
+    'Diff: duże inty porównywane bez utraty precyzji',
+    !RecordDiff::sameValue(9007199254740993, 9007199254740992.0)
+);
+check(
+    'Diff: brak pustych kontenerów jest równoważny stanowi kanonicznemu',
+    RecordDiff::sameState(
+        ['trades' => []],
+        [
+            'trades' => [], 'setups' => [], 'checkins' => [], 'accounts' => [], 'flows' => [],
+            'plans' => [], 'tradeReviews' => [], 'settings' => [],
+            'prop' => ['challenges' => [], 'selectedId' => null],
+        ]
+    )
+);
+check('Walidacja liczb: separator NBSP i przecinek', TradeRules::number("22\u{00a0}029,82") === 22029.82);
+$precisionState = TradeRules::normalizeTradeState(['trades' => [[
+    'result' => '-0.000000001',
+    'size' => '0.000000001',
+], [
+    'result' => 1.0e-9,
+    'size' => 1.0e-9,
+]]]);
+check(
+    'Transakcja: normalizacja nie obcina precyzji do zera',
+    $precisionState['trades'][0]['result'] === '-0.000000001'
+    && $precisionState['trades'][0]['size'] === '0.000000001'
+    && $precisionState['trades'][1]['result'] === 1.0e-9
+    && $precisionState['trades'][1]['size'] === 1.0e-9
+);
+$placeholderResult = TradeRules::normalizeTradeState(['trades' => [
+    ['result' => ' BRAK '],
+    ['result' => ' — '],
+    ['result' => '0'],
+]]);
+check(
+    'Transakcja: placeholder wyniku staje się null, zero pozostaje zamknięciem',
+    $placeholderResult['trades'][0]['result'] === null
+    && $placeholderResult['trades'][1]['result'] === null
+    && $placeholderResult['trades'][2]['result'] === '0'
+    && !TradeRules::isClosed($placeholderResult['trades'][0])
+    && TradeRules::isClosed($placeholderResult['trades'][2])
+);
+check(
+    'State diff: brak kosza i pusty kosz są semantycznie równoważne',
+    RecordDiff::sameState(['trades' => []], ['trades' => [], 'trash' => []])
+);
+$screenDiff = RecordDiff::stateBetween(
+    ['trades' => [['id' => 'screen-diff', 'screens' => ['before' => 'data:image/png;base64,AAEC']]]],
+    ['trades' => [['id' => 'screen-diff', 'screens' => ['before' => 'data:image/png;base64,AQID']]]]
+);
+check(
+    'State diff: screen ma tylko hash i rozmiar, bez payloadu base64',
+    count($screenDiff) === 1
+    && ($screenDiff[0]['field'] ?? '') === 'state.trades[id:screen-diff].screens'
+    && ($screenDiff[0]['before']['bytes'] ?? null) === 3
+    && ($screenDiff[0]['after']['bytes'] ?? null) === 3
+    && !str_contains(json_encode($screenDiff) ?: '', 'AAEC')
+);
+$nestedImage = RecordDiff::redactValue([
+    'trash' => [['record' => ['dataUrl' => $png]]],
+    'preview' => ['screens' => ['before' => $png]],
+    'unkeyed' => $png,
+]);
+check(
+    'Redakcja screenów obejmuje dataUrl, preview, kosz i replay payloady',
+    !str_contains(json_encode($nestedImage) ?: '', $png)
+    && ($nestedImage['trash'][0]['record']['dataUrl']['bytes'] ?? 0) > 0
+    && ($nestedImage['preview']['screens']['bytes'] ?? 0) > 0
+);
 $propDeleted = $apply($prop['state'], 'prop.delete', ['challengeId' => $prop['result']['id']]);
 check('Prop: delete do kosza', $propDeleted['state']['prop']['challenges'] === [] && $propDeleted['state']['trash'][0]['kind'] === 'prop');
 

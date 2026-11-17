@@ -5,9 +5,11 @@ namespace AlphaVault\Mcp\Proposals;
 
 use AlphaVault\Config;
 use AlphaVault\Db;
+use AlphaVault\TradeRules;
 use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Support\DayPlanRecords;
 use AlphaVault\Mcp\Support\PropChallengeService;
+use AlphaVault\Mcp\Support\RecordDiff;
 use AlphaVault\Mcp\Write\WriteEngine;
 
 /**
@@ -37,7 +39,19 @@ final class ProposalService
     ) {
     }
 
-    public function create(int $userId, string $clientName, string $kind, string $targetRef, ?array $before, array $after, string $idempotencyKey, ?string $fingerprint = null, ?array $diffAfter = null): array
+    public function create(
+        int $userId,
+        string $clientName,
+        string $kind,
+        string $targetRef,
+        ?array $before,
+        array $after,
+        string $idempotencyKey,
+        ?string $fingerprint = null,
+        ?array $diffAfter = null,
+        ?int $expectedBaseRevision = null,
+        ?array $writeOpStateDiff = null
+    ): array
     {
         $key = trim($idempotencyKey);
         if (mb_strlen($key) < 8 || mb_strlen($key) > 120) {
@@ -53,79 +67,140 @@ final class ProposalService
             'fingerprint' => $fingerprint ?? ['after' => $this->payloadForHash($after)],
         ]));
 
-        $this->db->execute(
-            "UPDATE mcp_proposals
-                SET status = 'expired'
-              WHERE user_id = ? AND idempotency_key = ? AND status = 'pending'
-                AND expires_at < UTC_TIMESTAMP()",
-            [$userId, $key]
-        );
-        $existing = $this->db->queryOne(
-            'SELECT id, kind, target_ref, status, expires_at, payload_hash, base_revision, diff_hash, diff_json, after_json FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ?',
-            [$userId, $key]
-        );
-        if ($existing !== null) {
-            return $this->duplicateOrConflict($existing, $after, $fingerprint);
-        }
-
-        $revisionRow = $this->db->queryOne('SELECT revision FROM user_states WHERE user_id = ?', [$userId]);
-        $revision = (int) ($revisionRow['revision'] ?? 0);
-        $id = $this->uuid();
-        $expires = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->modify('+' . self::TTL_MINUTES . ' minutes');
-        $diff = $this->diff($before, $diffTarget);
-        $diffHash = $this->diffHash($kind, $targetRef, $diff);
-
-        try {
-            $this->db->execute(
-                'INSERT INTO mcp_proposals (id, user_id, client_name, kind, target_ref, base_revision, payload_hash, diff_hash, before_json, after_json, diff_json, idempotency_key, expires_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [
-                    $id,
-                    $userId,
-                    mb_substr($clientName !== '' ? $clientName : 'Agent MCP', 0, 100),
-                    $kind,
-                    $targetRef,
-                    $revision,
-                    $payloadHash,
-                    $diffHash,
-                    $before !== null ? $this->encode($before) : null,
-                    $this->encode($after),
-                    $this->encode($diff),
-                    $key,
-                    $expires->format('Y-m-d H:i:s'),
-                ]
+        $outcome = $this->db->withTransaction(function (Db $db) use (
+            $userId,
+            $clientName,
+            $kind,
+            $targetRef,
+            $before,
+            $after,
+            $key,
+            $fingerprint,
+            $payloadHash,
+            $diffTarget,
+            $expectedBaseRevision,
+            $writeOpStateDiff
+        ): array {
+            // Serialize proposal creation with MCP writes before checking the
+            // idempotency key and snapshot revision.
+            $db->queryOne('SELECT id FROM users WHERE id = ? FOR UPDATE', [$userId]);
+            $db->execute(
+                "UPDATE mcp_proposals
+                    SET status = 'expired'
+                  WHERE user_id = ? AND idempotency_key = ? AND status = 'pending'
+                    AND expires_at < UTC_TIMESTAMP()",
+                [$userId, $key]
             );
-        } catch (\PDOException $err) {
-            if ((string) $err->getCode() === '23000') {
-                $row = $this->db->queryOne(
-                    'SELECT id, kind, target_ref, status, expires_at, payload_hash, base_revision, diff_hash, diff_json, after_json FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ?',
-                    [$userId, $key]
-                );
-                if ($row !== null) {
-                    return $this->duplicateOrConflict($row, $after, $fingerprint);
+            $existing = $db->queryOne(
+                'SELECT id, kind, target_ref, status, expires_at, payload_hash, base_revision, diff_hash, diff_json, after_json
+                   FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ? FOR UPDATE',
+                [$userId, $key]
+            );
+            if ($existing !== null) {
+                $storedBaseRevision = $existing['base_revision'] ?? null;
+                if ($expectedBaseRevision !== null
+                    && ($storedBaseRevision === null || (int) $storedBaseRevision !== $expectedBaseRevision)) {
+                    throw new ProposalException(
+                        'revision_conflict',
+                        'Klucz idempotencji wskazuje propozycję z innej rewizji. Odczytaj stan ponownie.',
+                        409
+                    );
                 }
+                return ['result' => $this->duplicateOrConflict($existing, $after, $fingerprint), 'created' => false];
             }
-            throw $err;
+
+            $revisionRow = $db->queryOne('SELECT revision FROM user_states WHERE user_id = ? FOR UPDATE', [$userId]);
+            $currentRevision = (int) ($revisionRow['revision'] ?? 0);
+            if ($expectedBaseRevision !== null && $expectedBaseRevision !== $currentRevision) {
+                throw new ProposalException(
+                    'revision_conflict',
+                    'Dane zmieniły się podczas przygotowywania propozycji. Odczytaj stan ponownie.',
+                    409
+                );
+            }
+            $revision = $expectedBaseRevision ?? $currentRevision;
+            if ($kind === 'write_op' && is_array($after['plannedState'] ?? null)) {
+                $after['plannedStateHash'] = hash('sha256', $this->canonicalJson($after['plannedState']));
+            }
+            $id = $this->uuid();
+            $expires = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+                ->modify('+' . self::TTL_MINUTES . ' minutes');
+            $diff = $this->diff($before, $diffTarget);
+            if ($kind === 'write_op' && $writeOpStateDiff !== null) {
+                $diff = $this->appendWriteOpStateDiff($diff, $writeOpStateDiff);
+            }
+            $diffHash = $this->diffHash($kind, $targetRef, $diff);
+
+            try {
+                $db->execute(
+                    'INSERT INTO mcp_proposals (id, user_id, client_name, kind, target_ref, base_revision, payload_hash, diff_hash, before_json, after_json, diff_json, idempotency_key, expires_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        $id,
+                        $userId,
+                        mb_substr($clientName !== '' ? $clientName : 'Agent MCP', 0, 100),
+                        $kind,
+                        $targetRef,
+                        $revision,
+                        $payloadHash,
+                        $diffHash,
+                        $before !== null ? $this->encode($before) : null,
+                        $this->encode($after),
+                        $this->encode($diff),
+                        $key,
+                        $expires->format('Y-m-d H:i:s'),
+                    ]
+                );
+            } catch (\PDOException $err) {
+                if ((string) $err->getCode() === '23000') {
+                    $row = $db->queryOne(
+                        'SELECT id, kind, target_ref, status, expires_at, payload_hash, base_revision, diff_hash, diff_json, after_json
+                           FROM mcp_proposals WHERE user_id = ? AND idempotency_key = ?',
+                        [$userId, $key]
+                    );
+                    if ($row !== null) {
+                        return ['result' => $this->duplicateOrConflict($row, $after, $fingerprint), 'created' => false];
+                    }
+                }
+                throw $err;
+            }
+
+            $result = [
+                'proposalId' => $id,
+                'status' => 'pending',
+                'kind' => $kind,
+                'target' => $targetRef,
+                'baseRevision' => $revision,
+                'diffHash' => $diffHash,
+                'changes' => array_map(static fn (array $change): string => (string) $change['field'], $diff),
+                'diff' => $diff,
+                'expiresAt' => $expires->format('Y-m-d\TH:i:s\Z'),
+                'note' => 'Propozycja czeka na decyzję. Nic nie zostało zmienione. Zatwierdź ją w panelu AlphaVault albo po wyraźnym potwierdzeniu użytkownika przez approve_proposal; jednorazowy kod jest opcjonalny.',
+            ];
+            if ($kind === 'write_op' && is_array($diffTarget)) {
+                $result['_previewAfter'] = RecordDiff::redactValue($diffTarget);
+            }
+
+            return [
+                'result' => $result,
+                'created' => true,
+                'id' => $id,
+                'diff' => $diff,
+            ];
+        });
+
+        if (!empty($outcome['created'])) {
+            $this->audit($userId, (string) $outcome['id'], 'agent', 'mcp.proposal.create', [
+                'kind' => $kind,
+                'target' => $targetRef,
+                'fields' => array_map(
+                    static fn (array $change): string => (string) $change['field'],
+                    (array) $outcome['diff']
+                ),
+            ]);
         }
 
-        $this->audit($userId, $id, 'agent', 'mcp.proposal.create', [
-            'kind' => $kind,
-            'target' => $targetRef,
-            'fields' => array_keys($diffTarget),
-        ]);
-
-        return [
-            'proposalId' => $id,
-            'status' => 'pending',
-            'kind' => $kind,
-            'target' => $targetRef,
-            'baseRevision' => $revision,
-            'diffHash' => $diffHash,
-            'changes' => array_map(static fn (array $change): string => (string) $change['field'], $diff),
-            'diff' => $diff,
-            'expiresAt' => $expires->format('Y-m-d\TH:i:s\Z'),
-            'note' => 'Propozycja czeka na decyzję. Nic nie zostało zmienione. Zatwierdź ją w panelu AlphaVault albo użyj wygenerowanego tam jednorazowego kodu w rozmowie z MCP.',
-        ];
+        return (array) $outcome['result'];
     }
 
     public function list(int $userId, string $status = 'pending'): array
@@ -326,25 +401,29 @@ final class ProposalService
             if (!is_array($after)) {
                 throw new ProposalException('bad_proposal', 'Propozycja jest uszkodzona.', 400);
             }
+            $this->assertWriteOpPlan($proposal, $after, $state);
+            $beforeState = $state;
             $state = $this->apply($userId, $state, (string) $proposal['kind'], (string) ($proposal['target_ref'] ?? ''), $after);
-            $json = $this->encode($state);
-            $bytes = strlen($json);
-            if ($bytes > $this->config->maxStateBytes) {
-                throw new ProposalException('state_too_large', 'Stan przekracza dopuszczalny rozmiar.', 413);
-            }
-
-            if ($row === null) {
-                $this->db->execute(
-                    'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
-                    [$userId, $json, $bytes]
-                );
-                $revision = 1;
-            } else {
-                $this->db->execute(
-                    'UPDATE user_states SET state = ?, revision = ?, bytes = ? WHERE user_id = ?',
-                    [$json, $revision + 1, $bytes, $userId]
-                );
-                $revision++;
+            $stateChanged = $row === null || !RecordDiff::sameState($beforeState, $state);
+            if ($stateChanged) {
+                $json = $this->encode($state);
+                $bytes = strlen($json);
+                if ($bytes > $this->config->maxStateBytes) {
+                    throw new ProposalException('state_too_large', 'Stan przekracza dopuszczalny rozmiar.', 413);
+                }
+                if ($row === null) {
+                    $this->db->execute(
+                        'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
+                        [$userId, $json, $bytes]
+                    );
+                    $revision = 1;
+                } else {
+                    $this->db->execute(
+                        'UPDATE user_states SET state = ?, revision = ?, bytes = ? WHERE user_id = ?',
+                        [$json, $revision + 1, $bytes, $userId]
+                    );
+                    $revision++;
+                }
             }
 
             $result = [
@@ -488,25 +567,29 @@ final class ProposalService
                 throw new ProposalException('bad_proposal', 'Propozycja jest uszkodzona.', 400);
             }
 
+            $this->assertWriteOpPlan($proposal, $after, $state);
+            $beforeState = $state;
             $state = $this->apply($userId, $state, (string) $proposal['kind'], (string) ($proposal['target_ref'] ?? ''), $after);
-            $json = $this->encode($state);
-            $bytes = strlen($json);
-            if ($bytes > $this->config->maxStateBytes) {
-                throw new ProposalException('state_too_large', 'Stan przekracza dopuszczalny rozmiar.', 413);
-            }
-
-            if ($row === null) {
-                $this->db->execute(
-                    'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
-                    [$userId, $json, $bytes]
-                );
-                $revision = 1;
-            } else {
-                $this->db->execute(
-                    'UPDATE user_states SET state = ?, revision = ?, bytes = ? WHERE user_id = ?',
-                    [$json, $revision + 1, $bytes, $userId]
-                );
-                $revision++;
+            $stateChanged = $row === null || !RecordDiff::sameState($beforeState, $state);
+            if ($stateChanged) {
+                $json = $this->encode($state);
+                $bytes = strlen($json);
+                if ($bytes > $this->config->maxStateBytes) {
+                    throw new ProposalException('state_too_large', 'Stan przekracza dopuszczalny rozmiar.', 413);
+                }
+                if ($row === null) {
+                    $this->db->execute(
+                        'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
+                        [$userId, $json, $bytes]
+                    );
+                    $revision = 1;
+                } else {
+                    $this->db->execute(
+                        'UPDATE user_states SET state = ?, revision = ?, bytes = ? WHERE user_id = ?',
+                        [$json, $revision + 1, $bytes, $userId]
+                    );
+                    $revision++;
+                }
             }
 
             $this->db->execute(
@@ -576,8 +659,17 @@ final class ProposalService
     private function present(array $row): array
     {
         $diff = json_decode((string) ($row['diff_json'] ?? '[]'), true);
+        $diff = RecordDiff::redactValue($diff);
         $before = $row['before_json'] !== null ? json_decode((string) $row['before_json'], true) : null;
         $after = $row['after_json'] !== null ? json_decode((string) $row['after_json'], true) : null;
+        if ((string) ($row['kind'] ?? '') === 'write_op' && is_array($after)) {
+            $after = is_array($after['plannedPreview']['after'] ?? null)
+                ? $after['plannedPreview']['after']
+                : $after;
+        }
+        $before = RecordDiff::redactValue($before);
+        $after = RecordDiff::redactValue($after);
+        $diff = RecordDiff::redactValue($diff);
         $status = (string) $row['status'];
         $expiresTs = isset($row['expires_at']) ? strtotime((string) $row['expires_at'] . ' UTC') : false;
         $expired = $status === 'pending' && $expiresTs !== false && $expiresTs < time();
@@ -645,7 +737,7 @@ final class ProposalService
     ): ?array
     {
         $row = $this->db->queryOne(
-            'SELECT id, status, diff_hash, approval_code_hash, approval_code_used_at,
+            'SELECT id, kind, target_ref, base_revision, status, diff_hash, approval_code_hash, approval_code_used_at,
                     decision_hash, decision_result_json
                FROM mcp_proposals
               WHERE user_id = ? AND decision_key = ?
@@ -693,7 +785,28 @@ final class ProposalService
         }
         $result = json_decode((string) ($row['decision_result_json'] ?? ''), true);
         if (!is_array($result)) {
-            $result = ['ok' => true, 'status' => $expectedStatus, 'proposalId' => $proposalId];
+            $result = [
+                'ok' => true,
+                'status' => $expectedStatus,
+                'proposalId' => $proposalId,
+                'kind' => (string) ($row['kind'] ?? ''),
+                'target' => (string) ($row['target_ref'] ?? ''),
+                'diffHash' => (string) ($row['diff_hash'] ?? ''),
+            ];
+            if ($expectedStatus === 'approved') {
+                $audit = $this->db->queryOne(
+                    "SELECT detail_json FROM mcp_audit
+                      WHERE proposal_id = ? AND action = 'mcp.proposal.approve'
+                      ORDER BY id DESC LIMIT 1",
+                    [$proposalId]
+                );
+                $detail = is_array($audit)
+                    ? json_decode((string) ($audit['detail_json'] ?? ''), true)
+                    : null;
+                if (is_array($detail) && isset($detail['revision']) && is_numeric($detail['revision'])) {
+                    $result['revision'] = (int) $detail['revision'];
+                }
+            }
         }
         if ((string) ($result['status'] ?? '') !== $expectedStatus) {
             throw new ProposalException('idempotency_conflict', 'Ten sam idempotencyKey użyto dla innej decyzji.', 409);
@@ -745,6 +858,77 @@ final class ProposalService
     }
 
     /**
+     * Confirms that a generic write proposal still contains the frozen preview
+     * whose diff hash was shown to the user.
+     *
+     * @param array<string,mixed> $proposal
+     * @param array<string,mixed> $after
+     */
+    private function assertWriteOpPlan(array $proposal, array $after, array $currentState): void
+    {
+        if ((string) ($proposal['kind'] ?? '') !== 'write_op') {
+            return;
+        }
+        $preview = $after['plannedPreview'] ?? null;
+        if (!is_array($preview)
+            || !is_array($preview['after'] ?? null)
+            || (string) ($preview['target'] ?? '') !== (string) ($proposal['target_ref'] ?? '')
+            || !is_array($after['plannedState'] ?? null)) {
+            throw new ProposalException('proposal_plan_missing', 'Propozycja nie zawiera prawidłowego, utrwalonego podglądu.', 409);
+        }
+
+        $before = ($proposal['before_json'] ?? null) !== null
+            ? json_decode((string) $proposal['before_json'], true)
+            : null;
+        if ($before !== null && !is_array($before)) {
+            throw new ProposalException('bad_proposal', 'Propozycja zawiera nieprawidłowy stan przed zmianą.', 400);
+        }
+        $previewBefore = $preview['before'] ?? null;
+        if (($previewBefore !== null && !is_array($previewBefore))
+            || $this->canonicalJson($previewBefore) !== $this->canonicalJson($before)) {
+            throw new ProposalException('diff_mismatch', 'Podgląd zapisany w propozycji nie zgadza się ze stanem początkowym.', 409);
+        }
+        $plannedStateHash = hash('sha256', $this->canonicalJson($after['plannedState']));
+        if (!is_string($after['plannedStateHash'] ?? null)
+            || !hash_equals($after['plannedStateHash'], $plannedStateHash)) {
+            throw new ProposalException('diff_mismatch', 'Utrwalony stan propozycji nie zgadza się z podglądem.', 409);
+        }
+        $actualDiff = $this->diff($before, $preview['after']);
+        $stateDiff = RecordDiff::stateBetween($currentState, $after['plannedState']);
+        $actualDiff = $this->appendWriteOpStateDiff($actualDiff, $stateDiff);
+        $storedDiff = json_decode((string) ($proposal['diff_json'] ?? '[]'), true);
+        if (!is_array($storedDiff)
+            || $this->canonicalJson($actualDiff) !== $this->canonicalJson($storedDiff)
+            || !hash_equals(
+                $this->diffHashFor($proposal),
+                $this->diffHash('write_op', (string) $proposal['target_ref'], $actualDiff)
+            )) {
+            throw new ProposalException('diff_mismatch', 'Podgląd zapisany w propozycji nie zgadza się z jej diffem.', 409);
+        }
+    }
+
+    /**
+     * Include state-level side effects (for example clearing another account's
+     * primary flag) in the user-visible diff and the approval hash.
+     *
+     * @param list<array{field:string,before:mixed,after:mixed}> $targetDiff
+     * @param list<array{field:string,before:mixed,after:mixed}> $stateDiff
+     * @return list<array{field:string,before:mixed,after:mixed}>
+     */
+    private function appendWriteOpStateDiff(array $targetDiff, array $stateDiff): array
+    {
+        foreach ($stateDiff as $change) {
+            $targetDiff[] = [
+                'field' => 'state.' . (string) $change['field'],
+                'before' => $change['before'],
+                'after' => $change['after'],
+            ];
+        }
+
+        return $targetDiff;
+    }
+
+    /**
      * Hash diffu jest liczony raz przy utworzeniu propozycji. Starsze wiersze
      * bez zapisanego hasha dostają go przy pierwszym odczycie.
      */
@@ -776,6 +960,8 @@ final class ProposalService
 
     private function apply(int $userId, array $state, string $kind, string $targetRef, array $after): array
     {
+        $beforeState = $state;
+        $state = TradeRules::normalizeTradeDirections($state);
         switch ($kind) {
             case 'manual_trade':
                 $this->assertManualTrade($after);
@@ -802,14 +988,14 @@ final class ProposalService
                     throw new ProposalException('trade_missing', 'Transakcja nie istnieje już w stanie konta.', 409);
                 }
                 $trade = $state['trades'][$index];
-                if (($trade['result'] ?? null) !== null) {
+                if (TradeRules::isClosed($trade)) {
                     throw new ProposalException('already_closed', 'Transakcja jest już zamknięta.', 409);
                 }
                 if ($this->isExchangeTrade($userId, $trade)) {
                     throw new ProposalException('exchange_data_readonly', 'Transakcja importowana z giełdy jest tylko do odczytu.', 403);
                 }
                 $this->assertClosePayload($trade, $after);
-                foreach (['exit', 'result', 'r', 'mfe', 'durationMin', 'mentor'] as $field) {
+                foreach (['exit', 'result', 'r', 'mfe', 'durationMin', 'mentor', 'closedAt'] as $field) {
                     if (array_key_exists($field, $after)) {
                         $state['trades'][$index][$field] = $after[$field];
                     }
@@ -1013,17 +1199,30 @@ final class ProposalService
 
             case 'write_op':
                 $op = (string) ($after['op'] ?? '');
-                $opArgs = is_array($after['args'] ?? null) ? $after['args'] : [];
                 if ($op === '' || !in_array($op, WriteEngine::OPERATIONS, true)) {
                     throw new ProposalException('bad_proposal', 'Propozycja nie zawiera prawidłowej operacji zapisu.', 400);
                 }
-                $engine = new WriteEngine($this->db, $this->config);
-                $applied = $engine->apply($userId, $state, $op, $opArgs, $targetRef);
-                $state = $applied['state'];
+                if (!is_array($after['plannedState'] ?? null)) {
+                    throw new ProposalException(
+                        'proposal_plan_missing',
+                        'Propozycja nie zawiera utrwalonego podglądu. Utwórz ją ponownie przed zatwierdzeniem.',
+                        409
+                    );
+                }
+                $state = $after['plannedState'];
                 break;
 
             default:
                 throw new ProposalException('bad_proposal', 'Nieznany typ propozycji.', 400);
+        }
+
+        $tradeViolation = TradeRules::validateTransition($beforeState, $state);
+        if ($tradeViolation !== null) {
+            throw new ProposalException(
+                (string) $tradeViolation['error'],
+                (string) $tradeViolation['message'],
+                (int) ($tradeViolation['status'] ?? 422)
+            );
         }
 
         return $state;
@@ -1060,17 +1259,24 @@ final class ProposalService
 
     private function assertClosePayload(array $trade, array $after): void
     {
-        $allowed = ['id', 'exit', 'result', 'r', 'mfe', 'durationMin', 'mentor'];
+        $allowed = ['id', 'exit', 'result', 'r', 'mfe', 'durationMin', 'closedAt', 'mentor'];
         foreach ($after as $field => $_) {
             if (!in_array($field, $allowed, true)) {
                 throw new ProposalException('exchange_data_readonly', 'Pole ' . $field . ' nie może być zmienione przez MCP.', 403);
             }
         }
         $this->assertOptionalMetric($after, 'mfe');
-        $entry = (float) ($trade['entry'] ?? 0);
-        $size = (float) ($trade['size'] ?? 0);
-        $exit = (float) ($after['exit'] ?? 0);
-        $direction = (string) ($trade['dir'] ?? 'l') === 's' ? -1 : 1;
+        if (array_key_exists('closedAt', $after) && !TradeRules::hasValidClosedAt($after)) {
+            throw new ProposalException('invalid_closed_at', 'closedAt musi być poprawnym znacznikiem ISO 8601.', 422);
+        }
+        $entry = TradeRules::number($trade['entry'] ?? null);
+        $size = TradeRules::number($trade['size'] ?? null);
+        $exit = TradeRules::number($after['exit'] ?? null);
+        $direction = TradeRules::directionSign($trade['dir'] ?? 'l');
+        if ($entry === null || $entry <= 0 || $size === null || $size <= 0
+            || $exit === null || $exit <= 0 || $direction === null) {
+            throw new ProposalException('bad_proposal', 'Propozycja zamknięcia zawiera nieprawidłowe dane wykonania.', 400);
+        }
         $expected = (int) round(((($exit - $entry) * $size * $direction) + PHP_FLOAT_EPSILON) * 100) / 100;
         if (abs($expected - (float) ($after['result'] ?? 0)) > 0.02) {
             throw new ProposalException('bad_proposal', 'Wynik propozycji nie zgadza się z ceną wyjścia.', 400);
@@ -1132,7 +1338,10 @@ final class ProposalService
         $this->assertOptionalMetric($after, 'mfe');
         $entry = (float) ($after['entry'] ?? 0);
         $size = (float) ($after['size'] ?? 0);
-        $direction = (string) ($after['dir'] ?? 'l') === 's' ? -1 : 1;
+        $direction = TradeRules::directionSign($after['dir'] ?? 'l');
+        if ($direction === null) {
+            throw new ProposalException('invalid_direction', 'Kierunek transakcji jest nieprawidłowy.', 422);
+        }
         $exitRaw = $after['exit'] ?? null;
         if ($exitRaw !== null && $exitRaw !== '') {
             $exit = (float) $exitRaw;
@@ -1331,7 +1540,7 @@ final class ProposalService
 
         $diff = json_decode((string) ($row['diff_json'] ?? '[]'), true);
 
-        return [
+        $result = [
             'proposalId' => (string) $row['id'],
             'status' => (string) $row['status'],
             'kind' => (string) ($row['kind'] ?? ''),
@@ -1339,9 +1548,17 @@ final class ProposalService
             'baseRevision' => $row['base_revision'] !== null ? (int) $row['base_revision'] : null,
             'diffHash' => $this->diffHashFor($row),
             'changes' => is_array($diff) ? array_values(array_map(static fn (array $change): string => (string) ($change['field'] ?? ''), $diff)) : [],
+            'diff' => is_array($diff) ? $diff : [],
             'expiresAt' => $row['expires_at'],
             'duplicate' => true,
         ];
+        if ((string) ($row['kind'] ?? '') === 'write_op') {
+            $storedAfter = json_decode((string) ($row['after_json'] ?? ''), true);
+            if (is_array($storedAfter) && is_array($storedAfter['plannedPreview']['after'] ?? null)) {
+                $result['_previewAfter'] = RecordDiff::redactValue($storedAfter['plannedPreview']['after']);
+            }
+        }
+        return $result;
     }
 
     /**
@@ -1396,17 +1613,7 @@ final class ProposalService
 
     private function diff(?array $before, array $after): array
     {
-        $diff = [];
-        $keys = array_unique(array_merge(array_keys($before ?? []), array_keys($after)));
-        foreach ($keys as $key) {
-            $old = $before[$key] ?? null;
-            $new = $after[$key] ?? null;
-            if ($old !== $new) {
-                $diff[] = ['field' => (string) $key, 'before' => $old, 'after' => $new];
-            }
-        }
-
-        return $diff;
+        return RecordDiff::between($before, $after);
     }
 
     private function audit(int $userId, ?string $proposalId, string $actor, string $action, array $detail = []): void

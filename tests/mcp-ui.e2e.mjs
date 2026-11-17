@@ -14,6 +14,23 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
 const PHP = process.env.PHP_BIN || 'php';
 const CONFIG = process.env.ALPHA_VAULT_CONFIG || path.join(ROOT, 'tests', 'config.test.json');
+const testConfig = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
+const baseUrl = new URL(BASE);
+const configuredUrl = new URL(testConfig.APP_URL);
+if (baseUrl.protocol !== 'http:'
+  || !['127.0.0.1', 'localhost', '[::1]'].includes(baseUrl.hostname)
+  || baseUrl.origin !== configuredUrl.origin) {
+  throw new Error('MCP UI E2E blocked: browser URL must match the isolated loopback test configuration.');
+}
+const environmentGuard = spawnSync(PHP, [
+  path.join(ROOT, 'tests', 'mcp-helper.php'),
+  'assert-test-environment',
+], {
+  cwd: ROOT,
+  env: { ...process.env, ALPHA_VAULT_CONFIG: CONFIG },
+  encoding: 'utf8',
+});
+assert.equal(environmentGuard.status, 0, `${environmentGuard.stdout}\n${environmentGuard.stderr}`);
 const candidates = [
   process.env.CHROME_PATH,
   path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),

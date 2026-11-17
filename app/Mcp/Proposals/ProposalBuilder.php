@@ -5,6 +5,7 @@ namespace AlphaVault\Mcp\Proposals;
 
 use AlphaVault\Db;
 use AlphaVault\Mcp\Analytics\DayPlanService;
+use AlphaVault\TradeRules;
 use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Support\DayPlanLevels;
 use AlphaVault\Mcp\Support\DayPlanRecords;
@@ -18,6 +19,7 @@ final class ProposalBuilder
 {
     private const MOODS = ['Spokój', 'Pewność', 'Skupienie', 'Nuda', 'Zmęczenie', 'Strach', 'FOMO', 'Chciwość', 'Złość'];
     private const EMOTIONS = ['Spokój', 'Skupienie', 'Pewność', 'Nuda', 'Zmęczenie', 'Strach', 'FOMO', 'Złość', 'Chciwość'];
+    private int $snapshotRevision = 0;
 
     public function __construct(
         private readonly Db $db,
@@ -132,7 +134,7 @@ final class ProposalBuilder
             'mentor' => $this->mentorForGrade($grade, count($errors)),
         ];
 
-        return $this->proposals->create($userId, $clientName, 'manual_trade', 'trade:new', null, $trade, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'manual_trade', 'trade:new', null, $trade, $key, $this->fingerprint($args));
     }
 
     public function closeTrade(int $userId, array $args, string $clientName): array
@@ -152,18 +154,28 @@ final class ProposalBuilder
         if ($this->proposals->isExchangeTrade($userId, $trade)) {
             throw new ProposalException('exchange_data_readonly', 'Transakcji importowanej z giełdy nie można zamknąć przez MCP.', 403);
         }
-        if (($trade['result'] ?? null) !== null) {
+        if (TradeRules::isClosed($trade)) {
             throw new ProposalException('already_closed', 'Transakcja jest już zamknięta.', 409);
         }
 
-        $entry = (float) ($trade['entry'] ?? 0);
-        $size = (float) ($trade['size'] ?? 0);
-        $direction = (string) ($trade['dir'] ?? 'l') === 's' ? -1 : 1;
-        $result = round(($exit - $entry) * $size * $direction, 2);
+        $entry = TradeRules::number($trade['entry'] ?? null);
+        $size = TradeRules::number($trade['size'] ?? null);
+        if ($entry === null || $entry <= 0 || $size === null || $size <= 0) {
+            throw new ProposalException('bad_number', 'entry i size muszą być skończonymi liczbami dodatnimi.', 422);
+        }
+        $directionSign = TradeRules::directionSign($trade['dir'] ?? 'l');
+        if ($directionSign === null) {
+            throw new ProposalException('invalid_direction', 'Kierunek transakcji jest nieprawidłowy.', 422);
+        }
+        $result = round(($exit - $entry) * $size * $directionSign, 2);
         $slRaw = (string) ($trade['sl'] ?? 'brak');
-        $risk = ($slRaw !== '' && $slRaw !== 'brak')
-            ? abs($entry - (float) $slRaw) * $size
-            : abs($entry * 0.01 * $size);
+        $sl = $slRaw !== '' && $slRaw !== 'brak' && $slRaw !== '—' && $slRaw !== '-'
+            ? TradeRules::number($slRaw)
+            : null;
+        if ($slRaw !== '' && $slRaw !== 'brak' && $slRaw !== '—' && $slRaw !== '-' && ($sl === null || $sl <= 0)) {
+            throw new ProposalException('bad_number', 'sl musi być pusty albo skończoną liczbą dodatnią.', 422);
+        }
+        $risk = TradeRules::riskAmount($entry, $size, $sl);
         $r = $risk > 0 ? round($result / $risk, 2) : 0;
         $openedAt = strtotime((string) ($trade['date'] ?? '')) ?: time();
         $after = [
@@ -175,6 +187,7 @@ final class ProposalBuilder
                 ? $this->nonNegativeMetric($args['mfe'], 'mfe')
                 : $this->storedMetric($trade['mfe'] ?? null),
             'durationMin' => max(1, (int) round((time() - $openedAt) / 60)),
+            'closedAt' => gmdate('Y-m-d\TH:i:s\Z'),
             'mentor' => $result > 0
                 ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
                 : ($result < 0
@@ -189,7 +202,7 @@ final class ProposalBuilder
             'durationMin' => $trade['durationMin'] ?? null,
         ];
 
-        return $this->proposals->create($userId, $clientName, 'close_trade', 'trade:' . $tradeId, $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'close_trade', 'trade:' . $tradeId, $before, $after, $key, $this->fingerprint($args));
     }
 
     public function tradeReview(int $userId, array $args, string $clientName): array
@@ -249,7 +262,7 @@ final class ProposalBuilder
         $after['tradeId'] = $tradeId;
         $after['exchangeOwned'] = $this->proposals->isExchangeTrade($userId, $trade);
 
-        return $this->proposals->create($userId, $clientName, 'trade_review', 'trade:' . $tradeId, $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'trade_review', 'trade:' . $tradeId, $before, $after, $key, $this->fingerprint($args));
     }
 
     public function saveDayPlan(int $userId, array $args, string $clientName): array
@@ -370,7 +383,7 @@ final class ProposalBuilder
         // approvedAt nigdy nie jest ustawiane przez agenta.
         $after['approvedAt'] = $before['approvedAt'] ?? null;
 
-        return $this->proposals->create($userId, $clientName, 'day_plan', 'plan:' . $date . '#' . $planId, $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'day_plan', 'plan:' . $date . '#' . $planId, $before, $after, $key, $this->fingerprint($args));
     }
 
     public function saveCheckin(int $userId, array $args, string $clientName): array
@@ -410,7 +423,7 @@ final class ProposalBuilder
             'score' => $this->readinessScore($mood, $energy),
         ];
 
-        return $this->proposals->create($userId, $clientName, 'checkin', 'checkin:' . $date, $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'checkin', 'checkin:' . $date, $before, $after, $key, $this->fingerprint($args));
     }
 
     public function saveSetup(int $userId, array $args, string $clientName): array
@@ -487,7 +500,7 @@ final class ProposalBuilder
             $after['examples'] = $this->stringList($args['examples'], 'examples', 10, 300);
         }
 
-        return $this->proposals->create($userId, $clientName, 'setup', $before === null ? 'setup:new' : 'setup:' . $id, $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'setup', $before === null ? 'setup:new' : 'setup:' . $id, $before, $after, $key, $this->fingerprint($args));
     }
 
     public function savePropChallenge(int $userId, array $args, string $clientName): array
@@ -589,7 +602,7 @@ final class ProposalBuilder
             $after['endDate'] = $endDate;
         }
 
-        return $this->proposals->create($userId, $clientName, 'prop_challenge', $before === null ? 'prop:new' : 'prop:' . $after['id'], $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'prop_challenge', $before === null ? 'prop:new' : 'prop:' . $after['id'], $before, $after, $key, $this->fingerprint($args));
     }
 
     public function saveAccount(int $userId, array $args, string $clientName): array
@@ -666,7 +679,7 @@ final class ProposalBuilder
             'primary' => $primary,
         ];
 
-        return $this->proposals->create(
+        return $this->createProposal(
             $userId,
             $clientName,
             'account',
@@ -752,7 +765,7 @@ final class ProposalBuilder
             unset($after['op']);
         }
 
-        return $this->proposals->create(
+        return $this->createProposal(
             $userId,
             $clientName,
             'capital_flow',
@@ -781,11 +794,10 @@ final class ProposalBuilder
         if (preg_match('/^[A-Z0-9._\/-]{2,20}$/', $pair) !== 1) {
             throw new ProposalException('bad_request', 'Para musi mieć 2-20 znaków: A-Z, 0-9, . _ / -.', 400);
         }
-        $dirRaw = (string) ($args['dir'] ?? '');
-        if (!in_array($dirRaw, ['long', 'short', 'l', 's'], true)) {
+        $direction = TradeRules::normalizeDirection($args['dir'] ?? null);
+        if ($direction === null) {
             throw new ProposalException('bad_request', 'Kierunek musi być long albo short.', 400);
         }
-        $direction = in_array($dirRaw, ['short', 's'], true) ? 's' : 'l';
         $entry = $this->positiveNumber($args['entry'] ?? null, 'entry');
         $size = $this->positiveNumber($args['size'] ?? null, 'size');
         if (!array_key_exists('sl', $args) || $args['sl'] === null || $args['sl'] === '') {
@@ -878,7 +890,7 @@ final class ProposalBuilder
             'screens' => [],
         ];
 
-        return $this->proposals->create($userId, $clientName, 'manual_trade', 'trade:new', null, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'manual_trade', 'trade:new', null, $after, $key, $this->fingerprint($args));
     }
 
     /**
@@ -951,11 +963,11 @@ final class ProposalBuilder
             $after['pair'] = $pair;
         }
         if (array_key_exists('dir', $changes)) {
-            $dirRaw = (string) $changes['dir'];
-            if (!in_array($dirRaw, ['long', 'short', 'l', 's'], true)) {
+            $direction = TradeRules::normalizeDirection($changes['dir']);
+            if ($direction === null) {
                 throw new ProposalException('bad_request', 'Kierunek musi być long albo short.', 400);
             }
-            $after['dir'] = in_array($dirRaw, ['short', 's'], true) ? 's' : 'l';
+            $after['dir'] = $direction;
         }
         foreach (['entry', 'sl', 'tp', 'size', 'fee', 'exit'] as $field) {
             if (!array_key_exists($field, $changes)) {
@@ -982,7 +994,10 @@ final class ProposalBuilder
         if (array_key_exists('date', $changes)) {
             $after['date'] = $this->tradeDateTime($changes['date'], null);
         }
-        $direction = (string) ($after['dir'] ?? 'l') === 's' ? -1 : 1;
+        $direction = TradeRules::directionSign($after['dir'] ?? 'l');
+        if ($direction === null) {
+            throw new ProposalException('invalid_direction', 'Kierunek transakcji jest nieprawidłowy.', 422);
+        }
         $entry = Numbers::pnum($after['entry'] ?? 0);
         $sizeValue = Numbers::pnum($after['size'] ?? 0);
         $slRaw = (string) ($after['sl'] ?? 'brak');
@@ -998,7 +1013,7 @@ final class ProposalBuilder
         }
         $after['mentor'] = $this->mentorForGrade((string) ($after['grade'] ?? 'B'), count((array) ($after['errors'] ?? [])));
 
-        return $this->proposals->create($userId, $clientName, 'trade_update', 'trade:' . $tradeId, $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'trade_update', 'trade:' . $tradeId, $before, $after, $key, $this->fingerprint($args));
     }
 
     /**
@@ -1090,7 +1105,7 @@ final class ProposalBuilder
         }
         $after['updatedAt'] = gmdate('c');
 
-        return $this->proposals->create($userId, $clientName, 'setup', 'setup:' . $setupId, $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'setup', 'setup:' . $setupId, $before, $after, $key, $this->fingerprint($args));
     }
 
     /**
@@ -1189,7 +1204,7 @@ final class ProposalBuilder
         }
         $after['reason'] = $reason;
 
-        return $this->proposals->create($userId, $clientName, 'risk_rules', 'settings:risk', $before, $after, $key, $this->fingerprint($args));
+        return $this->createProposal($userId, $clientName, 'risk_rules', 'settings:risk', $before, $after, $key, $this->fingerprint($args));
     }
 
     private function stringList(mixed $value, string $field, int $maxItems, int $maxLength, int $minItems = 0): array
@@ -1279,13 +1294,40 @@ final class ProposalBuilder
 
     private function state(int $userId): array
     {
-        $row = $this->db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userId]);
+        $row = $this->db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ?', [$userId]);
         if ($row === null) {
+            $this->snapshotRevision = 0;
             return [];
         }
+        $this->snapshotRevision = (int) ($row['revision'] ?? 0);
         $state = json_decode((string) $row['state'], true);
 
-        return is_array($state) ? $state : [];
+        return is_array($state) ? TradeRules::normalizeTradeDirections($state) : [];
+    }
+
+    private function createProposal(
+        int $userId,
+        string $clientName,
+        string $kind,
+        string $targetRef,
+        ?array $before,
+        array $after,
+        string $idempotencyKey,
+        ?string $fingerprint = null,
+        ?array $diffAfter = null
+    ): array {
+        return $this->proposals->create(
+            $userId,
+            $clientName,
+            $kind,
+            $targetRef,
+            $before,
+            $after,
+            $idempotencyKey,
+            $fingerprint,
+            $diffAfter,
+            $this->snapshotRevision
+        );
     }
 
     private function idempotencyKey(array $args): string

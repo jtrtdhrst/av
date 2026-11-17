@@ -754,11 +754,19 @@ async function main() {
       ? String(proposal.target).split('#')[1]
       : String(proposal.target).slice(String(proposal.target).indexOf(':') + 1);
     assert.equal(proposal.preview.id, targetId, `${operation}: preview id must match target`);
+    await expectToolError(at, 'propose_change', {
+      ...request,
+      expectedRevision: request.expectedRevision + 1,
+    }, /revision_conflict/i);
 
     const pendingReplay = await call(at, 'propose_change', request);
     assert.equal(pendingReplay.duplicate, true, `${operation}: pending replay must be idempotent`);
     assert.equal(pendingReplay.proposalId, proposal.proposalId);
     assert.equal(pendingReplay.target, proposal.target);
+    assert.equal(pendingReplay.status, proposal.status);
+    assert.equal(pendingReplay.diffHash, proposal.diffHash);
+    assert.deepEqual(pendingReplay.diff, proposal.diff);
+    assert.deepEqual(pendingReplay.preview, proposal.preview);
 
     await approve(proposal);
     const approvedReplay = await call(at, 'propose_change', request);
@@ -766,6 +774,9 @@ async function main() {
     assert.equal(approvedReplay.status, 'approved');
     assert.equal(approvedReplay.proposalId, proposal.proposalId);
     assert.equal(approvedReplay.target, proposal.target);
+    assert.equal(approvedReplay.diffHash, proposal.diffHash);
+    assert.deepEqual(approvedReplay.diff, proposal.diff);
+    assert.deepEqual(approvedReplay.preview, proposal.preview);
     return proposal;
   };
 
@@ -812,7 +823,11 @@ async function main() {
     changes: { note: 'Poprawiona notatka', grade: 'A', setup: 'Pullback w trendzie', emotion: 'Skupienie', mae: 0.25, mfe: 0.75 },
     idempotencyKey: idem('trade-update'),
   });
-  for (const field of ['grade', 'note', 'setup']) assert.ok(tradeUpdate.changes.includes(field), `${field} w diffie`);
+  assert.deepEqual(
+    tradeUpdate.changes.slice().sort(),
+    ['emotion', 'grade', 'note', 'setup'].sort(),
+    'diff transakcji zawiera wyłącznie zmienione pola'
+  );
   assert.equal(stateA().trades.find((row) => row.id === tradeId).note, 'Poprawiona notatka');
   assert.equal(stateA().trades.find((row) => row.id === tradeId).mae, 0.25);
   assert.equal(stateA().trades.find((row) => row.id === tradeId).mfe, 0.75);
@@ -836,6 +851,21 @@ async function main() {
   }, /nieujemną|mfe/i);
   assert.equal(stateA().trades.find((row) => row.id === tradeId).emotion, 'Skupienie');
   assert.match(stateA().trades.find((row) => row.id === tradeId).mentor, /Checklista niepełna \(5\/7\)/);
+  const unchangedNote = stateA().trades.find((row) => row.id === tradeId).note;
+  const revisionBeforeNoOp = tradeUpdate.revision;
+  const noOpTradeUpdate = await call(at, 'update_trade', {
+    tradeId, expectedRevision: revisionBeforeNoOp,
+    changes: { note: unchangedNote }, idempotencyKey: idem('trade-update-noop'),
+  });
+  assert.equal(noOpTradeUpdate.revision, revisionBeforeNoOp, 'no-op nie podnosi rewizji');
+  assert.deepEqual(noOpTradeUpdate.changes, [], 'no-op ma pusty diff');
+
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { sl: 105 }, idempotencyKey: idem('trade-update-bad-long-sl'),
+  }, /invalid_stop_loss/);
+  await expectToolError(at, 'update_trade', {
+    tradeId, changes: { tp: 99 }, idempotencyKey: idem('trade-update-bad-long-tp'),
+  }, /invalid_take_profit/);
 
   await expectToolError(at, 'update_trade', {
     tradeId: 'ex1', changes: { entry: 1 }, idempotencyKey: idem('trade-update-ex'),
@@ -896,6 +926,22 @@ async function main() {
   await expectToolError(at, 'update_trade', {
     tradeId, changes: { plan: false }, idempotencyKey: idem('trade-closed-plan'),
   }, /zamkniętej transakcji/i);
+  const closeReview = await call(at, 'update_trade', {
+    tradeId, expectedRevision: closed.revision,
+    changes: { grade: 'A', note: 'Recenzja po zamknięciu' },
+    idempotencyKey: idem('trade-closed-review'),
+  });
+  assert.deepEqual(closeReview.changes.slice().sort(), ['grade', 'mentor', 'note'].sort());
+  const reviewedClosedTrade = stateA().trades.find((row) => row.id === tradeId);
+  assert.equal(reviewedClosedTrade.entry, '100');
+  assert.equal(reviewedClosedTrade.exit, '110');
+  assert.equal(reviewedClosedTrade.result, 20);
+  assert.equal(reviewedClosedTrade.r, 2);
+  assert.equal(reviewedClosedTrade.closedAt, closed.record.closedAt);
+  assert.equal(reviewedClosedTrade.note, 'Recenzja po zamknięciu');
+  const reviewedRead = await call(at, 'get_trade', { id: tradeId });
+  assert.equal(reviewedRead.trade.closed, true);
+  assert.equal(reviewedRead.trade.closedAtStatus, 'known');
   await expectToolError(at, 'close_trade', {
     tradeId, exitPrice: 111, idempotencyKey: idem('trade-close-repeat'),
   }, /zamkni/i);
@@ -930,11 +976,23 @@ async function main() {
 
   // --- 11.3. Screeny transakcji ---
   const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const shotKey = idem('shot-add');
   const shot = await call(at, 'add_trade_screenshot', {
-    tradeId, dataUrl: png, position: 'before', idempotencyKey: idem('shot-add'),
+    tradeId, dataUrl: png, position: 'before', idempotencyKey: shotKey,
   });
   assert.equal(shot.applied, 'direct');
   assert.ok(shot.record.bytes > 0);
+  assert.equal(JSON.stringify(shot).includes(png), false, 'odpowiedź zapisu screenu nie może powielać payloadu');
+  const shotReplay = await call(at, 'add_trade_screenshot', {
+    tradeId, dataUrl: png, position: 'before', idempotencyKey: shotKey,
+  });
+  assert.equal(shotReplay.duplicate, true);
+  assert.equal(JSON.stringify(shotReplay).includes(png), false, 'replay cache nie może ujawniać payloadu screenu');
+  const updateWithScreen = await call(at, 'update_trade', {
+    tradeId, changes: { note: 'Aktualizacja przy istniejącym screenie' }, idempotencyKey: idem('trade-update-screen'),
+  });
+  assert.equal(JSON.stringify(updateWithScreen).includes(png), false, 'trade.update nie może ujawniać screenów w rekordzie');
+  assert.ok(updateWithScreen.record.screens.bytes > 0, 'odpowiedź powinna zachować wyłącznie metadane screenu');
   const shots = await call(at, 'get_trade_screenshots', { tradeId });
   assert.equal(shots.found, true);
   assert.equal(shots.screenshots.available, true);
@@ -1070,11 +1128,25 @@ async function main() {
   assert.equal(checkinAfterUpdate.score, 60);
 
   // --- 11.7. Usunięcia przez propozycję ---
+  const deleteScreenshotKey = idem('shot-delete');
   const deleteScreenshot = await pending('delete_trade_screenshot', {
-    tradeId, position: 'before', idempotencyKey: idem('shot-delete'),
+    tradeId, position: 'before', idempotencyKey: deleteScreenshotKey,
   });
+  assert.equal(JSON.stringify(deleteScreenshot).includes(png), false, 'diff propozycji usunięcia nie może ujawniać payloadu');
+  assert.ok(deleteScreenshot.preview?.trashId, 'usunięcie screenu powinno podać trashId w podglądzie');
+  const deleteScreenshotReplay = await call(at, 'delete_trade_screenshot', {
+    tradeId, position: 'before', idempotencyKey: deleteScreenshotKey,
+  });
+  assert.equal(deleteScreenshotReplay.duplicate, true);
+  assert.equal(JSON.stringify(deleteScreenshotReplay).includes(png), false, 'replay propozycji nie może ujawniać diffu z payloadem');
   await approve(deleteScreenshot);
   assert.equal((await call(at, 'get_trade_screenshots', { tradeId })).screenshots.count, 0);
+  const restoreScreenshot = await pending('restore_deleted_record', {
+    trashId: deleteScreenshot.preview.trashId, idempotencyKey: idem('shot-restore'),
+  }, ['restored']);
+  assert.equal(JSON.stringify(restoreScreenshot).includes(png), false, 'preview restore nie może ujawniać payloadu');
+  await approve(restoreScreenshot);
+  assert.equal((await call(at, 'get_trade_screenshots', { tradeId })).screenshots.count, 1);
 
   const deleteReview = await pending('delete_trade_review', {
     tradeId, idempotencyKey: idem('review-delete'),
@@ -1107,6 +1179,7 @@ async function main() {
   const deleteTrade = await pending('delete_trade', {
     tradeId, idempotencyKey: idem('trade-delete'),
   });
+  assert.equal(JSON.stringify(deleteTrade).includes(png), false, 'diff usunięcia transakcji nie może ujawniać screenów');
   assert.equal(deleteTrade.applied, 'direct');
   assert.equal((await call(at, 'get_trade', { id: tradeId })).found, false);
   await approve(deleteTrade);
@@ -1116,6 +1189,7 @@ async function main() {
   const restore = await pending('restore_deleted_record', {
     trashId: tradeTrash.id, idempotencyKey: idem('restore'),
   }, ['restored']);
+  assert.equal(JSON.stringify(restore).includes(png), false, 'restore transakcji z kosza nie może ujawniać screenów');
   await approve(restore);
   const restoredTrade = await call(at, 'get_trade', { id: tradeId });
   assert.equal(restoredTrade.found, true, 'przywracanie nie odtworzyło transakcji');
@@ -1279,6 +1353,7 @@ async function main() {
     challengeId: challenge.id, changes: { name: propName + ' v2', maxLossPct: 8 },
     idempotencyKey: idem('prop-update'),
   }, ['name']);
+  assert.deepEqual(propUpdate.changes.slice().sort(), ['maxLossPct', 'name'].sort(), 'diff prop nie pokazuje niezmienionych liczb');
   await approve(propUpdate);
   const updatedChallenge = (await call(at, 'get_prop_challenges', {})).items.find((row) => row.id === challenge.id);
   assert.equal(updatedChallenge.name, propName + ' v2');
@@ -1301,6 +1376,27 @@ async function main() {
   }, ['note']);
   await approve(generic);
   assert.equal((await call(at, 'get_trade', { id: tradeId })).trade.note, 'Notatka przez propose_change');
+  const proposedCreateArgs = {
+    operation: 'trade.create',
+    args: {
+      pair: 'E2E/PROPOSED', dir: 'long', entry: 100, size: 1, sl: 95,
+      date: YESTERDAY, account: 'WEEX',
+    },
+    idempotencyKey: idem('propose-generated-create'),
+  };
+  const proposedCreate = await pending('propose_change', proposedCreateArgs, ['pair']);
+  const frozenTrade = proposedCreate.preview;
+  assert.ok(frozenTrade.id, 'podgląd powinien zawierać wygenerowane ID');
+  assert.equal(stateA().trades.some((trade) => trade.id === frozenTrade.id), false, 'propozycja nie zapisuje przed zatwierdzeniem');
+  const proposedCreateReplay = await call(at, 'propose_change', proposedCreateArgs);
+  assert.equal(proposedCreateReplay.duplicate, true);
+  assert.equal(proposedCreateReplay.status, proposedCreate.status);
+  assert.deepEqual(proposedCreateReplay.diff, proposedCreate.diff);
+  assert.deepEqual(proposedCreateReplay.preview, frozenTrade, 'retry musi zwrócić niezmieniony podgląd');
+  assert.equal(proposedCreateReplay.diffHash, proposedCreate.diffHash);
+  await approve(proposedCreate);
+  const persistedFrozenTrade = stateA().trades.find((trade) => trade.id === frozenTrade.id);
+  assert.deepEqual(persistedFrozenTrade, frozenTrade, 'zatwierdzenie musi zapisać dokładny podgląd z propozycji');
   await expectToolError(at, 'propose_change', {
     operation: 'trade.nuke', args: {}, idempotencyKey: idem('propose-bad'),
   });
@@ -1375,6 +1471,9 @@ async function main() {
   const expiredReplay = await call(at, 'propose_change', expiryRequest);
   assert.equal(expiredReplay.duplicate, true);
   assert.equal(expiredReplay.status, 'expired', 'retry must not report an expired proposal as pending');
+  assert.equal(expiredReplay.diffHash, expiryProposal.diffHash);
+  assert.deepEqual(expiredReplay.diff, expiryProposal.diff);
+  assert.deepEqual(expiredReplay.preview, expiryProposal.preview);
 
   // --- 11.13. Idempotencja i konflikt wersji ---
   const replayKey = idem('replay-direct');

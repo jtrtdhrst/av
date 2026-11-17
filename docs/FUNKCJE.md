@@ -82,6 +82,10 @@ Legenda:
 | Widoczność wpisów | ✅ | dziennik pokazuje wszystkie transakcje; „W statystykach” na koncie nadal filtruje statystyki, nie listę dziennika |
 | Pusty dziennik | ✅ | CTA „Dodaj transakcję” i „Giełdy i API” bez tekstu zastępczego; „Brak transakcji spełniających filtry” tylko przy aktywnym filtrze |
 | Edycja transakcji | ✅ | formularz wypełniony danymi, zachowuje dokładny ręczny wybór punktów checklisty |
+| Integralność zapisu transakcji | ✅ | wspólne `TradeRules`: API/MCP walidują przejście stanu, importer waliduje mapowany rekord; nowe transakcje ręczne wymagają SL, wynik 0 lub poprawny `closedAt` oznacza zamknięcie, nieznany czas pozostaje pusty, ID i wykonanie zamkniętych/importowanych wpisów są niezmienne |
+| Rewizja i no-op | ✅ | zapis bez semantycznej zmiany zachowuje `revision` i `updatedAt`; nie tworzy audytu mutacji |
+| Weryfikacja źródła danych | ✅ | `source` przesłane przez klienta nie omija wymogu SL; import waliduje każdy zmapowany rekord i może zachować brak SL tylko wtedy, gdy giełda go nie dostarczyła |
+| Atomowość i czas importu | ✅ | rollback obejmuje batch połączenia, stan, rewizję i markery; CI pokrywa 501 rekordów, źródłowe `closedAt` i UTC `importedAt`; limit stron OKX nie kończy się cichym sukcesem |
 | Usunięcie transakcji | ✅ | potwierdzenie |
 | Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
 | Eksport CSV | ✅ | średnik + BOM (Excel PL) |
@@ -154,6 +158,8 @@ Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnic
 | Konfiguracja MCP | ✅ | pill z `/api/mcp` pokazuje globalną konfigurację panelu (odczyt/zapis); nie sprawdza zdalnej dostępności serwera ani kwalifikacji konta do allowlisty pilota |
 | Oczekujące propozycje | ✅ | lista zmian od agenta z diffem, przyciskami Zatwierdź/Odrzuć, kodem do rozmowy i statusem po decyzji |
 | Zatwierdzanie propozycji | ✅ | klient powinien wysłać `approve_proposal` po zgodzie z `confirmed: true` i zgodnym `diffHash`; serwer sprawdza flagę/hash, nie treść rozmowy; kod z panelu (TTL 10 min, limit 5 prób) jest opcjonalny |
+| Snapshot propozycji | ✅ | `write_op` utrwala podgląd i planowany stan; diff/hash obejmuje skutki uboczne, retry zwraca pierwotny status/diff/hash/podgląd; zatwierdzenie stosuje snapshot tylko przy zgodnej rewizji, bez ponownego wykonania/rebase |
+| Prywatność screenów MCP | ✅ | odpowiedzi zapisu, replay, diffy i propozycje zwracają tylko hash/rozmiar; `get_trade_screenshots` ujawnia obrazy wyłącznie po `includeImages=true` i z limitami |
 | Zakres MCP 3.2 | ✅/— | przy włączonym zapisie zakres `alphavault.read` udostępnia 79 narzędzi: 46 odczytu i 33 zapisu (30 bezpośrednich i 3 propozycji). Bez zakresu `alphavault.write` i obowiązkowego kodu z panelu. `MCP_WRITES_ENABLED=false` pozostawia 46 narzędzi odczytu |
 | Zakres danych MCP | ✅ | profil, plan dnia, transakcje, dziennik, playbook, statystyki i raporty, check-iny, ryzyko i tryb ochronny, prop challenge, kalkulator, kapitał i PIT-38, makro, synchronizacje, odznaki; bez kluczy API i haseł; fizjologia z urządzeń wymaga scope `alphavault.health` i zgody na ekranie MCP; wynik `readiness.score` może pochodzić z check-inu bez tego scope |
 | Zgoda i wycofanie | ✅ | ekran zgody z zakresem, link do polityki §13.2, unieważnienie tokenu w `/oauth/connected` |
@@ -267,6 +273,7 @@ Pełny E2E: `npm run test:wearables` (35 scenariuszy API + UI dla Oura i Apple, 
 | WEEX/OKX/BingX — połączenie klucza | E2E | `POST /api/connections`; walidacja na żywo, szyfrowanie AES-256-GCM, brak sekretów w UI |
 | Uprawnienia klucza | E2E | OKX `perm` i BingX `apiPermissions` wymagają odczytu; WEEX przyjmuje każdy klucz z działającym odczytem konta |
 | Synchronizacja transakcji | E2E | OKX: zamknięte pozycje + spot fills; BingX: positionHistory; WEEX: fills → rekonstrukcja rund |
+| Atomowość importu | E2E | każda paczka połączenia zapisuje transakcje, rewizję i markery deduplikacji razem; błędny rekord wycofuje cały batch tego połączenia |
 | Automatyczny import | E2E | wywoływany przez istniejący LH Cron (co 5 min) z blokadą „co 25 min”; ręcznie `bin/sync-exchange-trades.php` |
 | Deduplikacja | E2E | `exchange_imports.external_id` + `extId` w transakcji; ponowna synchronizacja nie tworzy duplikatów |
 | MetaTrader — hasło inwestora | E2E (wymaga `METAAPI_TOKEN`) | MetaApi cloud, wyłącznie `investorMode:true`; hasło z prawem handlu odrzucane |

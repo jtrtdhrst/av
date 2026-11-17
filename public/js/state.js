@@ -944,7 +944,32 @@
   };
   AV.hasKnownTradeResult = hasKnownTradeResult;
   AV.closedTrades = (state) => AV.includedTrades(state).filter(hasKnownTradeResult);
-  AV.openTrades = (state) => AV.includedTrades(state).filter((t) => !hasKnownTradeResult(t));
+  AV.tradeDirection = (direction) => {
+    const value = String(direction ?? '').trim().toLowerCase();
+    if (value === 'l' || value === 'long') return 'l';
+    if (value === 's' || value === 'short') return 's';
+    return null;
+  };
+  AV.isTradeClosed = (trade) => {
+    if (!trade) return false;
+    if (trade.result != null && !(typeof trade.result === 'string' &&
+      ['', 'brak', '—', '-'].includes(trade.result.trim().toLowerCase()))) return true;
+    if (typeof trade.closedAt !== 'string') return false;
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|([+-])(\d{2}):(\d{2}))$/.exec(trade.closedAt);
+    if (!match) return false;
+    const [, yearText, monthText, dayText, hourText, minuteText, secondText, , , offsetHourText, offsetMinuteText] = match;
+    const year = Number(yearText), month = Number(monthText), day = Number(dayText);
+    const hour = Number(hourText), minute = Number(minuteText), second = Number(secondText);
+    const offsetHour = Number(offsetHourText || 0), offsetMinute = Number(offsetMinuteText || 0);
+    if (year < 1 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59
+      || offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) return false;
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (day < 1 || day > daysInMonth[month - 1]) return false;
+    return Number.isFinite(Date.parse(trade.closedAt));
+  };
+  AV.lifecycleClosedTrades = (state) => AV.includedTrades(state).filter((trade) => AV.isTradeClosed(trade));
+  AV.openTrades = (state) => AV.includedTrades(state).filter((t) => !AV.isTradeClosed(t));
 
   AV.rangeTrades = (state, days) => {
     const all = AV.includedTrades(state).filter(hasKnownTradeResult);
@@ -1088,6 +1113,7 @@
     const pnl = closed.reduce((s, t) => s + t.result, 0);
     const losses = closed.filter((t) => t.result < 0).length;
     const risk = arr.reduce((s, t) => {
+      if (AV.isTradeClosed(t)) return s;
       if (t.result != null && t.r) return s + Math.abs(t.result / t.r);
       const entry = AV.pnum(t.entry), sl = AV.pnum(t.sl);
       const size = AV.pnum(t.size);
@@ -1508,8 +1534,9 @@
   };
   AV.planMatchesTrade = (plan, pair, dir) => {
     if (!plan || !plan.approvedAt || !AV.marketMatchesPlan(plan, pair)) return false;
-    if (plan.bias === 'long') return dir === 'l';
-    if (plan.bias === 'short') return dir === 's';
+    const direction = AV.tradeDirection(dir);
+    if (plan.bias === 'long') return direction === 'l';
+    if (plan.bias === 'short') return direction === 's';
     return false;
   };
   AV.tradePlanMatch = (state, trade) => {

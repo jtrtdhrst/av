@@ -9,6 +9,8 @@ declare(strict_types=1);
 putenv('ALPHA_VAULT_CONFIG=' . __DIR__ . '/config.test.json');
 
 require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/mcp-test-environment.php';
+mcpLoadIsolatedCiConfig(dirname(__DIR__));
 
 [$config, $db] = require __DIR__ . '/../app/bootstrap.php';
 $pdo = $db->pdo();

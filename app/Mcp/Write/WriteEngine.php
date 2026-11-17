@@ -6,11 +6,13 @@ namespace AlphaVault\Mcp\Write;
 use AlphaVault\Config;
 use AlphaVault\Db;
 use AlphaVault\Mcp\Analytics\DayPlanService;
+use AlphaVault\TradeRules;
 use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Support\DayPlanLevels;
 use AlphaVault\Mcp\Support\DayPlanRecords;
 use AlphaVault\Mcp\Support\Numbers;
 use AlphaVault\Mcp\Support\PropChallengeService;
+use AlphaVault\Mcp\Support\RecordDiff;
 
 /**
  * Jedyne miejsce, w którym MCP zmienia stan użytkownika (`user_states.state`).
@@ -30,7 +32,6 @@ use AlphaVault\Mcp\Support\PropChallengeService;
 final class WriteEngine
 {
     private const EMOTIONS = ['Spokój', 'Skupienie', 'Pewność', 'Nuda', 'Zmęczenie', 'Strach', 'FOMO', 'Złość', 'Chciwość'];
-    private const DIRECTIONS = ['long' => 'l', 'l' => 'l', 'short' => 's', 's' => 's'];
     private const BIAS = ['long', 'short', 'neutral', 'none'];
     private const CURRENCIES = ['USDT', 'USD', 'PLN', 'EUR'];
     private const FLOW_TYPES = ['Wpłata', 'Wypłata'];
@@ -163,6 +164,7 @@ final class WriteEngine
                     $stored = json_decode((string) ($replay['response_json'] ?? ''), true);
                     $pdo->commit();
                     if (is_array($stored)) {
+                        $stored = RecordDiff::redactValue($stored);
                         $stored['duplicate'] = true;
                         return $stored;
                     }
@@ -189,24 +191,38 @@ final class WriteEngine
             }
 
             $applied = $this->apply($userId, $state, $op, $args);
-            $json = json_encode($applied['state'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $json = $json === false ? '{}' : $json;
-            if (strlen($json) > $this->config->maxStateBytes) {
-                throw new WriteException('state_too_large', 'Stan konta przekracza dopuszczalny rozmiar.', 413);
+            $stateChanged = $row === null || !RecordDiff::sameState($state, $applied['state']);
+            if (!$stateChanged && $applied['before'] !== null) {
+                $applied['state'] = $state;
+                $applied['after'] = $applied['before'];
+                $applied['result'] = $applied['before'];
+                $applied['changes'] = [];
             }
 
-            if ($row === null) {
-                $this->db->execute(
-                    'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
-                    [$userId, $json, strlen($json)]
-                );
-                $newRevision = 1;
+            if ($stateChanged) {
+                $json = json_encode($applied['state'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                if ($json === false) {
+                    throw new WriteException('state_encode_failed', 'Nie można zakodować stanu transakcji.', 400);
+                }
+                if (strlen($json) > $this->config->maxStateBytes) {
+                    throw new WriteException('state_too_large', 'Stan konta przekracza dopuszczalny rozmiar.', 413);
+                }
+
+                if ($row === null) {
+                    $this->db->execute(
+                        'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
+                        [$userId, $json, strlen($json)]
+                    );
+                    $newRevision = 1;
+                } else {
+                    $this->db->execute(
+                        'UPDATE user_states SET state = ?, revision = ?, bytes = ? WHERE user_id = ?',
+                        [$json, $revision + 1, strlen($json), $userId]
+                    );
+                    $newRevision = $revision + 1;
+                }
             } else {
-                $this->db->execute(
-                    'UPDATE user_states SET state = ?, revision = ?, bytes = ? WHERE user_id = ?',
-                    [$json, $revision + 1, strlen($json), $userId]
-                );
-                $newRevision = $revision + 1;
+                $newRevision = $revision;
             }
 
             $response = [
@@ -221,6 +237,7 @@ final class WriteEngine
                 'diff' => $applied['changes'],
                 'note' => 'Zapis trwały potwierdzony w bazie. Odczytaj rekord, jeśli chcesz pokazać stan po zmianie.',
             ];
+            $response = RecordDiff::redactValue($response);
             $encoded = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             $this->db->execute(
                 'INSERT INTO mcp_idempotency (user_id, idem_key, tool, payload_hash, response_json, expires_at)
@@ -229,11 +246,13 @@ final class WriteEngine
             );
 
             $pdo->commit();
-            $this->audit($actorId ?? $userId, $op, [
-                'target' => $applied['target'],
-                'revision' => $newRevision,
-                'changes' => $response['changes'],
-            ]);
+            if ($stateChanged) {
+                $this->audit($actorId ?? $userId, $op, [
+                    'target' => $applied['target'],
+                    'revision' => $newRevision,
+                    'changes' => $response['changes'],
+                ]);
+            }
 
             return $response;
         } catch (\Throwable $err) {
@@ -249,7 +268,7 @@ final class WriteEngine
      *
      * @param array<string,mixed> $state
      * @param array<string,mixed> $args
-     * @return array{before:?array,after:array,target:string,changes:array<string,mixed>}
+     * @return array{state:array,before:?array,after:array,target:string,changes:array<string,mixed>,stateChanges:array}
      */
     public function preview(
         int $userId,
@@ -263,10 +282,12 @@ final class WriteEngine
         $applied = $this->apply($userId, $state, $op, $args, $preparedTarget, $allowExistingPreparedTarget);
 
         return [
-            'before' => $applied['before'],
-            'after' => $applied['after'],
+            'state' => $applied['state'],
+            'before' => RecordDiff::redactValue($applied['before']),
+            'after' => RecordDiff::redactValue($applied['after']),
             'target' => $applied['target'],
-            'changes' => $applied['changes'],
+            'changes' => RecordDiff::redactValue($applied['changes']),
+            'stateChanges' => RecordDiff::stateBetween($state, $applied['state']),
         ];
     }
 
@@ -284,6 +305,7 @@ final class WriteEngine
         bool $allowExistingPreparedTarget = false
     ): array
     {
+        $state = TradeRules::normalizeTradeDirections($state);
         foreach (['trades', 'setups', 'checkins', 'accounts', 'flows'] as $container) {
             if (!isset($state[$container]) || !is_array($state[$container])) {
                 $state[$container] = [];
@@ -304,7 +326,7 @@ final class WriteEngine
             $state['prop']['challenges'] = [];
         }
 
-        return match ($op) {
+        $applied = match ($op) {
             'trade.create' => $this->tradeCreate($userId, $state, $args),
             'trade.update' => $this->tradeUpdate($userId, $state, $args),
             'trade.close' => $this->tradeClose($userId, $state, $args),
@@ -337,6 +359,16 @@ final class WriteEngine
             'restore.record' => $this->restoreRecord($state, $args),
             default => throw new WriteException('unknown_operation', 'Nieznana operacja zapisu: ' . $op),
         };
+        $violation = TradeRules::validateTransition($state, $applied['state']);
+        if ($violation !== null) {
+            throw new WriteException(
+                (string) $violation['error'],
+                (string) $violation['message'],
+                (int) ($violation['status'] ?? 422)
+            );
+        }
+
+        return $applied;
     }
 
     // ------------------------------------------------------------------
@@ -349,11 +381,10 @@ final class WriteEngine
         if (preg_match('#^[A-Z0-9._/-]{2,20}$#', $pair) !== 1) {
             throw new WriteException('invalid_pair', 'Para musi mieć 2-20 znaków: A-Z, 0-9, . _ / -.');
         }
-        $dirRaw = strtolower(trim((string) ($args['dir'] ?? '')));
-        if (!isset(self::DIRECTIONS[$dirRaw])) {
+        $dir = TradeRules::normalizeDirection($args['dir'] ?? null);
+        if ($dir === null) {
             throw new WriteException('invalid_direction', 'Kierunek musi być long albo short.');
         }
-        $dir = self::DIRECTIONS[$dirRaw];
         $entry = $this->positive($args['entry'] ?? null, 'entry');
         $size = $this->positive($args['size'] ?? null, 'size');
         $sl = $this->optionalPositive($args['sl'] ?? null, 'sl');
@@ -467,7 +498,7 @@ final class WriteEngine
         if ($allowed === []) {
             throw new WriteException('bad_request', 'changes nie może być puste.');
         }
-        if (($trade['result'] ?? null) !== null
+        if (TradeRules::isClosed($trade)
             && array_intersect(array_keys($allowed), self::CLOSED_TRADE_EXECUTION_FIELDS) !== []) {
             throw new WriteException(
                 'closed_trade_execution_readonly',
@@ -485,11 +516,11 @@ final class WriteEngine
             $updated['pair'] = $pair;
         }
         if (isset($allowed['dir'])) {
-            $dirRaw = strtolower(trim((string) $allowed['dir']));
-            if (!isset(self::DIRECTIONS[$dirRaw])) {
+            $dir = TradeRules::normalizeDirection($allowed['dir']);
+            if ($dir === null) {
                 throw new WriteException('invalid_direction', 'Kierunek musi być long albo short.');
             }
-            $updated['dir'] = self::DIRECTIONS[$dirRaw];
+            $updated['dir'] = $dir;
         }
         foreach (['entry', 'sl', 'tp', 'size', 'fee', 'mae', 'mfe'] as $field) {
             if (array_key_exists($field, $allowed)) {
@@ -498,7 +529,7 @@ final class WriteEngine
                     $updated[$field] = $this->optionalNonNegativeMetric($value, $field);
                     continue;
                 }
-                if ($value === null || $value === '' || $value === 'brak' || $value === '—') {
+                if ($value === null || $value === '' || $value === 'brak' || $value === '—' || $value === '-') {
                     if ($field === 'entry' || $field === 'size') {
                         throw new WriteException('bad_number', $field . ' musi być liczbą dodatnią.');
                     }
@@ -511,7 +542,7 @@ final class WriteEngine
                 $updated[$field] = $field === 'fee' ? Numbers::round($number) : $this->numText($number);
             }
         }
-        if (($trade['result'] ?? null) === null
+        if (!TradeRules::isClosed($trade)
             && array_key_exists('sl', $allowed)
             && (($updated['sl'] ?? '') === '' || ($updated['sl'] ?? '') === 'brak')) {
             throw new WriteException('stop_loss_required', 'Stop loss jest wymagany przy otwartej transakcji.');
@@ -599,7 +630,7 @@ final class WriteEngine
             }
         }
 
-        if (!$exchange) {
+        if (!$exchange && $executionFieldsChanged) {
             $risk = $this->tradeRisk($state, $updated);
             $updated['risk'] = $risk['risk'];
             $updated['riskPct'] = $risk['riskPct'];
@@ -614,16 +645,22 @@ final class WriteEngine
     {
         $id = $this->requiredString($args, 'tradeId', 128);
         [$index, $trade] = $this->findTrade($state, $id);
-        if (($trade['result'] ?? null) !== null) {
+        if (TradeRules::isClosed($trade)) {
             throw new WriteException('already_closed', 'Transakcja jest już zamknięta.', 409);
         }
         if ($this->isExchangeTrade($userId, $trade)) {
             throw new WriteException('exchange_data_readonly', 'Transakcja importowana z giełdy jest tylko do odczytu.', 403);
         }
 
-        $entry = Numbers::pnum($trade['entry'] ?? 0);
-        $size = Numbers::pnum($trade['size'] ?? 0);
-        $dir = (string) ($trade['dir'] ?? 'l');
+        $entry = TradeRules::number($trade['entry'] ?? null);
+        $size = TradeRules::number($trade['size'] ?? null);
+        if ($entry === null || $entry <= 0 || $size === null || $size <= 0) {
+            throw new WriteException('bad_number', 'entry i size muszą być skończonymi liczbami dodatnimi.');
+        }
+        $directionSign = TradeRules::directionSign($trade['dir'] ?? 'l');
+        if ($directionSign === null) {
+            throw new WriteException('invalid_direction', 'Kierunek transakcji jest nieprawidłowy.');
+        }
         $exitPrice = $this->optionalPositive($args['exitPrice'] ?? null, 'exitPrice');
         $result = array_key_exists('result', $args) && $args['result'] !== null
             ? Numbers::round($this->signedNumber($args['result'], 'result'))
@@ -632,12 +669,17 @@ final class WriteEngine
             throw new WriteException('bad_request', 'Podaj exitPrice albo result.');
         }
         if ($result === null) {
-            $result = Numbers::round(($exitPrice - $entry) * $size * ($dir === 'l' ? 1 : -1));
+            $result = Numbers::round(($exitPrice - $entry) * $size * $directionSign);
         }
         $slText = trim((string) ($trade['sl'] ?? ''));
-        $risk = $slText !== '' && $slText !== 'brak' && $slText !== '—'
-            ? abs($entry - Numbers::pnum($slText)) * $size
+        $sl = $slText !== '' && $slText !== 'brak' && $slText !== '—' && $slText !== '-'
+            ? TradeRules::number($slText)
             : null;
+        if ($slText !== '' && $slText !== 'brak' && $slText !== '—' && $slText !== '-'
+            && ($sl === null || $sl <= 0)) {
+            throw new WriteException('bad_number', 'sl musi być pusty albo skończoną liczbą dodatnią.');
+        }
+        $risk = $sl === null ? null : abs($entry - $sl) * $size;
         $closedAt = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
         $openedAt = $this->parseDate((string) ($trade['date'] ?? ''));
         $duration = $openedAt === null ? 0 : max(1, (int) round(($closedAt->getTimestamp() - $openedAt->getTimestamp()) / 60));
@@ -671,9 +713,14 @@ final class WriteEngine
     {
         $id = $this->requiredString($args, 'tradeId', 128);
         [$index, $trade] = $this->findTrade($state, $id);
+        $review = is_array($state['tradeReviews'][$id] ?? null) ? $state['tradeReviews'][$id] : null;
         array_splice($state['trades'], $index, 1);
         $trashId = $this->newTrashId();
         $state = $this->trash($state, 'trade', $trade, (string) ($trade['pair'] ?? $id) . ' ' . (string) ($trade['date'] ?? ''), $trashId);
+        if ($review !== null) {
+            $trashIndex = array_key_last($state['trash']);
+            $state['trash'][$trashIndex]['associatedReview'] = $review;
+        }
         $state = $this->unsetReview($state, $id);
 
         return $this->done(
@@ -1624,13 +1671,24 @@ final class WriteEngine
 
         switch ($kind) {
             case 'trade':
+                $tradeId = (string) ($record['id'] ?? '');
                 foreach ($state['trades'] as $existing) {
-                    if ((string) ($existing['id'] ?? '') === (string) ($record['id'] ?? '')) {
+                    if ($tradeId !== '' && (string) ($existing['id'] ?? '') === $tradeId) {
                         throw new WriteException('restore_conflict', 'Transakcja o tym ID już istnieje.', 409);
                     }
                 }
+                $associatedReview = is_array($entry['associatedReview'] ?? null)
+                    ? $entry['associatedReview']
+                    : null;
+                if ($associatedReview !== null && $tradeId !== ''
+                    && array_key_exists($tradeId, $state['tradeReviews'])) {
+                    throw new WriteException('restore_conflict', 'Recenzja dla tej transakcji już istnieje.', 409);
+                }
                 $state['trades'][] = $record;
-                $target = 'trade:' . (string) ($record['id'] ?? '');
+                if ($associatedReview !== null && $tradeId !== '') {
+                    $state['tradeReviews'][$tradeId] = $associatedReview;
+                }
+                $target = 'trade:' . $tradeId;
                 break;
             case 'review':
                 $tradeId = (string) ($record['tradeId'] ?? '');
@@ -1638,14 +1696,23 @@ final class WriteEngine
                 if ($tradeId === '' || $review === []) {
                     throw new WriteException('restore_conflict', 'Wpis recenzji jest niekompletny.', 409);
                 }
-                if (!isset($state['tradeReviews'][$tradeId])) {
-                    $state['tradeReviews'][$tradeId] = $review;
+                if (array_key_exists($tradeId, $state['tradeReviews'])) {
+                    throw new WriteException('restore_conflict', 'Recenzja dla tej transakcji już istnieje.', 409);
                 }
+                $state['tradeReviews'][$tradeId] = $review;
                 $target = 'trade:' . $tradeId;
                 break;
             case 'setup':
+                $recordId = (string) ($record['id'] ?? '');
+                $recordName = mb_strtolower((string) ($record['name'] ?? ''));
+                foreach ($state['setups'] as $existing) {
+                    if ((string) ($existing['id'] ?? '') === $recordId
+                        || ($recordName !== '' && mb_strtolower((string) ($existing['name'] ?? '')) === $recordName)) {
+                        throw new WriteException('restore_conflict', 'Setup o tym ID albo nazwie już istnieje.', 409);
+                    }
+                }
                 $state['setups'][] = $record;
-                $target = 'setup:' . (string) ($record['id'] ?? '');
+                $target = 'setup:' . $recordId;
                 break;
             case 'plan':
                 $date = (string) ($record['date'] ?? '');
@@ -1761,21 +1828,7 @@ final class WriteEngine
      */
     private function diff(?array $before, array $after): array
     {
-        $changes = [];
-        $keys = array_unique(array_merge(array_keys($before ?? []), array_keys($after)));
-        foreach ($keys as $key) {
-            if ($key === 'screens' || $key === 'seed') {
-                continue;
-            }
-            $old = $before[$key] ?? null;
-            $new = $after[$key] ?? null;
-            if ($old === $new) {
-                continue;
-            }
-            $changes[] = ['field' => (string) $key, 'before' => $old, 'after' => $new];
-        }
-
-        return $changes;
+        return RecordDiff::between($before, $after, ['screens', 'seed']);
     }
 
     /**
@@ -2203,25 +2256,12 @@ final class WriteEngine
 
     private function number(mixed $value, string $field): float
     {
-        if (is_bool($value) || $value === null || $value === '' || is_array($value)) {
-            throw new WriteException('bad_number', $field . ' musi być liczbą.');
-        }
-        if (is_int($value) || is_float($value)) {
-            if (!is_finite((float) $value)) {
-                throw new WriteException('bad_number', $field . ' musi być liczbą.');
-            }
-
-            return (float) $value;
-        }
-        $text = str_replace(["\u{00a0}", ' '], '', (string) $value);
-        $text = preg_replace('/[$€£%x×]/iu', '', $text) ?? $text;
-        $text = preg_replace('/,(?=\d)/', '.', $text) ?? $text;
-        $text = str_replace(',', '', $text);
-        if (preg_match('/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/', $text) !== 1) {
-            throw new WriteException('bad_number', $field . ' musi być liczbą.');
+        $number = TradeRules::number($value);
+        if ($number === null) {
+            throw new WriteException('bad_number', $field . ' musi być skończoną liczbą.');
         }
 
-        return (float) $text;
+        return $number;
     }
 
     private function signedNumber(mixed $value, string $field): float
@@ -2260,7 +2300,7 @@ final class WriteEngine
 
     private function optionalPositive(mixed $value, string $field): ?float
     {
-        if ($value === null || $value === '' || $value === 'brak' || $value === '—') {
+        if ($value === null || $value === '' || $value === 'brak' || $value === '—' || $value === '-') {
             return null;
         }
 
@@ -2427,12 +2467,22 @@ final class WriteEngine
      */
     private function tradeRisk(array $state, array $trade): array
     {
-        $entry = Numbers::pnum($trade['entry'] ?? 0);
-        $size = Numbers::pnum($trade['size'] ?? 0);
-        $slText = trim((string) ($trade['sl'] ?? ''));
-        $risk = $entry > 0 && $size > 0 && $slText !== '' && $slText !== 'brak' && $slText !== '—'
-            ? abs($entry - Numbers::pnum($slText)) * $size
+        $entry = TradeRules::number($trade['entry'] ?? null);
+        $size = TradeRules::number($trade['size'] ?? null);
+        if ($entry === null || $entry <= 0 || $size === null || $size <= 0) {
+            throw new WriteException('bad_number', 'entry i size muszą być skończonymi liczbami dodatnimi.');
+        }
+        $slText = (string) ($trade['sl'] ?? 'brak');
+        $sl = $slText !== '' && $slText !== 'brak' && $slText !== '—' && $slText !== '-'
+            ? TradeRules::number($slText)
             : null;
+        if ($slText !== '' && $slText !== 'brak' && $slText !== '—' && $slText !== '-' && ($sl === null || $sl <= 0)) {
+            throw new WriteException('bad_number', 'sl musi być pusty albo skończoną liczbą dodatnią.');
+        }
+        $risk = $sl === null ? null : abs($entry - $sl) * $size;
+        if ($risk !== null && (!is_finite($risk) || $risk <= 0)) {
+            throw new WriteException('bad_number', 'Ryzyko transakcji musi być skończoną liczbą dodatnią.');
+        }
         $capital = 0.0;
         foreach ((array) ($state['accounts'] ?? []) as $account) {
             if (!is_array($account) || ($account['include'] ?? true) === false) {
@@ -2441,10 +2491,15 @@ final class WriteEngine
             $capital += Numbers::pnum($account['balance'] ?? 0) * Numbers::fxToUsdt((string) ($account['currency'] ?? 'USDT'));
         }
 
+        $riskPct = $risk !== null && $capital > 0 ? $risk / $capital * 100 : null;
+        if ($riskPct !== null && !is_finite($riskPct)) {
+            throw new WriteException('bad_number', 'Procent ryzyka musi być skończoną liczbą.');
+        }
+
         return [
             'risk' => $risk === null ? null : Numbers::round($risk, 2),
             'riskRaw' => $risk,
-            'riskPct' => $risk !== null && $capital > 0 ? Numbers::round($risk / $capital * 100, 2) : null,
+            'riskPct' => $riskPct === null ? null : Numbers::round($riskPct, 2),
         ];
     }
 

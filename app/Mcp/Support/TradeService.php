@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace AlphaVault\Mcp\Support;
 
+use AlphaVault\TradeRules;
+
 final class TradeService
 {
     public function includedAccountNames(array $state): array
@@ -45,7 +47,7 @@ final class TradeService
     {
         return array_values(array_filter(
             $this->includedTrades($state),
-            fn (array $trade): bool => !$this->hasKnownResult($trade)
+            static fn (array $trade): bool => !TradeRules::isClosed($trade)
         ));
     }
 
@@ -134,7 +136,7 @@ final class TradeService
         $filtered = [];
         foreach ($this->allTrades($state) as $trade) {
             $result = $trade['result'] ?? null;
-            $closed = $this->hasKnownResult($trade);
+            $closed = TradeRules::isClosed($trade);
             if ($status === 'open' && $closed) {
                 continue;
             }
@@ -238,7 +240,7 @@ final class TradeService
             'localDate' => $local['date'],
             'localTime' => $local['time'],
             'pair' => (string) ($trade['pair'] ?? ''),
-            'side' => ($trade['dir'] ?? 'l') === 's' ? 'short' : 'long',
+            'side' => TradeRules::normalizeDirection($trade['dir'] ?? 'l') === 's' ? 'short' : 'long',
             'entry' => (string) ($trade['entry'] ?? ''),
             'stopLoss' => $slRaw === 'brak' ? null : (string) $slRaw,
             'takeProfit' => $tpRaw === '—' ? null : (string) $tpRaw,
@@ -251,6 +253,8 @@ final class TradeService
             'closedAt' => $trade['closedAt'] ?? null,
             'result' => $this->optionalNumber($trade['result'] ?? null),
             'r' => $this->optionalNumber($trade['r'] ?? null),
+            'closed' => TradeRules::isClosed($trade),
+            'closedAtStatus' => TradeRules::closedAtStatus($trade),
             'grade' => $trade['grade'] ?? null,
             'checklist' => isset($trade['checklist']) ? (int) $trade['checklist'] : null,
             'checkTotal' => isset($trade['checkTotal']) ? (int) $trade['checkTotal'] : null,

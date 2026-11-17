@@ -28,6 +28,9 @@ use AlphaVault\Mcp\Support\StatsService;
 use AlphaVault\Mcp\Support\TradeService;
 use AlphaVault\Mcp\Write\WriteEngine;
 
+require_once __DIR__ . '/mcp-test-environment.php';
+mcpLoadIsolatedCiConfig(dirname(__DIR__));
+
 [$config, $db] = require __DIR__ . '/../app/bootstrap.php';
 
 $pass = 0;
@@ -80,8 +83,9 @@ try {
         'plans' => [],
         'trades' => [
             ['id' => 'ex1', 'pair' => 'BTC/USDT', 'dir' => 'l', 'entry' => '100', 'size' => '1', 'sl' => '90', 'tp' => '120', 'exit' => '110', 'result' => 10, 'r' => 1, 'date' => gmdate('c'), 'source' => 'OKX', 'grade' => 'A', 'setup' => 'Breakout', 'checklist' => 7, 'checkTotal' => 7, 'account' => 'Main'],
-            ['id' => 'man1', 'pair' => 'ETH/USDT', 'dir' => 'l', 'entry' => '2000', 'size' => '0.1', 'sl' => '1900', 'tp' => '2200', 'exit' => 'otwarta', 'result' => null, 'r' => null, 'date' => gmdate('c'), 'source' => 'Ręcznie', 'grade' => 'B', 'setup' => 'Pullback', 'account' => 'Main'],
+            ['id' => 'man1', 'pair' => 'ETH/USDT', 'dir' => 'long', 'entry' => '2000', 'size' => '0.1', 'sl' => '1900', 'tp' => '2200', 'exit' => 'otwarta', 'result' => null, 'r' => null, 'date' => gmdate('c'), 'source' => 'Ręcznie', 'grade' => 'B', 'setup' => 'Pullback', 'account' => 'Main'],
             ['id' => 'man2', 'pair' => 'SOL/USDT', 'dir' => 'l', 'entry' => '2000', 'size' => '0.1', 'sl' => '1900', 'tp' => '2200', 'exit' => 'otwarta', 'result' => null, 'r' => null, 'date' => gmdate('c'), 'source' => 'Ręcznie', 'grade' => 'B', 'setup' => 'Pullback', 'account' => 'Main'],
+            ['id' => 'man3', 'pair' => 'BTC/USDT', 'dir' => 'short', 'entry' => '2000', 'size' => '0.1', 'sl' => '2100', 'tp' => '1800', 'exit' => 'otwarta', 'result' => null, 'r' => null, 'date' => gmdate('c'), 'source' => 'Ręcznie', 'grade' => 'B', 'setup' => 'Pullback', 'account' => 'Main'],
         ],
         'checkins' => [],
         'accounts' => [['name' => 'Main', 'balance' => 1000, 'start' => 1000, 'include' => true, 'currency' => 'USDT', 'type' => 'Futures', 'exchange' => 'OKX']],
@@ -101,6 +105,36 @@ try {
 
     $service = new ProposalService($db, $config);
     $builder = new ProposalBuilder($db, $service);
+    $revisionRow = $db->queryOne('SELECT revision FROM user_states WHERE user_id = ?', [$userA]);
+    $staleProposalRevision = (int) ($revisionRow['revision'] ?? 0) + 1;
+    $revisionBoundProposal = expectError(fn () => $service->create(
+        $userA,
+        'test-client',
+        'trade_review',
+        'trade:revision-snapshot',
+        null,
+        ['grade' => 'A'],
+        'idem-revision-snapshot-1',
+        null,
+        null,
+        $staleProposalRevision
+    ));
+    check('Propozycja: podgląd ze starej rewizji odrzucony przy tworzeniu', $revisionBoundProposal === 'revision_conflict', $revisionBoundProposal);
+    $liveRevision = (int) ($revisionRow['revision'] ?? 0);
+    $missingPlanProposal = $service->create(
+        $userA,
+        'test-client',
+        'write_op',
+        'trade:missing-plan',
+        null,
+        ['op' => 'trade.create', 'args' => []],
+        'idem-write-plan-missing',
+        ['op' => 'trade.create', 'args' => []],
+        ['pair' => 'X/USDT'],
+        $liveRevision
+    );
+    $missingPlanError = expectError(fn () => $service->approve($userA, $missingPlanProposal['proposalId'], $userA));
+    check('Propozycja write_op: brak utrwalonego planu blokuje zatwierdzenie', $missingPlanError === 'proposal_plan_missing', $missingPlanError);
     $tradeService = new TradeService();
     $dashboard = new DashboardService(
         $tradeService,
@@ -157,7 +191,7 @@ try {
     ], 'test-client');
     $beforeRow = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
     $beforeState = json_decode((string) $beforeRow['state'], true);
-    check('1. propozycja utworzona, stan bez zmian', ($proposal['status'] ?? '') === 'pending' && count($beforeState['trades']) === 3, $proposal['proposalId'] ?? '');
+    check('1. propozycja utworzona, stan bez zmian', ($proposal['status'] ?? '') === 'pending' && count($beforeState['trades']) === 4, $proposal['proposalId'] ?? '');
 
     // 2. Idempotencja.
     $duplicate = $builder->createTrade($userA, [
@@ -216,6 +250,8 @@ try {
         && (float) $closed['result'] === 10.0
         && (float) $closed['r'] === 1.0
         && (string) $closed['exit'] === '2100'
+        && \AlphaVault\TradeRules::isClosed($closed)
+        && \AlphaVault\TradeRules::hasValidClosedAt($closed)
         && str_contains((string) $closed['mentor'], 'z zyskiem'), json_encode($closed));
 
     $breakEvenProposal = $builder->closeTrade($userA, [
@@ -236,6 +272,23 @@ try {
         && (string) $breakEvenTrade['exit'] === '2000'
         && str_contains((string) $breakEvenTrade['mentor'], 'zero (break-even)')
         && !str_contains((string) $breakEvenTrade['mentor'], 'zyskiem'), json_encode($breakEvenTrade));
+
+    $shortClose = $builder->closeTrade($userA, [
+        'tradeId' => 'man3', 'exitPrice' => 1900, 'idempotencyKey' => 'idem-close-short-1',
+    ], 'test-client');
+    $service->approve($userA, $shortClose['proposalId'], $userA);
+    $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $saved = json_decode((string) $row['state'], true);
+    $shortClosedTrade = null;
+    foreach ($saved['trades'] as $trade) {
+        if ((string) ($trade['id'] ?? '') === 'man3') {
+            $shortClosedTrade = $trade;
+        }
+    }
+    check('6c. propozycja zamknięcia short alias liczy wynik jako zysk', $shortClosedTrade !== null
+        && (float) $shortClosedTrade['result'] === 10.0
+        && (string) $shortClosedTrade['exit'] === '1900'
+        && \AlphaVault\TradeRules::hasValidClosedAt($shortClosedTrade), json_encode($shortClosedTrade));
 
     // 7. Zamknięcie transakcji giełdowej odrzucone.
     $exchangeClose = expectError(fn () => $builder->closeTrade($userA, ['tradeId' => 'ex1', 'exitPrice' => 130, 'idempotencyKey' => 'idem-close-ex'], 'test-client'));
@@ -336,16 +389,29 @@ try {
     $writeArgs = ['date' => $proposalDate, 'market' => 'SOL', 'bias' => 'long'];
     $writeEngine = new WriteEngine($db, $config);
     $preview = $writeEngine->preview($userA, $saved, 'plan.create', $writeArgs);
+    $writeStateRow = $db->queryOne('SELECT revision FROM user_states WHERE user_id = ?', [$userA]);
+    $writeRevision = (int) ($writeStateRow['revision'] ?? 0);
     $writePlanProposal = $service->create(
         $userA,
         'test-client',
         'write_op',
         $preview['target'],
         $preview['before'],
-        ['op' => 'plan.create', 'args' => $writeArgs],
+        [
+            'op' => 'plan.create',
+            'args' => $writeArgs,
+            'plannedState' => $preview['state'],
+            'plannedPreview' => [
+                'before' => $preview['before'],
+                'after' => $preview['after'],
+                'target' => $preview['target'],
+            ],
+        ],
         'idem-write-op-plan-create',
         null,
-        $preview['after']
+        $preview['after'],
+        $writeRevision,
+        \AlphaVault\Mcp\Support\RecordDiff::stateBetween($saved, $preview['state'])
     );
     $writePlanCode = $service->issueApprovalCode($userA, $writePlanProposal['proposalId'])['code'];
     $service->approveWithCode(
@@ -377,6 +443,64 @@ try {
         json_encode(['target' => $preview['target'], 'saved' => $savedPlan])
     );
 
+    // 10e. Hash i diff write_op obejmują także zmiany uboczne poza rekordem.
+    $accountCreateProposal = static function (string $name, string $key) use ($db, $config, $service, $userA): array {
+        $stateRow = $db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ?', [$userA]);
+        $baseState = json_decode((string) ($stateRow['state'] ?? ''), true);
+        $baseState = is_array($baseState) ? $baseState : [];
+        $revision = (int) ($stateRow['revision'] ?? 0);
+        $args = ['name' => $name, 'start' => 1000, 'primary' => true];
+        $engine = new WriteEngine($db, $config);
+        $plan = $engine->preview($userA, $baseState, 'account.create', $args);
+        return $service->create(
+            $userA,
+            'test-client',
+            'write_op',
+            $plan['target'],
+            $plan['before'],
+            [
+                'op' => 'account.create',
+                'args' => $args,
+                'plannedState' => $plan['state'],
+                'plannedPreview' => [
+                    'before' => $plan['before'],
+                    'after' => $plan['after'],
+                    'target' => $plan['target'],
+                ],
+            ],
+            $key,
+            ['op' => 'account.create', 'args' => $args],
+            $plan['after'],
+            $revision,
+        \AlphaVault\Mcp\Support\RecordDiff::stateBetween($baseState, $plan['state'])
+        );
+    };
+    $primaryOne = $accountCreateProposal('WriteOp Primary 1', 'idem-write-account-primary-1');
+    $service->approve($userA, $primaryOne['proposalId'], $userA);
+    $primaryTwo = $accountCreateProposal('WriteOp Primary 2', 'idem-write-account-primary-2');
+    $hasStateAccountsDiff = false;
+    foreach (($primaryTwo['diff'] ?? []) as $change) {
+        if (($change['field'] ?? '') === 'state.accounts') {
+            $hasStateAccountsDiff = true;
+        }
+    }
+    $service->approve($userA, $primaryTwo['proposalId'], $userA);
+    $row = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $saved = json_decode((string) $row['state'], true);
+    $primaryFlags = [];
+    foreach (($saved['accounts'] ?? []) as $account) {
+        if (in_array(($account['name'] ?? ''), ['WriteOp Primary 1', 'WriteOp Primary 2'], true)) {
+            $primaryFlags[$account['name']] = (bool) ($account['primary'] ?? false);
+        }
+    }
+    check(
+        '10e. write_op ujawnia i zatwierdza skutki uboczne flagi primary',
+        $hasStateAccountsDiff
+        && ($primaryFlags['WriteOp Primary 1'] ?? true) === false
+        && ($primaryFlags['WriteOp Primary 2'] ?? false) === true,
+        json_encode(['diff' => $primaryTwo['diff'] ?? [], 'primary' => $primaryFlags])
+    );
+
     // 11. Check-in i score.
     $checkin = $builder->saveCheckin($userA, ['mood' => 'Spokój', 'energy' => 4, 'note' => 'Dobry sen', 'idempotencyKey' => 'idem-checkin-1'], 'test-client');
     $service->approve($userA, $checkin['proposalId'], $userA);
@@ -405,6 +529,33 @@ try {
     $foreign = $builder->saveCheckin($userA, ['mood' => 'Spokój', 'energy' => 3, 'idempotencyKey' => 'idem-foreign-1'], 'test-client');
     $foreignError = expectError(fn () => $service->approve($userB, $foreign['proposalId'], $userB));
     check('14. obca propozycja niedostępna', $foreignError === 'not_found', $foreignError);
+
+    $sparseState = ['trades' => [[
+        'id' => 'sparse_noop_trade', 'pair' => 'BTC/USDT', 'dir' => 'l',
+        'entry' => '100', 'exit' => 'otwarta', 'sl' => 'brak', 'tp' => '—', 'size' => '1',
+        'result' => null, 'r' => null, 'date' => gmdate('c'), 'source' => 'Ręcznie', 'note' => 'bez zmian',
+    ]]];
+    $sparseJson = json_encode($sparseState, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $db->execute(
+        'UPDATE user_states SET state = ?, revision = 1, bytes = ? WHERE user_id = ?',
+        [$sparseJson, strlen((string) $sparseJson), $userB]
+    );
+    $noOpWrite = (new WriteEngine($db, $config))->execute(
+        $userB,
+        'trade.update',
+        ['tradeId' => 'sparse_noop_trade', 'changes' => ['note' => 'bez zmian']],
+        1,
+        'sparse-no-op-1',
+        $userB
+    );
+    $sparseAfter = $db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ?', [$userB]);
+    check(
+        '14b. MCP no-op na rzadkim stanie nie dopisuje kontenerów ani rewizji',
+        (int) $noOpWrite['revision'] === 1
+        && $noOpWrite['changes'] === []
+        && (int) $sparseAfter['revision'] === 1
+        && json_decode((string) $sparseAfter['state'], true) === $sparseState
+    );
 
     // 15. Wygaśnięcie propozycji.
     $expiring = $builder->saveCheckin($userA, ['mood' => 'Skupienie', 'energy' => 3, 'idempotencyKey' => 'idem-expire-1'], 'test-client');
@@ -454,7 +605,10 @@ try {
     // 20. Poprawne zatwierdzenie i idempotentne powtórzenie.
     $approvedByMcp = $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], $issued['code'], 'idem-decision-1', 'test-client');
     $replayed = $service->approveWithCode($userA, $codeProposal['proposalId'], $codeProposal['diffHash'], $issued['code'], 'idem-decision-1', 'test-client');
-    $db->execute('UPDATE mcp_proposals SET decision_hash = NULL WHERE id = ?', [$codeProposal['proposalId']]);
+    $db->execute(
+        'UPDATE mcp_proposals SET decision_hash = NULL, decision_result_json = NULL WHERE id = ?',
+        [$codeProposal['proposalId']]
+    );
     $legacyReplay = $service->approveWithCode(
         $userA,
         $codeProposal['proposalId'],
@@ -482,6 +636,10 @@ try {
     check('20. zatwierdzenie kodem i idempotencja decyzji', ($approvedByMcp['status'] ?? '') === 'approved'
         && ($replayed['duplicate'] ?? false) === true
         && ($legacyReplay['duplicate'] ?? false) === true
+        && ($legacyReplay['revision'] ?? null) === ($approvedByMcp['revision'] ?? null)
+        && ($legacyReplay['kind'] ?? null) === ($approvedByMcp['kind'] ?? null)
+        && ($legacyReplay['target'] ?? null) === ($approvedByMcp['target'] ?? null)
+        && ($legacyReplay['diffHash'] ?? null) === ($approvedByMcp['diffHash'] ?? null)
         && (string) ($migratedLegacyDecision['decision_hash'] ?? '') !== ''
         && $changedApproval === 'idempotency_conflict'
         && $reusedCode === 'proposal_closed'
@@ -490,7 +648,10 @@ try {
     // 20b. Warstwa narzędzi wymaga confirmed; usługa akceptuje tę ścieżkę bez kodu.
     $chatProposal = $builder->saveCheckin($userA, ['mood' => 'Nuda', 'energy' => 3, 'idempotencyKey' => 'idem-chat-checkin-1'], 'test-client');
     $chatApproved = $service->approveWithCode($userA, $chatProposal['proposalId'], $chatProposal['diffHash'], null, 'idem-chat-decision-1', 'test-client');
-    $db->execute('UPDATE mcp_proposals SET decision_hash = NULL WHERE id = ?', [$chatProposal['proposalId']]);
+    $db->execute(
+        'UPDATE mcp_proposals SET decision_hash = NULL, decision_result_json = NULL WHERE id = ?',
+        [$chatProposal['proposalId']]
+    );
     $legacyChatReplay = $service->approveWithCode(
         $userA,
         $chatProposal['proposalId'],
@@ -505,6 +666,8 @@ try {
     check('20b. confirmed bez kodu zatwierdza i legacy replay jest idempotentny',
         ($chatApproved['status'] ?? '') === 'approved'
         && ($legacyChatReplay['duplicate'] ?? false) === true
+        && ($legacyChatReplay['revision'] ?? null) === ($chatApproved['revision'] ?? null)
+        && ($legacyChatReplay['diffHash'] ?? null) === ($chatApproved['diffHash'] ?? null)
         && ($chatCheckin['mood'] ?? '') === 'Nuda', json_encode([$chatApproved, $chatCheckin]));
 
     // 21. Odrzucenie przez MCP i powtórzenie.

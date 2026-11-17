@@ -121,6 +121,16 @@ async function stateTrades() {
   return r.json.state.trades || [];
 }
 
+function importMarkerExists(userId, externalId) {
+  const result = spawnSync(php, ['tests/integrations-db.php', String(userId), externalId], {
+    cwd: ROOT,
+    env: { ...process.env, ALPHA_VAULT_CONFIG: CONFIG },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout).exists === true;
+}
+
 try {
   const mock = start(php, ['-S', `127.0.0.1:${MOCK_PORT}`, 'tests/fixtures/mock-providers.php']);
   const app = start(php, ['-S', `127.0.0.1:${APP_PORT}`, '-t', 'public', 'public/router.php'], {
@@ -175,7 +185,10 @@ try {
   const btc = trades.find((t) => t.extId === 'okx:pos:111');
   const eth = trades.find((t) => t.extId === 'okx:pos:222');
   assert.ok(btc && btc.pair === 'BTC/USDT' && btc.result === 99.4 && btc.mae === null && btc.mfe === null
-    && btc.checklist === null && btc.checkTotal === null, JSON.stringify(btc));
+    && btc.checklist === null && btc.checkTotal === null && btc.closedAt === btc.date
+    && Number.isFinite(Date.parse(btc.importedAt))
+    && Date.parse(btc.importedAt) <= Date.now()
+    && Date.parse(btc.importedAt) > Date.now() - 60000, JSON.stringify(btc));
   assert.ok(eth && eth.pair === 'ETH/USDT' && eth.result === 49.8 && eth.mae === null && eth.mfe === null
     && eth.checklist === null && eth.checkTotal === null, JSON.stringify(eth));
   assert.equal(trades.some((t) => t.extId === 'okx:pos:333'), false, 'brak realizedPnl nie może utworzyć break-even');
@@ -185,6 +198,76 @@ try {
   assert.equal(okxDedupe.json.result.imported, 0);
   assert.equal(okxDedupe.json.result.skipped, 2);
   log('OKX: deduplikacja', true, '0 nowych');
+
+  const atomicFixture = await connect('okx', {
+    apiKey: 'okx-atomic-invalid', secretKey: 'okx-secret', passphrase: 'p',
+  });
+  assert.equal(atomicFixture.res.status, 201, atomicFixture.text);
+  const atomicBefore = await req('/api/state');
+  assert.equal(atomicBefore.res.status, 200, atomicBefore.text);
+  const atomicGoodId = 'okx:pos:atomic-good';
+  assert.equal(importMarkerExists(atomicBefore.json.userId, atomicGoodId), false);
+  const atomicResult = await sync(atomicFixture.json.connection.id);
+  assert.equal(atomicResult.res.status, 422, atomicResult.text);
+  assert.equal(atomicResult.json.error, 'invalid_trade', atomicResult.text);
+  const atomicAfter = await req('/api/state');
+  assert.equal(atomicAfter.res.status, 200, atomicAfter.text);
+  assert.equal(atomicAfter.json.revision, atomicBefore.json.revision, 'błędny batch nie może podnosić rewizji');
+  assert.deepEqual(atomicAfter.json.state, atomicBefore.json.state, 'błędny batch nie może zmienić stanu');
+  assert.equal(atomicAfter.json.state.trades.some((trade) => trade.extId === atomicGoodId), false);
+  assert.equal(importMarkerExists(atomicBefore.json.userId, atomicGoodId), false, 'marker pierwszego importu musi wycofać transakcja');
+  log('OKX: błędny import wycofuje cały batch, stan, revision i marker');
+
+  const bulkFixture = await connect('okx', {
+    apiKey: 'okx-over-500', secretKey: 'okx-secret', passphrase: 'p',
+  });
+  assert.equal(bulkFixture.res.status, 201, bulkFixture.text);
+  const bulkBefore = await req('/api/state');
+  assert.equal(bulkBefore.res.status, 200, bulkBefore.text);
+  const bulkSync = await sync(bulkFixture.json.connection.id);
+  assert.equal(bulkSync.res.status, 200, bulkSync.text);
+  assert.equal(bulkSync.json.result.imported, 501, bulkSync.text);
+  const bulkAfter = await req('/api/state');
+  assert.equal(bulkAfter.res.status, 200, bulkAfter.text);
+  assert.equal(bulkAfter.json.revision, bulkBefore.json.revision + 1);
+  const bulkTrades = bulkAfter.json.state.trades.filter((trade) => String(trade.extId || '').startsWith('okx:pos:bulk-'));
+  assert.equal(bulkTrades.length, 501);
+  assert.equal(bulkTrades[0].closedAt, bulkTrades[0].date);
+  assert.ok(Number.isFinite(Date.parse(bulkTrades[0].importedAt)));
+  assert.equal(importMarkerExists(bulkBefore.json.userId, 'okx:pos:bulk-0000'), true);
+  assert.equal(importMarkerExists(bulkBefore.json.userId, 'okx:pos:bulk-0500'), true);
+  log('OKX: import ponad 500 rekordów, markery i timestampy', true, String(bulkTrades.length));
+
+  const overflowFixture = await connect('okx', {
+    apiKey: 'okx-over-page-limit', secretKey: 'okx-secret', passphrase: 'p',
+  });
+  assert.equal(overflowFixture.res.status, 201, overflowFixture.text);
+  const overflowBefore = await req('/api/state');
+  const overflowSync = await sync(overflowFixture.json.connection.id);
+  assert.equal(overflowSync.res.status, 502, overflowSync.text);
+  assert.equal(overflowSync.json.error, 'history_page_limit', overflowSync.text);
+  const overflowAfter = await req('/api/state');
+  assert.equal(overflowAfter.json.revision, overflowBefore.json.revision);
+  assert.deepEqual(overflowAfter.json.state, overflowBefore.json.state);
+  assert.equal(importMarkerExists(overflowBefore.json.userId, 'okx:pos:overflow-0000'), false);
+  log('OKX: historia przekraczająca limit stron zgłasza błąd zamiast cichego ucięcia', true);
+
+  for (const [apiKey, marker] of [
+    ['okx-missing-position-cursor', 'okx:pos:missing-cursor-000'],
+    ['okx-missing-spot-cursor', 'prefix:okx:SOL-USDT:spot-closed-open:'],
+  ]) {
+    const cursorFixture = await connect('okx', { apiKey, secretKey: 'okx-secret', passphrase: 'p' });
+    assert.equal(cursorFixture.res.status, 201, cursorFixture.text);
+    const cursorBefore = await req('/api/state');
+    const cursorSync = await sync(cursorFixture.json.connection.id);
+    assert.equal(cursorSync.res.status, 502, cursorSync.text);
+    assert.equal(cursorSync.json.error, 'history_cursor_missing', cursorSync.text);
+    const cursorAfter = await req('/api/state');
+    assert.equal(cursorAfter.json.revision, cursorBefore.json.revision);
+    assert.deepEqual(cursorAfter.json.state, cursorBefore.json.state);
+    assert.equal(importMarkerExists(cursorBefore.json.userId, marker), false);
+  }
+  log('OKX: pełna strona bez kursora pozycji lub spot zgłasza błąd bez częściowego importu', true);
 
   const okxTrade = await connect('okx', { apiKey: 'okx-trade', secretKey: 'okx-secret', passphrase: 'p' });
   assert.equal(okxTrade.res.status, 422, okxTrade.text);
@@ -317,11 +400,18 @@ try {
   process.exitCode = 1;
 } finally {
   try {
-    spawnSync(php, ['tests/reset-integrations.php'], {
+    const cleanup = spawnSync(php, ['tests/reset-integrations.php'], {
       cwd: ROOT,
       env: { ...process.env, ALPHA_VAULT_CONFIG: CONFIG },
       encoding: 'utf8'
     });
-  } catch {}
+    if (cleanup.status !== 0) {
+      console.error('FAIL  cleanup integracji:', cleanup.stderr || cleanup.stdout || 'kod ' + cleanup.status);
+      process.exitCode = 1;
+    }
+  } catch (err) {
+    console.error('FAIL  cleanup integracji:', err?.message || err);
+    process.exitCode = 1;
+  }
   stopAll();
 }

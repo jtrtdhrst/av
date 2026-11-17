@@ -410,11 +410,11 @@
   AV.renderAdherence = () => {
     const a = AV.planAdherence(AV.state);
     AV.setText('#adherenceVal', a.approved + ' z ' + a.total + ' dni');
-    const closed = AV.closedTrades(AV.state);
+    const closed = AV.lifecycleClosedTrades(AV.state);
     const buckets = { ok: { n: 0, sum: 0 }, no: { n: 0, sum: 0 } };
     a.days.forEach((d) => {
       const key = AV.dateKey(d.d);
-      const dayTrades = closed.filter((t) => AV.dateKey(t.date) === key);
+      const dayTrades = closed.filter((t) => AV.dateKey(t.date) === key && t.result != null);
       if (!dayTrades.length) return;
       const bucket = d.ok ? buckets.ok : buckets.no;
       bucket.n += dayTrades.length;
@@ -436,7 +436,7 @@
     let arr = (Array.isArray(AV.state.trades) ? AV.state.trades : []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
     if (AV.ui.jFilter === 'win') arr = arr.filter((t) => t.result > 0);
     if (AV.ui.jFilter === 'loss') arr = arr.filter((t) => t.result < 0);
-    if (AV.ui.jFilter === 'open') arr = arr.filter((t) => t.result == null);
+    if (AV.ui.jFilter === 'open') arr = arr.filter((t) => !AV.isTradeClosed(t));
     if (AV.ui.jGrade !== 'all') arr = arr.filter((t) => t.grade === AV.ui.jGrade);
     if (AV.ui.jSearch) {
       const q = AV.ui.jSearch.toLowerCase();
@@ -448,18 +448,18 @@
   AV.renderJournal = () => {
     const arr = AV.filteredTrades();
     AV.setHTML('#tbody', arr.map((t) => {
-      const open = t.result == null;
+      const open = !AV.isTradeClosed(t);
       const checklist = t.checklist == null || t.checklist === '' ? null : Number(t.checklist);
       const totalValue = Number(t.checkTotal);
       const checkTotal = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 7;
       const checklistClass = checklist == null ? '' : (checklist === checkTotal ? 'win' : checklist >= Math.ceil(checkTotal * 0.7) ? 'warnc' : 'loss');
       return '<tr data-id="' + t.id + '"><td class="mono dim">' + AV.dateTimeShort(t.date) + '</td><td><b>' + AV.esc(t.pair) + '</b>' + (t.sl === 'brak' || t.sl === '' ? '<span class="nosl">BEZ SL</span>' : '') + '</td>' +
-        '<td><span class="pill ' + t.dir + '">' + (t.dir === 'l' ? 'LONG' : 'SHORT') + '</span></td>' +
+        '<td><span class="pill ' + (AV.tradeDirection(t.dir) || 'l') + '">' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</span></td>' +
         '<td>' + AV.grade(t.grade) + '</td><td class="mono ' + checklistClass + '">' + (checklist == null ? '' : checklist + '/' + checkTotal) + '</td>' +
         '<td class="mono">' + AV.esc(t.entry) + '</td><td class="mono ' + (open ? 'al' : '') + '">' + AV.esc(t.exit) + '</td>' +
         '<td class="mono ' + (t.r > 0 ? 'win' : t.r < 0 ? 'loss' : 'dim') + '">' + (t.r == null ? '–' : AV.signed(t.r, 1, 'R')) + '</td>' +
         '<td class="mut">' + AV.esc(t.emotion) + '</td><td>' + ((t.errors || []).length ? '<span class="ecount" title="' + AV.attr(t.errors.join(', ')) + '">' + t.errors.length + '</span>' : '<span class="dim">–</span>') + '</td>' +
-        '<td class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : '') + '" style="text-align:right;font-weight:800">' + (open ? '–' : AV.signed(t.result, 2, '')) + '</td></tr>';
+        '<td class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : '') + '" style="text-align:right;font-weight:800">' + (open ? '–' : (t.result == null ? '' : AV.signed(t.result, 2, ''))) + '</td></tr>';
     }).join(''));
     AV.show('#jEmpty', !arr.length);
     if (!arr.length) {
@@ -505,10 +505,12 @@
   AV.proChart = (t) => {
     let s = t.pair.length * 13 + (t.date.charCodeAt(1) || 65) * 7;
     const r = () => (s = (s * 9301 + 49297) % 233280) / 233280;
-    const long = t.dir === 'l', en = AV.pnum(t.entry), open = t.result == null;
+    const long = AV.tradeDirection(t.dir) !== 's', en = AV.pnum(t.entry), open = !AV.isTradeClosed(t);
     let sl = t.sl === 'brak' ? en * (long ? 0.985 : 1.015) : AV.pnum(t.sl);
     const tp = AV.pnum(t.tp);
-    const ex = open ? en * (long ? 1.004 : 0.996) : AV.pnum(t.exit);
+    const exitValue = AV.pnum(t.exit);
+    const hasExit = Number.isFinite(exitValue) && exitValue > 0 && t.exit !== 'otwarta';
+    const ex = open ? en * (long ? 1.004 : 0.996) : (hasExit ? exitValue : en);
     const N = 64, E = 34, X = open ? N - 1 : Math.min(N - 6, E + 14), vol = Math.abs(en - sl) * 0.22;
     const P = [];
     let p = en - (long ? 1 : -1) * vol * 5;
@@ -546,7 +548,7 @@
     g += tag(tp, '#4fcf8a') + tag(sl, '#ff5d62', t.sl === 'brak' ? 'BEZ SL' : null) + tag(en, '#d9b25f');
     const ay = long ? y(P[E][3]) + 16 : y(P[E][2]) - 16;
     g += '<path d="M' + (x0 - 6) + ',' + (ay + (long ? 8 : -8)) + ' L' + x0 + ',' + ay + ' L' + (x0 + 6) + ',' + (ay + (long ? 8 : -8)) + 'Z" fill="#d9b25f"/><text x="' + x0 + '" y="' + (ay + (long ? 22 : -14)) + '" fill="#d9b25f" font-size="10.5" text-anchor="middle" font-family="JetBrains Mono" font-weight="700">' + (long ? 'LONG' : 'SHORT') + '</text>';
-    if (!open) {
+    if (!open && t.result != null) {
       const xe = x(X), win = t.result > 0;
       g += '<circle cx="' + xe + '" cy="' + y(ex) + '" r="5" fill="' + (win ? '#4fcf8a' : '#ff5d62') + '" stroke="#0b0a09" stroke-width="2"/><rect x="' + (xe + 8) + '" y="' + (y(ex) - 11) + '" width="70" height="20" rx="5" fill="rgba(11,10,9,.9)" stroke="' + (win ? '#4fcf8a' : '#ff5d62') + '"/><text x="' + (xe + 43) + '" y="' + (y(ex) + 3) + '" fill="' + (win ? '#4fcf8a' : '#ff5d62') + '" font-size="10.5" text-anchor="middle" font-family="JetBrains Mono" font-weight="700">' + AV.signed(t.result, 2, '') + '</text>';
     }
@@ -562,14 +564,14 @@
       const data = t.screens && t.screens[key];
       return '<label class="drop ' + (data ? 'has' : '') + '" data-drop data-shot="' + key + '" style="min-height:180px"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span>' + (data ? '' : '<div class="ic">' + AV.ic(icon) + '</div><b>' + label + '</b><span>kliknij, przeciągnij albo Ctrl+V</span>') + '</label>';
     };
-    const open = t.result == null;
+    const open = !AV.isTradeClosed(t);
     const checklist = t.checklist == null || t.checklist === '' ? null : Number(t.checklist);
     const totalValue = Number(t.checkTotal);
     const checkTotal = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 7;
     const checklistClass = checklist == null ? '' : (checklist === checkTotal ? 'win' : checklist >= Math.ceil(checkTotal * 0.7) ? 'warnc' : 'loss');
     const metricValue = (value) => value == null || (typeof value === 'string' && value.trim() === '') ? '' : AV.fmt(value, 1) + 'R';
     AV.setHTML('#tmBody', '<span class="mclose" id="mc">' + AV.ic('x', 'width:16px;height:16px') + '</span><div class="eyebrow">Transakcja · ' + AV.dateTimeShort(t.date) + ' · ' + AV.esc(t.source || 'WEEX') + '</div>' +
-      '<div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap"><h1 style="font-size:32px;margin:0">' + AV.esc(t.pair) + '</h1><span class="pill ' + t.dir + '">' + (t.dir === 'l' ? 'LONG' : 'SHORT') + '</span>' + AV.grade(t.grade) + (t.sl === 'brak' ? '<span class="nosl" style="margin:0">BEZ SL</span>' : '') + '<span class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : 'al') + '" style="margin-left:auto;font-size:28px;font-weight:800">' + (open ? 'otwarta' : AV.signed(t.result, 2, ' USDT')) + '</span></div>' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap"><h1 style="font-size:32px;margin:0">' + AV.esc(t.pair) + '</h1><span class="pill ' + (AV.tradeDirection(t.dir) || 'l') + '">' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</span>' + AV.grade(t.grade) + (t.sl === 'brak' ? '<span class="nosl" style="margin:0">BEZ SL</span>' : '') + '<span class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : 'al') + '" style="margin-left:auto;font-size:28px;font-weight:800">' + (open ? 'otwarta' : (t.result == null ? '' : AV.signed(t.result, 2, ' USDT'))) + '</span></div>' +
       '<div class="grid" style="grid-template-columns:repeat(6,1fr);margin-top:20px;gap:10px">' + box('Wejście', AV.esc(t.entry)) + box('Wyjście', AV.esc(t.exit)) + box('Stop loss', AV.esc(t.sl), t.sl === 'brak' ? 'loss' : '') + box('Take profit', AV.esc(t.tp)) + box('MAE', metricValue(t.mae), 'loss') + box('MFE', metricValue(t.mfe), 'win') + '</div>' +
       '<div style="margin-top:16px">' + AV.proChart(t) + '</div>' +
       '<div class="sech" style="margin:18px 0 10px"><h3>Twoje screeny</h3><span class="dim" style="font-size:12.5px">opcjonalnie, jeśli chcesz zapisać swój własny widok</span></div>' +
@@ -716,6 +718,24 @@
     return m[p] || 'Twój punkt';
   };
 
+  AV.autoChecklist = (points) => {
+    const en = AV.pnum($('#ntEntry')?.value), sl = AV.pnum($('#ntSl')?.value), tp = AV.pnum($('#ntTp')?.value);
+    const dir = $('#ntDir .chip.on')?.dataset.d || 'l';
+    if (points.includes('SL przed wejściem')) AV.ui.ntChecks['SL przed wejściem'] = !!sl && (AV.tradeDirection(dir) === 's' ? sl > en : sl < en);
+    if (points.includes('R:R ≥ 2')) {
+      const risk = Math.abs(en - sl), reward = Math.abs(tp - en);
+      AV.ui.ntChecks['R:R ≥ 2'] = !!(risk && reward && reward / risk >= 2);
+    }
+    if (points.includes('Poziom z planu')) {
+      const p = (AV.state.plans || {})[AV.dateKey(new Date())];
+      const near = (p?.levels || []).some((l) => {
+        const x = AV.pnum(l.price);
+        return x && en && Math.abs(x - en) / en < 0.003;
+      });
+      AV.ui.ntChecks['Poziom z planu'] = near;
+    }
+  };
+
   AV.renderNTMeta = () => {
     const en = AV.pnum($('#ntEntry')?.value), sl = AV.pnum($('#ntSl')?.value), tp = AV.pnum($('#ntTp')?.value);
     const size = AV.pnum($('#ntSize')?.value);
@@ -752,7 +772,10 @@
       direction.style.pointerEvents = executionLocked ? 'none' : '';
     }
     AV.setVal('#ntNote', d.note || '');
-    $$('#ntDir .chip').forEach((c) => c.classList.toggle('on', c.dataset.d === (d.dir || 'l')));
+    $$('#ntDir .chip').forEach((c) => {
+      c.classList.toggle('on', c.dataset.d === (AV.tradeDirection(d.dir) || 'l'));
+      c.setAttribute('aria-disabled', executionLocked ? 'true' : 'false');
+    });
     $$('#ntSetup .chip').forEach((c) => c.classList.toggle('on', c.dataset.s === (d.setup || 'Bez setupu')));
     $$('#ntEmotion .chip').forEach((c) => c.classList.toggle('on', c.textContent === (d.emotion || 'Spokój')));
     $$('#errChips .chip.err').forEach((c) => c.classList.toggle('on', (d.errors || []).includes(c.textContent)));

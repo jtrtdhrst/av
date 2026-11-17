@@ -31,6 +31,8 @@ if (!executablePath) {
 const results = [];
 const consoleErrors = [];
 const pageErrors = [];
+let fixtureUserId = 0;
+let fixtureBackup = null;
 function log(name, ok, info = '') {
   results.push({ name, ok, info });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  · ' + info : ''}`);
@@ -41,6 +43,44 @@ const context = await browser.newContext({ baseURL: BASE, viewport: { width: 144
 const page = await context.newPage();
 page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 page.on('pageerror', (err) => pageErrors.push(err.message));
+
+async function restoreUiFixture() {
+  if (!fixtureUserId || !fixtureBackup) return;
+  const restored = await page.evaluate(async (raw) => {
+    clearTimeout(AV._pushTimer);
+    if (!(await AV.waitForPushIdle())) throw new Error('Zapis UI nadal trwa.');
+    const state = JSON.parse(raw);
+    let revision = AV.api.revision;
+    let response;
+    let payload;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      response = await AV.apiFetch('/api/state', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state, baseRevision: revision, ownerId: AV.currentUserId })
+      });
+      payload = await response.json();
+      if (response.status !== 409) break;
+      const latest = await AV.apiFetch('/api/state');
+      if (!latest.ok) throw new Error('Nie udało się odczytać aktualnej rewizji fixture.');
+      const latestState = await latest.json();
+      revision = latestState.revision;
+      AV.api.revision = revision;
+    }
+    if (!response?.ok) throw new Error('Odtworzenie fixture nie powiodło się: HTTP ' + response?.status);
+    AV.api.revision = payload.revision;
+    AV.state = AV.normalizeServer(state, { isDemo: !!AV.api.me?.isDemo });
+    AV.saveNow();
+    clearTimeout(AV._pushTimer);
+    const verifyResponse = await AV.apiFetch('/api/state');
+    if (!verifyResponse.ok) throw new Error('Nie udało się zweryfikować stanu fixture.');
+    const verify = await verifyResponse.json();
+    return { userId: verify.userId, state: verify.state, revision: verify.revision };
+  }, fixtureBackup);
+  assert.equal(Number(restored.userId), Number(fixtureUserId), 'fixture musi należeć do izolowanego użytkownika');
+  assert.deepEqual(restored.state, JSON.parse(fixtureBackup), 'pełny stan serwera musi wrócić do fixture');
+  fixtureBackup = null;
+}
 
 // Deterministyczne notowania: test nie zależy od sieci ani od dostawcy.
 const QUOTE_STUB = {
@@ -81,6 +121,17 @@ try {
   await page.click('#demoEnter');
   await page.waitForFunction(() => document.querySelector('#auth')?.classList.contains('hide'), null, { timeout: 15000 });
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated);
+  const baseline = await page.evaluate(async () => {
+    const response = await AV.apiFetch('/api/state');
+    const payload = await response.json();
+    return {
+      userId: payload.userId,
+      state: AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo })
+    };
+  });
+  assert.ok(baseline.userId && baseline.state, 'brak bazowego fixture użytkownika');
+  fixtureUserId = Number(baseline.userId);
+  fixtureBackup = JSON.stringify(baseline.state);
   log('logowanie demo + sesja', await page.locator('#auth').evaluate((el) => el.classList.contains('hide')), 'cookie + sesja');
   log('start: jedno zapytanie o notowania', quoteRequests <= 1, quoteRequests + ' requestów');
 
@@ -1093,6 +1144,28 @@ try {
   log('nowa transakcja: formularz pusty', !emptyForm.pair && !emptyForm.entry && !emptyForm.size && !emptyForm.sl && !emptyForm.tp && !emptyForm.note, JSON.stringify(emptyForm));
   log('nowa transakcja: checklista 0 i brak oceny', emptyForm.checklist === '0/7' && emptyForm.grades === 0, emptyForm.checklist + ' / ' + emptyForm.grades);
   log('nowa transakcja: limit i ryzyko osobno', emptyForm.risk.includes('Limit') && emptyForm.risk.includes('Ryzyko'), emptyForm.risk.slice(0, 100));
+  const closeSemantics = await page.evaluate(() => ({
+    longAlias: AV.tradeDirection('long'),
+    shortAlias: AV.tradeDirection('short'),
+    legacyUnknownTime: AV.isTradeClosed({ result: 0, closedAt: null }),
+    explicitTime: AV.isTradeClosed({ result: null, closedAt: '2026-11-17T10:30:00Z' }),
+    invalidDay: AV.isTradeClosed({ result: null, closedAt: '2026-02-30T10:30:00Z' }),
+    invalidHour: AV.isTradeClosed({ result: null, closedAt: '2026-11-17T25:30:00Z' }),
+    open: AV.isTradeClosed({ result: null, closedAt: null }),
+    closedAtOnlyLists: (() => {
+      const state = {
+        accounts: [{ name: 'A', include: true }],
+        trades: [{ id: 'closed_at_only', account: 'A', result: null, closedAt: '2026-11-17T10:30:00Z' }]
+      };
+      return AV.lifecycleClosedTrades(state).length === 1
+        && AV.openTrades(state).length === 0
+        && AV.closedTrades(state).length === 0;
+    })()
+  }));
+  log('status transakcji: aliasy kierunku i prawidłowy closedAt', closeSemantics.longAlias === 'l'
+    && closeSemantics.shortAlias === 's' && closeSemantics.legacyUnknownTime
+    && closeSemantics.explicitTime && closeSemantics.closedAtOnlyLists
+    && !closeSemantics.invalidDay && !closeSemantics.invalidHour && !closeSemantics.open, JSON.stringify(closeSemantics));
 
   await page.locator('#clList [data-cl="SL przed wejściem"]').click();
   const manualSlChecklist = await page.evaluate(() => {
@@ -1511,9 +1584,77 @@ try {
   if (addedId) {
     await page.evaluate((id) => AV.closeTradeModal(id), addedId);
     await page.fill('#ctExit', '105');
+    await page.evaluate(() => {
+      AV._testOriginalApiFetch = AV.apiFetch;
+      AV.apiFetch = async (path, options = {}) => {
+        if (path === '/api/state' && options.method === 'PUT') {
+          return new Response('{"error":"e2e_write_failure"}', {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return AV._testOriginalApiFetch(path, options);
+      };
+    });
     await page.click('#ctSave');
-    const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, addedId);
-    log('zamknięcie pozycji', closed === 5, String(closed));
+    await page.waitForFunction(() => {
+      const button = document.querySelector('#ctSave');
+      return button && !button.disabled;
+    });
+    const rejectedClose = await page.evaluate((id) => {
+      const trade = AV.state.trades.find((t) => t.id === id);
+      return { closed: AV.isTradeClosed(trade), result: trade?.result, saveError: AV.api.saveError };
+    }, addedId);
+    log('zamknięcie nie pokazuje sukcesu po błędzie zapisu',
+      rejectedClose.closed === false && rejectedClose.result == null && !!rejectedClose.saveError,
+      JSON.stringify(rejectedClose));
+    await page.evaluate(() => {
+      AV.apiFetch = AV._testOriginalApiFetch;
+      delete AV._testOriginalApiFetch;
+    });
+    await page.click('#ctSave');
+    await page.waitForFunction(() => !document.querySelector('#ctSave'));
+    const closed = await page.evaluate((id) => {
+      const trade = AV.state.trades.find((t) => t.id === id);
+      return { result: trade?.result, closedAt: trade?.closedAt, closed: AV.isTradeClosed(trade) };
+    }, addedId);
+    log('zamknięcie pozycji zapisuje UTC i status', closed.result === 5
+      && closed.closed === true
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(closed.closedAt || ''), JSON.stringify(closed));
+    const persistedClosed = await page.evaluate(async (id) => {
+      const response = await AV.apiFetch('/api/state');
+      const payload = await response.json();
+      const trade = payload.state.trades.find((row) => row.id === id);
+      return { revision: payload.revision, result: trade?.result, closedAt: trade?.closedAt };
+    }, addedId);
+    log('zamknięcie transakcji potwierdzone odczytem API',
+      persistedClosed.result === 5 && persistedClosed.closedAt === closed.closedAt,
+      JSON.stringify(persistedClosed));
+    await page.evaluate((id) => AV.editTrade(id), addedId);
+    const lockedCloseForm = await page.evaluate(() => ({
+      pair: document.querySelector('#ntPair')?.value,
+      entry: document.querySelector('#ntEntry')?.value,
+      size: document.querySelector('#ntSize')?.value,
+      disabled: ['#ntPair', '#ntEntry', '#ntSize', '#ntSl', '#ntTp']
+        .every((selector) => document.querySelector(selector)?.disabled)
+    }));
+    log('edycja zamkniętej transakcji: formularz ładuje dane i blokuje wykonanie',
+      lockedCloseForm.pair === 'E2E/USDT' && lockedCloseForm.entry === '100' && lockedCloseForm.size === '1' && lockedCloseForm.disabled,
+      JSON.stringify(lockedCloseForm));
+    await page.fill('#ntNote', 'Recenzja UI po zamknięciu');
+    await page.click('#saveTrade');
+    await page.waitForTimeout(500);
+    const reviewedClose = await page.evaluate((id) => {
+      const trade = AV.state.trades.find((row) => row.id === id);
+      return {
+        entry: trade?.entry, exit: trade?.exit, result: trade?.result,
+        closedAt: trade?.closedAt, note: trade?.note
+      };
+    }, addedId);
+    log('edycja zamkniętej transakcji zmienia recenzję, nie wykonanie',
+      reviewedClose.entry === '100' && reviewedClose.exit === '105' && reviewedClose.result === 5
+        && reviewedClose.closedAt === closed.closedAt && reviewedClose.note === 'Recenzja UI po zamknięciu',
+      JSON.stringify(reviewedClose));
   }
   const resultOnlyId = await page.evaluate(() => {
     const id = 'ui-result-only-' + Date.now();
@@ -1540,14 +1681,29 @@ try {
     resultOnly.exit === '' && resultOnly.result === 20 && resultOnly.r === 2,
     JSON.stringify(resultOnly));
   const emptyResultState = await page.evaluate(() => {
+    const account = AV.state.accounts.find((a) => a.include)?.name;
     const state = {
       ...AV.state,
-      trades: [{ id: 'ui-empty-result', date: new Date().toISOString(), account: AV.state.accounts.find((a) => a.include)?.name, result: '' }]
+      trades: [
+        { id: 'ui-empty-result', account, result: '' },
+        { id: 'ui-whitespace-result', account, result: '   ' },
+        { id: 'ui-placeholder-result', account, result: ' BRAK ' },
+        { id: 'ui-zero-result', account, result: 0 },
+        { id: 'ui-timestamp-only', account, result: null, closedAt: '2026-11-17T10:30:00Z' }
+      ]
     };
-    return { open: AV.openTrades(state).length, closed: AV.closedTrades(state).length };
+    return {
+      open: AV.openTrades(state).length,
+      closedResults: AV.closedTrades(state).length,
+      lifecycleClosed: AV.lifecycleClosedTrades(state).length,
+      flags: state.trades.map((trade) => AV.isTradeClosed(trade))
+    };
   });
-  log('dziennik: pusty wynik jest otwarty, nie break-even',
-    emptyResultState.open === 1 && emptyResultState.closed === 0,
+  log('dziennik: pusty wynik jest otwarty, zero i jawny closedAt oznaczają zamknięcie',
+    emptyResultState.open === 3
+      && emptyResultState.closedResults === 1
+      && emptyResultState.lifecycleClosed === 2
+      && emptyResultState.flags.join(',') === 'false,false,false,true,true',
     JSON.stringify(emptyResultState));
 
   await page.evaluate(() => {
@@ -1640,14 +1796,10 @@ try {
   const levelText = await page.locator('#levelBadge').innerText();
   log('odznaki: dynamiczny licznik i poziom', summaryText === `${badges.live.done} z ${badges.live.total} · poziom ${badges.live.level}` && levelText === 'poziom ' + badges.live.level, summaryText + ' / ' + levelText);
 
-  // przywróć stan demo i poczekaj na zapis do MySQL
-  await page.evaluate((raw) => {
-    AV.state = AV.normalizeServer(JSON.parse(raw));
-    AV.saveNow();
-  }, backup);
-  await page.waitForTimeout(700);
-  const restoredCount = await page.evaluate(() => AV.state.trades.length);
-  log('przywrócenie stanu demo', restoredCount === 47, restoredCount);
+  // Przywróć dokładny fixture serwera i zweryfikuj pełny round-trip przez API.
+  await restoreUiFixture();
+  const restoredCount = await page.evaluate(async () => (await (await AV.apiFetch('/api/state')).json()).state.trades.length);
+  log('przywrócenie pełnego stanu demo przez API', restoredCount === 47, restoredCount);
 
   // bramka roli: pełnoekranowa blokada panelu
   await page.evaluate(() => window.AV.showAccessGate('Brak aktywnej roli Alpha.'));
@@ -1677,6 +1829,15 @@ try {
   results.push({ name: 'test przerwany', ok: false, info: err.message });
   process.exitCode = 1;
 } finally {
+  if (fixtureBackup) {
+    try {
+      await restoreUiFixture();
+      console.log('PASS  sprzątanie: odtworzono fixture po teście');
+    } catch (err) {
+      console.error('FAIL  sprzątanie fixture:', err.message);
+      process.exitCode = 1;
+    }
+  }
   await browser.close();
 }
 
