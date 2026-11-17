@@ -1170,43 +1170,27 @@ try {
     AV.ui.ntChecks = {};
     AV.renderChecklist();
   });
-  await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
+  await page.click('#ntDir [data-d="l"]');
   await page.fill('#ntPair', 'ETH/USDT');
   await page.waitForTimeout(250);
-  const initiallyChecked = await page.evaluate(() =>
-    !!document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on'));
-  if (!initiallyChecked) await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
-  await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
+  const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
+  const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
+  if (!initiallyChecked) await planLevel.click();
+  await page.locator('#clList [data-cl="Poziom z planu"]').click();
   await page.fill('#ntNote', tradeNote);
   await page.waitForTimeout(250);
-  const manualPlanLevel = await page.evaluate(() => {
-    AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
-    AV.ui.ntChecks = { 'Poziom z planu': false, 'Spokojna głowa': false };
-    AV.renderChecklist();
-    return {
+  const manualPlanLevel = await page.evaluate(() => ({
       matches: AV.tradePlanMatch(AV.state, { date: new Date().toISOString(), pair: 'ETH/USDT', dir: 'l' }),
-      checked: document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on') || false,
-      count: document.querySelector('#clN')?.textContent.trim(),
-      warning: document.querySelector('#clWarn')?.textContent.trim() || '',
-      checkedCount: Object.values(AV.ui.ntChecks || {}).filter(Boolean).length,
-      total: Object.keys(AV.ui.ntChecks || {}).length
-    };
-  });
+    checked: document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on') || false,
+    count: document.querySelector('#clN')?.textContent.trim(),
+    warning: document.querySelector('#clWarn')?.textContent.trim() || '',
+    checkedCount: Object.values(AV.ui.ntChecks || {}).filter(Boolean).length,
+    total: Object.keys(AV.ui.ntChecks || {}).length
+  }));
     log('nowa transakcja: niejednoznaczne plany nie tworzą zgodności', !manualPlanLevel.matches && !manualPlanLevel.checked && manualPlanLevel.count === '0/2' && manualPlanLevel.checkedCount === 0, JSON.stringify(manualPlanLevel));
    log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
-   await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
+   await page.locator('#clList [data-cl="Spokojna głowa"]').click();
 
-  // The in-memory checklist setup can trigger a state round-trip that drops
-  // the protection-mode override; re-apply it so the form stays unlocked.
-  await page.evaluate((note) => {
-    if (AV.lockInfo(AV.state).active) {
-      AV.state.overrides = AV.state.overrides || [];
-      AV.state.overrides.push({ date: AV.dateKey(new Date()), at: Date.now(), reason: 'Wpisuję wcześniejszą transakcję' });
-      AV.renderLock();
-    }
-    const noteEl = document.getElementById('ntNote');
-    if (noteEl) noteEl.value = note;
-  }, tradeNote);
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
@@ -1221,11 +1205,6 @@ try {
   await page.fill('#ntSl', '99');
   await page.click('#saveTrade');
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
-  const lastTradeDiag = await page.evaluate(() => {
-    const t = AV.state.trades[AV.state.trades.length - 1];
-    return { note: t?.note, pair: t?.pair, formNote: document.getElementById('ntNote')?.value };
-  });
-  log('diag: saved trade note', lastTradeDiag.note === tradeNote, JSON.stringify(lastTradeDiag) + ' expected=' + tradeNote);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
     const row = Array.from(document.querySelectorAll('#tbody tr')).find((tr) => tr.dataset.id === id);
@@ -1607,19 +1586,12 @@ try {
     log('zamknięcie nie pokazuje sukcesu po błędzie zapisu',
       rejectedClose.closed === false && rejectedClose.result == null && !!rejectedClose.saveError,
       JSON.stringify(rejectedClose));
-    await page.evaluate(async () => {
+    await page.evaluate(() => {
       AV.apiFetch = AV._testOriginalApiFetch;
       delete AV._testOriginalApiFetch;
-      // The simulated 503 left the local revision behind the server; resync
-      // before retrying so the successful save is not rejected with 409.
-      const response = await AV.apiFetch('/api/state');
-      if (response.ok) AV.api.revision = (await response.json()).revision;
     });
     await page.click('#ctSave');
-    await page.waitForFunction((id) => {
-      const trade = AV.state.trades.find((t) => t.id === id);
-      return AV.isTradeClosed(trade) && !document.querySelector('#ctSave');
-    }, addedId, { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => !document.querySelector('#ctSave'));
     const closed = await page.evaluate((id) => {
       const trade = AV.state.trades.find((t) => t.id === id);
       return { result: trade?.result, closedAt: trade?.closedAt, closed: AV.isTradeClosed(trade) };
