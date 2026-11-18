@@ -214,17 +214,9 @@ try {
   log('powiadomienia włączone', /włączone/i.test(notifyLabel), notifyLabel);
 
   // 5. Powiadomienie po zamknięciu transakcji
-  const openTrade = await page.evaluate(() => {
-    const trade = AV.state.trades.find((t) => t.result == null
-      && Number(AV.pnum(t.entry)) > 0 && Number(AV.pnum(t.size)) > 0
-      && String(t.sl || '').trim() !== '' && String(t.sl || '').trim() !== 'brak');
-    if (!trade) return '';
-    // Demo-trade mają source WEEX, co nowa walidacja traktuje jako import
-    // tylko-do-odczytu. Oznacz jako ręczny, żeby zamknięcie przeszło walidację.
-    trade.source = 'Ręcznie';
-    delete trade.extId; delete trade.externalId; delete trade.exchangeId;
-    return trade.id;
-  });
+  const openTrade = await page.evaluate(() => AV.state.trades.find((t) => t.result == null
+    && Number(AV.pnum(t.entry)) > 0 && Number(AV.pnum(t.size)) > 0
+    && String(t.sl || '').trim() !== '' && String(t.sl || '').trim() !== 'brak')?.id);
   assert.ok(openTrade, 'brak otwartej transakcji z poprawnym SL w stanie demo');
   // Synchronizuj rewizję: nowy closeTradeModal wykonuje pushStateImmediate i
   // wycofuje zmianę przy 409, więc zapis musi użyć aktualnej rewizji.

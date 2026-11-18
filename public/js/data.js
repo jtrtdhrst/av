@@ -334,7 +334,7 @@
         durationMin: duration,
         fee,
         plan: opts.plan != null ? opts.plan : (grade !== 'C' && rnd() > 0.12),
-        source: opts.source || 'WEEX',
+        source: opts.source || 'Ręcznie',
         account: opts.account || 'WEEX',
         screens: {}
       };
