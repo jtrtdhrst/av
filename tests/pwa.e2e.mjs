@@ -227,12 +227,10 @@ try {
     if (response.ok) AV.api.revision = (await response.json()).revision;
   });
   await page.evaluate((id) => AV.closeTradeModal(id), openTrade);
-  await page.fill('#ctResult', '12.34');
-  const pwaCloseDiag = await page.evaluate((id) => {
-    const t = AV.state.trades.find((x) => x.id === id);
-    return { modalOpen: !!document.getElementById('ctSave'), rev: AV.api.revision, result: t?.result, closed: t ? AV.isTradeClosed(t) : null };
-  }, openTrade);
-  console.log('DIAG pwa close:', JSON.stringify(pwaCloseDiag));
+  await page.evaluate(() => {
+    const result = document.getElementById('ctResult');
+    if (result) { result.value = '12.34'; result.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
   await page.evaluate(() => document.getElementById('ctSave')?.click());
   // Retry once with a freshly synced revision if the first save lost a race.
   await page.waitForTimeout(700);

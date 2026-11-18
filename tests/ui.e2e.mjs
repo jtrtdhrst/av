@@ -1551,9 +1551,12 @@ try {
     });
     await page.evaluate((id) => AV.closeTradeModal(id), closeId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
-    await page.fill('#ctExit', '105');
-    const hasResultField = await page.locator('#ctResult').count();
-    if (hasResultField) await page.fill('#ctResult', '5');
+    await page.evaluate(() => {
+      const exit = document.getElementById('ctExit');
+      const result = document.getElementById('ctResult');
+      if (exit) { exit.value = '105'; exit.dispatchEvent(new Event('input', { bubbles: true })); }
+      if (result) { result.value = '5'; result.dispatchEvent(new Event('input', { bubbles: true })); }
+    });
     await page.evaluate(() => document.getElementById('ctSave')?.click());
     const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, closeId);
     log('zamknięcie pozycji', closed === 5, String(closed));
@@ -1579,8 +1582,12 @@ try {
     if (response.ok) AV.api.revision = (await response.json()).revision;
   });
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
-  await page.fill('#ctExit', '');
-  await page.fill('#ctResult', '20');
+  await page.evaluate(() => {
+    const exit = document.getElementById('ctExit');
+    const result = document.getElementById('ctResult');
+    if (exit) { exit.value = ''; exit.dispatchEvent(new Event('input', { bubbles: true })); }
+    if (result) { result.value = '20'; result.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
   await page.evaluate(() => document.getElementById('ctSave')?.click());
   const resultOnly = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
@@ -1627,7 +1634,10 @@ try {
       if (response.ok) AV.api.revision = (await response.json()).revision;
     });
     await page.evaluate((id) => AV.closeTradeModal(id), breakEvenId);
-    await page.fill('#ctExit', '100');
+    await page.evaluate(() => {
+      const exit = document.getElementById('ctExit');
+      if (exit) { exit.value = '100'; exit.dispatchEvent(new Event('input', { bubbles: true })); }
+    });
     await page.evaluate(() => document.getElementById('ctSave')?.click());
     await page.waitForTimeout(500);
     if (await page.evaluate((id) => AV.state.trades.find((x) => x.id === id)?.result == null, breakEvenId)) {
