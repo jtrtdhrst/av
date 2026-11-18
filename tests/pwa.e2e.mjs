@@ -11,6 +11,10 @@ import { chromium, devices } from 'playwright-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
 const ORIGIN = new URL(BASE).origin;
@@ -143,9 +147,7 @@ try {
   await page.click('#demoEnter');
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('#auth')?.classList.contains('hide'));
-  // Wytest obsługuje wiele mutacji stanu w pamięci; wyłącz ambitalny
-  // auto-push (300 ms), którego odłożony PUT z przestarzałą rewizją powoduje
-  // 409 i wycofanie zapisu przy zamykaniu transakcji.
+  // Wyłącz tła.
   await page.evaluate(() => { AV.schedulePush = () => {}; });
 
   const layout = await page.evaluate(() => ({
@@ -228,6 +230,15 @@ try {
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
   });
+  await page.evaluate(() => {
+    window.__putLog = [];
+    const orig = AV.apiFetch;
+    AV.apiFetch = async (p, o) => {
+      const res = await orig(p, o);
+      if (o && o.method === 'PUT') window.__putLog.push(res.status + ':' + (await res.clone().text()).slice(0, 200));
+      return res;
+    };
+  });
   await page.evaluate((id) => AV.closeTradeModal(id), openTrade);
   await page.evaluate(() => {
     const result = document.getElementById('ctResult');
@@ -247,7 +258,7 @@ try {
   }
   await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade, { timeout: 12000 })
     .catch(async () => {
-      console.log('PWA close toast:', await page.evaluate(() => document.getElementById('toast')?.textContent || ''));
+      console.log('PWA close diag:', JSON.stringify(await page.evaluate(() => ({ toast: document.getElementById('toast')?.textContent || '', puts: window.__putLog }))));
       throw new Error('close nie zapisał wyniku');
     });
   await page.waitForFunction(() => !!(AV.pwa && AV.pwa.lastNotification
