@@ -216,8 +216,10 @@ try {
   log('powiadomienia włączone', /włączone/i.test(notifyLabel), notifyLabel);
 
   // 5. Powiadomienie po zamknięciu transakcji
-  const openTrade = await page.evaluate(() => AV.state.trades.find((trade) => trade.result == null)?.id);
-  assert.ok(openTrade, 'brak otwartej transakcji w stanie demo');
+  const openTrade = await page.evaluate(() => AV.state.trades.find((trade) =>
+    trade.result == null && Number(AV.pnum(trade.entry)) > 0 && Number(AV.pnum(trade.size)) > 0
+    && String(trade.sl || '').trim() !== '' && String(trade.sl || '').trim() !== 'brak')?.id);
+  assert.ok(openTrade, 'brak otwartej transakcji z poprawnym SL w stanie demo');
   // Synchronizuj rewizję: nowy closeTradeModal wykonuje pushStateImmediate i
   // wycofuje zmianę przy 409, więc zapis musi użyć aktualnej rewizji.
   await page.evaluate(async () => {
@@ -243,7 +245,11 @@ try {
     const retryBtn = await page.locator('#ctSave').count();
     if (retryBtn) await page.evaluate(() => document.getElementById('ctSave')?.click());
   }
-  await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade);
+  await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade, { timeout: 12000 })
+    .catch(async () => {
+      console.log('PWA close toast:', await page.evaluate(() => document.getElementById('toast')?.textContent || ''));
+      throw new Error('close nie zapisał wyniku');
+    });
   await page.waitForFunction(() => !!(AV.pwa && AV.pwa.lastNotification
     && AV.pwa.lastNotification.url.includes('qa=')
     && AV.pwa.lastNotification.mode), null, { timeout: 10000 });
