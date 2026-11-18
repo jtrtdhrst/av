@@ -1011,10 +1011,8 @@
   };
 
   /* ---------- giełdy ---------- */
-  AV.exKey = 'weex';
+  AV.exKey = 'bingx';
   AV.connectionDefaults = () => ({
-    weex: { connected: false },
-    okx: { connected: false },
     bingx: { connected: false },
     mt: { connected: false, platform: 'mt5' },
     file: { connected: false }
@@ -1033,12 +1031,10 @@
     const c = AV.connections();
     const set = (k, txt, cls) => { const el = $('[data-exstate="' + k + '"]'); if (el) { el.textContent = txt; el.className = cls || ''; } };
     const stateOf = (x) => x.pending ? '● konfiguracja' : (x.connected ? '● połączona' : 'niepodłączona');
-    set('weex', stateOf(c.weex), c.weex.connected ? 'win' : '');
-    set('okx', stateOf(c.okx), c.okx.connected ? 'win' : '');
     set('bingx', stateOf(c.bingx), c.bingx.connected ? 'win' : '');
     set('mt', c.mt.connected ? (c.mt.pending ? '● konfiguracja' : '● połączony') : 'forex · indeksy · złoto', c.mt.connected ? 'win' : 'warnc');
     set('file', 'CSV · XLS', '');
-    const active = ['weex', 'okx', 'bingx'].map((k) => [k, c[k]]).find(([, v]) => v.connected);
+    const active = ['bingx'].map((k) => [k, c[k]]).find(([, v]) => v.connected);
     const badge = $('#syncBadge');
     if (badge) {
       const hasConnection = !!active || !!c.mt.connected;
@@ -1057,17 +1053,13 @@
     if (k === 'file') { AV.renderImport(); return; }
     const c = AV.connections()[k];
     const meta = {
-      weex: { n: 'WEEX', f: ['API Key', 'Secret Key', 'Passphrase'], steps: ['Zaloguj się na <b>weex.com</b> i kliknij ikonę profilu w prawym górnym rogu.', 'Wejdź w <b>Zarządzanie API</b> i kliknij <b>Utwórz klucz API</b>.', 'Nazwij klucz, np. <b>Alpha Vault</b>, i ustaw passphrase. Zapisz go.', 'W uprawnieniach zaznacz <b>tylko odczyt</b>. Nie włączaj handlu ani wypłat.', 'Potwierdź kodem 2FA i skopiuj <b>API Key</b> oraz <b>Secret Key</b>. Secret pokazuje się tylko raz.', 'Wklej trzy wartości obok i kliknij <b>Połącz</b>. Pierwsza synchronizacja pobierze 90 dni historii.'] },
-      okx: { n: 'OKX', f: ['API Key', 'Secret Key', 'Passphrase'], steps: ['Zaloguj się na <b>okx.com</b>, kliknij profil i wybierz <b>API</b>.', 'Kliknij <b>Utwórz klucz API v5</b>.', 'Wpisz nazwę, np. <b>Alpha Vault</b>, i ustaw passphrase.', 'Uprawnienia: <b>tylko Odczyt</b>. Handel i wypłaty wyłączone.', 'Potwierdź i skopiuj <b>API Key</b> oraz <b>Secret Key</b>.', 'Wklej obok razem z passphrase i kliknij <b>Połącz</b>.'] },
-      bingx: { n: 'BingX', f: ['API Key', 'Secret Key'], steps: ['Zaloguj się na <b>bingx.com</b>, kliknij profil i wybierz <b>Zarządzanie API</b>.', 'Kliknij <b>Utwórz API</b> i nazwij klucz, np. <b>Alpha Vault</b>.', 'Zostaw <b>tylko Odczyt</b>. Nie włączaj handlu ani wypłat.', 'Potwierdź kodem z maila lub 2FA.', 'Skopiuj <b>API Key</b> i <b>Secret Key</b>, wklej obok i kliknij <b>Połącz</b>.'] }
+      bingx: { n: 'BingX', f: ['API Key', 'Secret Key'], steps: ['Zarejestruj się na <b>BingX</b> przez <a href="https://bingx.com/en/activity/task/7425469856?themeType=2&ref=EUB5TF" target="_blank" rel="noopener">ten link</a>, jeśli jeszcze nie masz konta.', 'Zaloguj się na <b>bingx.com</b>, kliknij profil i wybierz <b>Zarządzanie API</b>.', 'Kliknij <b>Utwórz API</b> i nazwij klucz, np. <b>Alpha Vault</b>.', 'Zostaw <b>tylko Odczyt</b>. Nie włączaj handlu ani wypłat.', 'Potwierdź kodem z maila lub 2FA.', 'Skopiuj <b>API Key</b> i <b>Secret Key</b>, wklej obok i kliknij <b>Połącz</b>.'] }
     }[k];
     const connected = !!c.connected;
     const statusNote = c.error
       ? '<div class="note r" style="margin-top:12px">' + AV.ic('shield') + '<div><b>Ostatnia synchronizacja nie powiodła się.</b><br>' + AV.esc(c.error) + '</div></div>'
       : '';
-    const permsNote = k === 'weex'
-      ? 'Klucz zapisujemy zaszyfrowany. WEEX wymaga klucza z działającym odczytem konta; handel i wypłaty nie są potrzebne.'
-      : 'OKX i BingX odrzucą klucz z prawem handlu lub wypłat. Tak chronimy Twoje środki.';
+    const permsNote = 'BingX odrzuci klucz z prawem handlu lub wypłat. Tak chronimy Twoje środki.';
     AV.setHTML('#exBody', '<div class="sech"><h2>' + meta.n + (connected ? ' <span class="win" style="font-size:13px;font-weight:600;margin-left:6px">' + (c.pending ? '● konfiguracja' : '● połączona') + '</span>' : '') + '</h2>' + (connected && c.id ? '<button class="btn g sm" data-disconnect="' + c.id + '">Odłącz</button>' : '') + '</div>' +
       (connected ? '<div class="kv"><span>Ostatnia synchronizacja</span><b>' + (c.lastSync ? new Date(c.lastSync).toLocaleString('pl-PL') : 'oczekuje') + '</b></div><div class="kv"><span>Zaimportowane transakcje</span><b>' + (c.imported || 0) + '</b></div><div class="kv"><span>Automatyczny import</span><b>do 25 minut</b></div><div class="kv"><span>Uprawnienia klucza</span><b class="' + (c.perms === 'read-only' ? 'win' : 'warnc') + '">' + (c.perms === 'any' ? 'sprawdź uprawnienia — zalecany tylko odczyt' : c.perms === 'read-only' ? 'tylko odczyt ✓' : AV.esc(c.perms || '')) + '</b></div><div class="kv"><span>Klucz</span><b class="mono">' + AV.esc(c.masked || '') + '</b></div>' : '') +
       statusNote +
