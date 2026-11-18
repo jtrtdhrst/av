@@ -143,6 +143,10 @@ try {
   await page.click('#demoEnter');
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('#auth')?.classList.contains('hide'));
+  // Wytest obsługuje wiele mutacji stanu w pamięci; wyłącz ambitalny
+  // auto-push (300 ms), którego odłożony PUT z przestarzałą rewizją powoduje
+  // 409 i wycofanie zapisu przy zamykaniu transakcji.
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
 
   const layout = await page.evaluate(() => ({
     width: window.innerWidth,
