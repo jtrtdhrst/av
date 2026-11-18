@@ -1564,7 +1564,7 @@ try {
     const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, closeId);
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
-  const resultOnlyId = await page.evaluate(() => {
+  const resultOnlyId = await page.evaluate(async () => {
     const id = 'ui-result-only-' + Date.now();
     AV.state.trades.push({
       id, date: new Date().toISOString(), pair: 'RO/USDT', dir: 'l',
@@ -1574,21 +1574,15 @@ try {
       grade: '', checklist: null, checkTotal: null, errors: [], emotion: '', setup: '', note: '',
       mentor: '', session: '', plan: false, screens: {}
     });
-    AV.saveNow();
-    // Cancel the deferred PUT: it would fire after the close's own save with a
-    // stale baseRevision and trigger a 409 reload that reverts the close.
-    clearTimeout(AV._pushTimer);
-    return id;
-  });
-  await page.evaluate(async () => {
-    clearTimeout(AV._pushTimer);
-    await AV.waitForPushIdle(15000);
-    clearTimeout(AV._pushTimer);
-    AV.api.pushing = false;
-    AV.api.dirty = false;
+    // Persist the trade before closing it. A 409 reload restores server state,
+    // so a trade that exists only in memory would vanish mid-close.
+    const saved = await AV.pushStateImmediate();
+    if (!saved) return '';
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
+    return id;
   });
+  assert.ok(resultOnlyId, 'nie udało się zapisać transakcji przed zamknięciem wynikiem');
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
   await page.evaluate(() => {
     const exit = document.getElementById('ctExit');
