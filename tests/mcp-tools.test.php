@@ -425,6 +425,19 @@ check('PIT: strata z lat ubiegłych', $taxSummary['pit38']['carryLossFromPreviou
 check('PIT: dochód', $taxSummary['pit38']['taxableIncome'] === 500.0);
 check('PIT: podatek 19%', $taxSummary['pit38']['taxDue19Pct'] === 95.0);
 check('PIT: brak dochodu = strata do przeniesienia', $tax->summary(['flows' => [['type' => 'Wpłata', 'fiat' => 100, 'fx' => 1, 'tax' => 'cost', 'date' => '2026-01-01', 'currency' => 'PLN']], 'tax' => ['year' => 2026, 'carryLoss' => 0]], 2026)['pit38']['carryForward'] === 100.0);
+$dirtyTax = $tax->summary([
+    'tax' => ['year' => 2026, 'carryLoss' => '1000,50'],
+    'flows' => [
+        ['id' => 'noDate', 'type' => 'Wypłata', 'currency' => 'PLN', 'fiat' => 100, 'tax' => 'income'],
+        ['id' => 'zeroFx', 'date' => '2026-05-05', 'type' => 'Wypłata', 'currency' => 'EUR', 'fiat' => 100, 'fx' => 0, 'tax' => 'income'],
+        ['id' => 'stringFx', 'date' => '2026-05-06', 'type' => 'Wypłata', 'currency' => 'EUR', 'fiat' => '100', 'fx' => '4,265', 'tax' => 'income'],
+        ['id' => 'negative', 'date' => '2026-05-07', 'type' => 'Wpłata', 'currency' => 'PLN', 'fiat' => -50, 'tax' => 'cost'],
+        ['id' => 'otherYear', 'date' => '2025-05-05', 'type' => 'Wypłata', 'currency' => 'EUR', 'fiat' => 100, 'tax' => 'income'],
+    ],
+], 2026);
+check('PIT: zdarzenia bez daty/kursu i ujemne pominięte', $dirtyTax['flows']['count'] === 1 && $dirtyTax['flows']['skippedFlows'] === 3, (string) $dirtyTax['flows']['skippedFlows']);
+check('PIT: EUR bez kursu nie liczony 1:1', $dirtyTax['pit38']['revenue'] === 426.5, (string) $dirtyTax['pit38']['revenue']);
+check('PIT: tekstowy carry liczony numerycznie', $dirtyTax['pit38']['carryLossFromPreviousYears'] === 1000.5, (string) $dirtyTax['pit38']['carryLossFromPreviousYears']);
 $tx = $tax->transactions($state, ['limit' => 10]);
 check('Kapitał: wpłata i wypłata', $tx['total'] === 2 && $tx['totals']['deposits'] === 1000.0 && $tx['totals']['withdrawals'] === 500.0);
 

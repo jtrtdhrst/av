@@ -106,7 +106,7 @@
   AV.normalizeTax = (raw, opts = {}) => {
     const src = raw && typeof raw === 'object' ? raw : {};
     const year = Number(src.year) >= 2000 ? Math.trunc(Number(src.year)) : new Date().getFullYear();
-    let carryLoss = Math.max(0, Number(src.carryLoss) || 0);
+    let carryLoss = Math.max(0, Math.round(AV.pnum(src.carryLoss) * 100) / 100);
     if (opts.migrateDemoSeed && carryLoss === 380) carryLoss = 0;
     return { version: AV.TAX_VERSION, carryLoss, year };
   };
@@ -1233,22 +1233,41 @@
     return y >= 2000 ? Math.trunc(y) : new Date().getFullYear();
   };
   AV.isForexTrade = (trade, state) => {
-    const acc = (state.accounts || []).find((a) => a.id === trade.account || a.name === trade.account) || {};
-    const key = [trade.source, trade.account, acc.exchange, acc.type, acc.name].filter(Boolean).join(' ');
-    return /(^|[^a-z0-9])(mt4|mt5|metatrader)/i.test(key);
+    const id = String(trade.account || '');
+    const matched = (state.accounts || []).filter((a) => a.id === id || a.name === id ||
+      (a.name && id.toLowerCase().includes(String(a.name).toLowerCase())));
+    const key = [trade.source, trade.account]
+      .concat(matched.reduce((all, a) => all.concat([a.exchange, a.type, a.name]), []))
+      .filter(Boolean).join(' ');
+    return /(^|[^a-z0-9])(mt4|mt5|metatrader|forex|cfd)/i.test(key);
+  };
+  // Zdarzenie bez daty lub bez kursu waluty obcej nie może zasilać
+  // zestawienia — poprzednio liczone było po kursie 1:1 w każdym roku.
+  AV.taxFlowIssue = (f, year) => {
+    const date = String((f && f.date) || '');
+    if (!/^\d{4}-\d{2}-\d{2}/.test(date)) return 'bez daty';
+    if (Number(date.slice(0, 4)) !== year) return null;
+    if (!(AV.pnum(f.fiat) > 0)) return 'z nieprawidłową kwotą';
+    if ((f.currency || 'PLN') !== 'PLN' && !(AV.pnum(f.fx) > 0)) return 'bez kursu NBP';
+    return null;
   };
   AV.taxEvents = (state) => {
     const year = AV.taxYear(state);
     return (state.flows || [])
-      .filter((f) => !f.date || String(f.date).slice(0, 4) === String(year))
+      .filter((f) => {
+        const date = String(f.date || '');
+        return /^\d{4}-\d{2}-\d{2}/.test(date) && Number(date.slice(0, 4)) === year && !AV.taxFlowIssue(f, year);
+      })
       .map((f) => {
-        const fx = Number(f.fx) || 1;
+        const currency = f.currency || 'PLN';
+        const fx = currency === 'PLN' ? 1 : AV.pnum(f.fx);
+        const amount = AV.pnum(f.fiat);
         const kind = f.tax === 'income' || f.tax === 'cost' ? f.tax : (f.type === 'Wpłata' ? 'cost' : 'income');
         return {
           id: f.id, date: f.date,
-          op: (f.type === 'Wpłata' ? 'Zakup USDT za ' : 'Sprzedaż USDT za ') + (f.currency || 'PLN') + (f.op && f.op.includes('P2P') ? ' (P2P)' : ''),
-          kind, currency: f.currency || 'PLN', amount: Number(f.fiat) || 0, fx,
-          pln: Math.round((Number(f.fiat) || 0) * fx * 100) / 100
+          op: (f.type === 'Wpłata' ? 'Zakup USDT za ' : 'Sprzedaż USDT za ') + currency + (f.op && f.op.includes('P2P') ? ' (P2P)' : ''),
+          kind, currency, amount, fx,
+          pln: Math.round(amount * fx * 100) / 100
         };
       })
       .filter((e) => e.kind === 'income' || e.kind === 'cost')
@@ -1260,13 +1279,14 @@
     const sum = (kind) => Math.round(ev.filter((e) => e.kind === kind).reduce((s, e) => s + e.pln, 0) * 100) / 100;
     const revenue = sum('income');
     const costs = sum('cost');
-    const carry = Math.max(0, Number(state.tax && state.tax.carryLoss) || 0);
+    const carry = Math.max(0, Math.round(AV.pnum(state.tax && state.tax.carryLoss) * 100) / 100);
     const income = Math.max(0, Math.round((revenue - costs - carry) * 100) / 100);
     const due = Math.round(income * 0.19 * 100) / 100;
     const carryForward = Math.max(0, Math.round((costs + carry - revenue) * 100) / 100);
+    const invalidFlows = (state.flows || []).filter((f) => !!AV.taxFlowIssue(f, year)).length;
     const trades = (state.trades || []).filter((t) => String(t.date || '').slice(0, 4) === String(year));
     const forex = trades.filter((t) => AV.isForexTrade(t, state)).length;
-    return { year, ev, revenue, costs, carry, income, due, carryForward, neutral: trades.length - forex, forex, trades: trades.length };
+    return { year, ev, revenue, costs, carry, income, due, carryForward, invalidFlows, neutral: trades.length - forex, forex, trades: trades.length };
   };
 
   /* ---------- mentor ---------- */

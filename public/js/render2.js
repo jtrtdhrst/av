@@ -733,8 +733,9 @@
     AV.setText('#taxLoss', AV.fmt(t.carry, 2) + ' zł');
     AV.setText('#taxLossYear', t.year - 1);
     AV.setText('#taxLossHint', 'przeniesiona z zeznania za ' + (t.year - 1) + ' · zmień, jeśli masz inną kwotę');
-    AV.setText('#taxDue', '≈ ' + AV.fmt(t.due, 0) + ' zł');
-    AV.setText('#taxDueHint', 'od dochodu ' + AV.fmt(t.income, 2) + ' zł');
+    AV.setText('#taxDue', '≈ ' + AV.fmt(t.due, 2) + ' zł');
+    AV.setText('#taxDueHint', 'od dochodu ' + AV.fmt(t.income, 2) + ' zł' +
+      (t.invalidFlows ? ' · pominięto ' + t.invalidFlows + ' ' + AV.plural(t.invalidFlows, 'zdarzenie', 'zdarzenia', 'zdarzeń') + ' bez daty lub kursu NBP' : ''));
     AV.setText('#taxYearEyebrow', 'Podatki · rok ' + t.year);
     AV.setText('#taxYear', t.year);
     AV.setText('#taxDeadline', '30 kwietnia ' + (t.year + 1));
