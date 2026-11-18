@@ -218,11 +218,15 @@ try {
     && Number(AV.pnum(t.entry)) > 0 && Number(AV.pnum(t.size)) > 0
     && String(t.sl || '').trim() !== '' && String(t.sl || '').trim() !== 'brak')?.id);
   assert.ok(openTrade, 'brak otwartej transakcji z poprawnym SL w stanie demo');
-  // Synchronizuj rewizję: nowy closeTradeModal wykonuje pushStateImmediate i
-  // wycofuje zmianę przy 409, więc zapis musi użyć aktualnej rewizji.
+  // Ustabilizuj zapisy: początkowy push stanu demo może utknąć w pętli 409,
+  // przez co closeTradeModal przerwałby się na waitForPushIdle. Wyczyść
+  // harmonogram i zsynchronizuj rewizję przed zamknięciem.
   await page.evaluate(async () => {
     clearTimeout(AV._pushTimer);
-    await AV.waitForPushIdle();
+    await AV.waitForPushIdle(15000);
+    clearTimeout(AV._pushTimer);
+    AV.api.pushing = false;
+    AV.api.dirty = false;
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
   });
