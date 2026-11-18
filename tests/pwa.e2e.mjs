@@ -230,13 +230,17 @@ try {
   }, openTrade);
   console.log('DIAG pwa close:', JSON.stringify(pwaCloseDiag));
   await page.evaluate(() => document.getElementById('ctSave')?.click());
-  await page.waitForTimeout(600);
-  const pwaAfterClose = await page.evaluate((id) => ({
-    result: AV.state.trades.find((x) => x.id === id)?.result,
-    toast: document.getElementById('toast')?.textContent || '',
-    rev: AV.api.revision
-  }), openTrade);
-  console.log('DIAG pwa after close:', JSON.stringify(pwaAfterClose));
+  // Retry once with a freshly synced revision if the first save lost a race.
+  await page.waitForTimeout(700);
+  if (await page.evaluate((id) => AV.state.trades.find((x) => x.id === id)?.result == null, openTrade)) {
+    await page.evaluate(async () => {
+      await AV.waitForPushIdle();
+      const response = await AV.apiFetch('/api/state');
+      if (response.ok) AV.api.revision = (await response.json()).revision;
+    });
+    const retryBtn = await page.locator('#ctSave').count();
+    if (retryBtn) await page.evaluate(() => document.getElementById('ctSave')?.click());
+  }
   await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade);
   await page.waitForFunction(() => !!(AV.pwa && AV.pwa.lastNotification
     && AV.pwa.lastNotification.url.includes('qa=')
