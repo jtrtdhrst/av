@@ -1547,7 +1547,10 @@ try {
   if (closeId) {
     await page.evaluate(async () => {
       clearTimeout(AV._pushTimer);
-      await AV.waitForPushIdle();
+      await AV.waitForPushIdle(15000);
+      clearTimeout(AV._pushTimer);
+      AV.api.pushing = false;
+      AV.api.dirty = false;
     });
     await page.evaluate((id) => AV.closeTradeModal(id), closeId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
@@ -1578,6 +1581,11 @@ try {
     return id;
   });
   await page.evaluate(async () => {
+    clearTimeout(AV._pushTimer);
+    await AV.waitForPushIdle(15000);
+    clearTimeout(AV._pushTimer);
+    AV.api.pushing = false;
+    AV.api.dirty = false;
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
   });
@@ -1589,6 +1597,7 @@ try {
     if (result) { result.value = '20'; result.dispatchEvent(new Event('input', { bubbles: true })); }
   });
   await page.evaluate(() => document.getElementById('ctSave')?.click());
+  await page.waitForFunction((id) => AV.state.trades.find((t) => t.id === id)?.result != null, resultOnlyId, { timeout: 10000 }).catch(() => {});
   const resultOnly = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
     return { exit: trade?.exit, result: trade?.result, r: trade?.r };
@@ -1629,7 +1638,10 @@ try {
   if (breakEvenId) {
     await page.evaluate(async () => {
       clearTimeout(AV._pushTimer);
-      await AV.waitForPushIdle();
+      await AV.waitForPushIdle(15000);
+      clearTimeout(AV._pushTimer);
+      AV.api.pushing = false;
+      AV.api.dirty = false;
       const response = await AV.apiFetch('/api/state');
       if (response.ok) AV.api.revision = (await response.json()).revision;
     });
