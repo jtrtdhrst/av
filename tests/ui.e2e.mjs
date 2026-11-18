@@ -1618,11 +1618,27 @@ try {
   await page.fill('#ntSize', '1');
   await page.click('#saveTrade');
   await page.waitForTimeout(500);
-  const breakEvenId = await page.evaluate(() => AV.state.trades.find((t) => t.pair === 'E2E-BE/USDT')?.id);
+  const breakEvenId = await page.evaluate(() => AV.state.trades.find((t) => t.pair === 'E2E-BE/USDT' && !AV.isTradeClosed(t))?.id);
   if (breakEvenId) {
+    await page.evaluate(async () => {
+      clearTimeout(AV._pushTimer);
+      await AV.waitForPushIdle();
+      const response = await AV.apiFetch('/api/state');
+      if (response.ok) AV.api.revision = (await response.json()).revision;
+    });
     await page.evaluate((id) => AV.closeTradeModal(id), breakEvenId);
     await page.fill('#ctExit', '100');
     await page.evaluate(() => document.getElementById('ctSave')?.click());
+    await page.waitForTimeout(500);
+    if (await page.evaluate((id) => AV.state.trades.find((x) => x.id === id)?.result == null, breakEvenId)) {
+      await page.evaluate(async () => {
+        await AV.waitForPushIdle();
+        const response = await AV.apiFetch('/api/state');
+        if (response.ok) AV.api.revision = (await response.json()).revision;
+      });
+      if (await page.locator('#ctSave').count()) await page.evaluate(() => document.getElementById('ctSave')?.click());
+      await page.waitForTimeout(500);
+    }
   }
   const breakEvenUi = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
