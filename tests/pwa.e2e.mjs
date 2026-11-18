@@ -235,16 +235,24 @@ try {
     const result = document.getElementById('ctResult');
     if (result) { result.value = '12.34'; result.dispatchEvent(new Event('input', { bubbles: true })); }
   });
+  await page.evaluate(() => {
+    window.__putLog = [];
+    const orig = AV.apiFetch;
+    AV.apiFetch = async (p, o) => {
+      const res = await orig(p, o);
+      if (o && o.method === 'PUT') {
+        window.__putLog.push(res.status + ':' + (await res.clone().text()).slice(0, 260));
+      }
+      return res;
+    };
+  });
   await page.evaluate(() => document.getElementById('ctSave')?.click());
   await page.waitForTimeout(700);
   console.log('PWA close diag:', JSON.stringify(await page.evaluate((id) => ({
     toast: document.getElementById('toast')?.textContent || '',
     result: AV.state.trades.find((x) => x.id === id)?.result ?? null,
-    pushing: AV.api.pushing,
     revision: AV.api.revision,
-    hasSave: !!document.getElementById('ctSave'),
-    online: AV.api.online,
-    authenticated: AV.api.authenticated
+    puts: window.__putLog
   }), openTrade)));
   // Retry once with a freshly synced revision if the first save lost a race.
   await page.waitForTimeout(700);
