@@ -238,7 +238,11 @@ try {
   assert.deepEqual(emptyTax, { version: 2, carryLoss: 0, year: 2026 });
   log('puste konto bez starego demo', true, 'carryLoss 0');
 
-  assert.equal(consoleErrors.length, 0, 'console errors: ' + consoleErrors.join(' | '));
+  // 409 to obsłużony konflikt rewizji: state.js wykonuje retry ze świeżą
+  // rewizją. Chrome loguje każdy nie-2xx jako console error niezależnie od
+  // tego, że aplikacja go obsłużyła — nie jest to błąd JS.
+  const unexpectedErrors = consoleErrors.filter((message) => !/status of 409 \(Conflict\)/i.test(message));
+  assert.equal(unexpectedErrors.length, 0, 'console errors: ' + unexpectedErrors.join(' | '));
   assert.equal(pageErrors.length, 0, 'page errors: ' + pageErrors.join(' | '));
   log('brak błędów JS', true);
 } catch (err) {
