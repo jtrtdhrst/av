@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env node
 /**
- * Alpha Vault — UI E2E integracji: OKX, WEEX, BingX, MetaTrader, EA.
+ * Alpha Vault — UI E2E integracji: BingX, MetaTrader, EA.
  * Uruchamia mock dostawców + serwer PHP, potem klika formularze w przeglądarce.
  *
  * Uruchom: npm run test:ui:integrations
@@ -112,47 +112,6 @@ try {
   assert.equal(await page.locator('#tbody tr').count(), 47);
   log('widok Giełdy', true);
 
-  // OKX — zły klucz (handel) pokazuje błąd
-  await page.click('.exl button[data-ex="okx"]');
-  await page.fill('#exF0', 'okx-trade');
-  await page.fill('#exF1', 'okx-secret');
-  await page.fill('#exF2', 'passphrase');
-  await page.click('[data-conn="okx"]');
-  await page.waitForFunction(() => (document.querySelector('#exMsg')?.textContent || '').length > 10, null, { timeout: 20000 });
-  const errText = await page.locator('#exMsg').innerText();
-  assert.match(errText, /tylko do odczytu|handlu|read-only/i);
-  assert.equal(await page.locator('[data-exstate="okx"].win').count(), 0);
-  log('OKX: klucz z handlem odrzucony w UI', true);
-
-  // OKX — poprawny klucz
-  await page.fill('#exF0', 'okx-read');
-  await page.fill('#exF1', 'okx-secret');
-  await page.fill('#exF2', 'passphrase');
-  await page.click('[data-conn="okx"]');
-  await waitConnected('okx');
-  await page.waitForFunction(() => (document.querySelector('#exBody')?.textContent || '').includes('Zaimportowane transakcje'), null, { timeout: 25000 });
-  log('OKX: połączenie przez UI + import', true);
-  const headerAfter = await page.evaluate(() => ({
-    hidden: document.querySelector('#syncBadge').hidden,
-    text: document.querySelector('#syncBadge').textContent
-  }));
-  assert.equal(headerAfter.hidden, false, 'chip giełd po połączeniu');
-  assert.match(headerAfter.text, /OKX/, 'chip pokazuje OKX: ' + headerAfter.text);
-  log('nagłówek: chip giełd pokazuje OKX po połączeniu', true, headerAfter.text.trim());
-
-  // WEEX — klucz z prawem handlu przechodzi
-  await page.click('.exl button[data-ex="weex"]');
-  const weexNote = await page.locator('#exBody .note').innerText();
-  assert.match(weexNote, /handel i wypłaty nie są potrzebne/i);
-  await page.fill('#exF0', 'weex-trade');
-  await page.fill('#exF1', 'weex-secret');
-  await page.fill('#exF2', 'passphrase');
-  await page.click('[data-conn="weex"]');
-  await waitConnected('weex');
-  await page.waitForFunction(() => (document.querySelector('#exBody')?.textContent || '').includes('Zaimportowane transakcje'), null, { timeout: 25000 });
-  assert.match(await page.locator('#exBody').innerText(), /sprawdź uprawnienia — zalecany tylko odczyt/i);
-  log('WEEX: klucz z handlem przez UI + sync', true);
-
   // BingX
   await page.click('.exl button[data-ex="bingx"]');
   await page.fill('#exF0', 'bingx-read');
@@ -161,6 +120,13 @@ try {
   await waitConnected('bingx');
   await page.waitForFunction(() => (document.querySelector('#exBody')?.textContent || '').includes('Zaimportowane transakcje'), null, { timeout: 25000 });
   log('BingX: połączenie przez UI + sync', true);
+  const headerAfter = await page.evaluate(() => ({
+    hidden: document.querySelector('#syncBadge').hidden,
+    text: document.querySelector('#syncBadge').textContent
+  }));
+  assert.equal(headerAfter.hidden, false, 'chip giełd po połączeniu');
+  assert.match(headerAfter.text, /BINGX/i, 'chip pokazuje BingX: ' + headerAfter.text);
+  log('nagłówek: chip giełd pokazuje BingX po połączeniu', true, headerAfter.text.trim());
 
   // MetaTrader — hasło inwestora
   await page.click('.exl button[data-ex="mt"]');
@@ -179,10 +145,10 @@ try {
   const code = (await page.locator('#mtCode').innerText()).trim();
   log('EA: kod parowania w UI', true, code);
 
-  // dziennik: 47 + 2 OKX + 2 WEEX + 2 BingX + 1 MT = 54
+  // dziennik: 47 + 2 BingX + 1 MT = 50
   await page.click('.navg button[data-v="trans"]');
   const rows = await page.locator('#tbody tr').count();
-  assert.equal(rows, 54);
+  assert.equal(rows, 50);
   log('dziennik: transakcje z integracji widoczne', true, rows + ' transakcji');
 
   const html = await page.content();

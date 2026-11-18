@@ -467,8 +467,7 @@
          checklist: ['Trend wyższego TF', 'Poziom z planu', 'Potwierdzenie', 'SL przed wejściem', 'R:R zgodne z planem', 'Brak makro 15 min', 'Spokojna głowa'],
         devices: { apple: false, oura: false },
         connections: {
-          weex: { connected: true, lastSync: new Date().toISOString(), imported: 41, masked: 'wx_live_••••7f2a', perms: 'read-only' },
-          okx: { connected: false }, bingx: { connected: false },
+          bingx: { connected: false },
           mt: { connected: false, server: '', login: '', masked: '', code: 'AV-7K3Q-92XD', codeAt: Date.now() }
         }
       },

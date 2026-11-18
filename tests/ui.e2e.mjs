@@ -185,7 +185,7 @@ try {
   log('konto: brak fałszywego 2FA/sesji/kodu API', !trust.twofa && !trust.sessions && !trust.apiCode && trust.deviceSession && !trust.simExp && !trust.simSolo, JSON.stringify(trust));
   await page.click('.navg button[data-v="gieldy"]');
   const exCopy = await page.evaluate(() => document.querySelector('#gieldy')?.innerText || '');
-  log('giełdy: klucz tylko do odczytu', exCopy.includes('tylko odczyt') && !exCopy.includes('dowolne (odczyt wystarcza)'), exCopy.slice(0, 120));
+  log('giełdy: klucz tylko do odczytu', /tylko\s+odczyt/i.test(exCopy) && !exCopy.includes('dowolne (odczyt wystarcza)'), exCopy.slice(0, 120));
   const landingCopy = await page.evaluate(() => document.body.innerText);
   log('landing: bez dowolnych uprawnień', !landingCopy.includes('dowolnymi uprawnieniami'), 'ok');
   await page.click('.navg button[data-v="trans"]');
@@ -343,12 +343,12 @@ try {
       joined: s.user.joined,
       progress: s.meta.courseProgress,
       sessions: s.meta.sessions.length,
-      weex: s.settings.connections.weex.connected,
+      bingx: s.settings.connections.bingx.connected,
       plan: s.subscription.plan
     };
   });
   log('plan: zgodność rynku i kierunku bez arbitrażu', fresh.match && !fresh.wrongPair && !fresh.wrongDir && !fresh.draft && fresh.compactPair && !fresh.ambiguous, JSON.stringify(fresh));
-  log('świeże konto: bez demo-seedu', fresh.joined === null && fresh.progress === 0 && fresh.sessions === 0 && fresh.weex === false, JSON.stringify(fresh));
+  log('świeże konto: bez demo-seedu', fresh.joined === null && fresh.progress === 0 && fresh.sessions === 0 && fresh.bingx === false, JSON.stringify(fresh));
 
   // Mentor AI: integracje MCP
   await page.click('.navg button[data-v="mentor"]');
