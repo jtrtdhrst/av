@@ -214,14 +214,18 @@ try {
   log('powiadomienia włączone', /włączone/i.test(notifyLabel), notifyLabel);
 
   // 5. Powiadomienie po zamknięciu transakcji
-  const openTrade = await page.evaluate(() => AV.state.trades.find((trade) => {
-    const source = String(trade.source || '').trim().toLowerCase();
-    const manual = ['', 'manual', 'panel', 'ręcznie', 'recznie'].includes(source);
-    return trade.result == null && manual && !trade.extId && !trade.externalId && !trade.exchangeId
-      && Number(AV.pnum(trade.entry)) > 0 && Number(AV.pnum(trade.size)) > 0
-      && String(trade.sl || '').trim() !== '' && String(trade.sl || '').trim() !== 'brak';
-  })?.id);
-  assert.ok(openTrade, 'brak otwartej ręcznej transakcji z poprawnym SL w stanie demo');
+  const openTrade = await page.evaluate(() => {
+    const trade = AV.state.trades.find((t) => t.result == null
+      && Number(AV.pnum(t.entry)) > 0 && Number(AV.pnum(t.size)) > 0
+      && String(t.sl || '').trim() !== '' && String(t.sl || '').trim() !== 'brak');
+    if (!trade) return '';
+    // Demo-trade mają source WEEX, co nowa walidacja traktuje jako import
+    // tylko-do-odczytu. Oznacz jako ręczny, żeby zamknięcie przeszło walidację.
+    trade.source = 'Ręcznie';
+    delete trade.extId; delete trade.externalId; delete trade.exchangeId;
+    return trade.id;
+  });
+  assert.ok(openTrade, 'brak otwartej transakcji z poprawnym SL w stanie demo');
   // Synchronizuj rewizję: nowy closeTradeModal wykonuje pushStateImmediate i
   // wycofuje zmianę przy 409, więc zapis musi użyć aktualnej rewizji.
   await page.evaluate(async () => {
