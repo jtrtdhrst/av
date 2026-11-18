@@ -9,9 +9,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
+let fixtureUserId = 0;
 const candidates = [
   process.env.CHROME_PATH,
   path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -126,16 +130,20 @@ try {
     await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 15000 });
   }
   backup = await page.evaluate(() => JSON.stringify(AV.state));
-  const revisionBefore = await page.evaluate(() => AV.api.revision);
+  fixtureUserId = await page.evaluate(async () => (await (await fetch('/api/state')).json()).userId);
 
-  await page.evaluate((f) => {
-    AV.state.flows = f.flows;
-    AV.state.tax = f.tax;
-    AV.state.accounts = f.accounts;
-    AV.state.trades = f.trades;
-    AV.saveNow();
-  }, fixture);
-  await page.waitForFunction((revision) => AV.api.revision > revision, revisionBefore, { timeout: 15000 });
+  // Seed bezpośrednio w bazie: nowy backend blokuje masową podmianę transakcji
+  // przez validateTransition przy zwykłym PUT /api/state.
+  const seedState = JSON.parse(backup);
+  seedState.flows = fixture.flows;
+  seedState.tax = fixture.tax;
+  seedState.accounts = fixture.accounts;
+  seedState.trades = fixture.trades;
+  execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+    env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+    input: JSON.stringify({ state: seedState }),
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
 
   // odczyt po zapisie do MySQL i ponownym wczytaniu
   await page.reload({ waitUntil: 'load' });
@@ -143,13 +151,6 @@ try {
   await page.click('.navg button[data-v="tax"]');
   await page.waitForTimeout(300);
 
-  const taxDiag = await page.evaluate(() => ({
-    trades: (AV.state.trades || []).filter((x) => String(x.date || '').slice(0, 4) === '2026')
-      .map((x) => ({ id: x.id, source: x.source, account: x.account })),
-    forex: AV.taxData(AV.state).forex,
-    isForex: (AV.state.trades || []).filter((x) => x.source === 'MT5').map((x) => AV.isForexTrade(x, AV.state))
-  }));
-  console.log('DIAG tax forex:', JSON.stringify(taxDiag));
   const t = await readTax();
   assert.equal(t.year, 'Podatki · rok 2026');
   assert.equal(t.deadline, '30 kwietnia 2027');
@@ -243,8 +244,18 @@ try {
   process.exitCode = 1;
 } finally {
   if (backup) {
-    const restored = await restore(backup).catch((err) => ({ status: 0, body: { error: err.message } }));
-    log('przywrócenie stanu demo', restored.status === 200, 'HTTP ' + restored.status);
+    let restoredStatus = 0;
+    try {
+      execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+        env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+        input: JSON.stringify({ state: JSON.parse(backup) }),
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      restoredStatus = 200;
+    } catch (err) {
+      restoredStatus = 0;
+    }
+    log('przywrócenie stanu demo', restoredStatus === 200, 'HTTP ' + restoredStatus);
   }
   await browser.close();
   const failed = results.filter((r) => !r.ok);
