@@ -18,6 +18,12 @@
     return v.toLocaleString('pl-PL', { minimumFractionDigits: d, maximumFractionDigits: d });
   };
   AV.fmtInt = (n) => AV.fmt(n, 0);
+  // Wartości z API/MCP mogą przyjść jako tekst (np. "12.50"). Konkatenacja
+  // zamiast dodawania psuła sumy PnL, equity i limitów dziennych.
+  AV.num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
   AV.pnum = (v) => {
     if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
     const n = parseFloat(String(v == null ? '' : v)

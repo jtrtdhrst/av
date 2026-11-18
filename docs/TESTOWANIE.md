@@ -219,6 +219,7 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - pulpit: puste saldo nie pokazuje fałszywej zmiany −100%,
 - kalkulator: wybór portfela ustawia saldo/MM, gotowe R:R 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własne; SL/TP zgodne z wybranym stosunkiem,
 - statystyki: zakres ogólny pozostaje niezależny od kalendarza PnL przy zmianie obu zakresów; kalendarz PnL ma własny zakres 7/30 dni lub miesiąc i nawigację okresu,
+- statystyki: wyniki transakcji i R zapisane jako tekst (np. z API/MCP) są sumowane numerycznie — net, GP/GL, profit factor, expectation, equity, PnL dnia i statystyki setupu,
 - akademia: „Dołącz” dopiero 15 min przed startem, własny czas przypomnienia, harmonogram tydzień/miesiąc, kategorie nagrań i odtwarzanie z linku, słownik z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady,
 - filtry dziennika, szczegóły transakcji,
 - nagłówek: brak technicznego statusu bazy, ukryty chip giełd bez połączeń, ticker z `/api/quotes`,
