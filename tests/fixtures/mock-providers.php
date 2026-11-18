@@ -74,10 +74,70 @@ if (str_starts_with($path, '/okx/')) {
     if ($path === '/okx/api/v5/account/config') {
         $perm = $apiKey === 'okx-trade' ? 'read_only,trade' : 'read_only';
         out(['code' => '0', 'msg' => '', 'data' => [[
-            'uid' => 'okx-uid-1', 'perm' => $perm, 'acctLv' => '2',
+            'uid' => match ($apiKey) {
+                'okx-atomic-invalid' => 'okx-uid-atomic',
+                'okx-over-500' => 'okx-uid-over-500',
+                'okx-over-page-limit' => 'okx-uid-over-page-limit',
+                'okx-missing-position-cursor' => 'okx-uid-missing-position-cursor',
+                'okx-missing-spot-cursor' => 'okx-uid-missing-spot-cursor',
+                default => 'okx-uid-1',
+            },
+            'perm' => $perm, 'acctLv' => '2',
         ]]]);
     }
     if ($path === '/okx/api/v5/account/positions-history') {
+        if (in_array($apiKey, ['okx-over-500', 'okx-over-page-limit'], true)) {
+            $after = (string) ($_GET['after'] ?? '');
+            $prefix = $apiKey === 'okx-over-page-limit' ? 'overflow-' : 'bulk-';
+            $start = $after !== '' ? (int) substr($after, strlen($prefix)) + 1 : 0;
+            $total = $apiKey === 'okx-over-page-limit' ? 1001 : 501;
+            $data = [];
+            for ($i = $start; $i < min($start + 100, $total); $i++) {
+                $data[] = [
+                    'posId' => $prefix . sprintf('%04d', $i), 'instId' => 'SOL-USDT-SWAP', 'posSide' => 'long',
+                    'openAvgPx' => '100', 'closeAvgPx' => '101', 'closeTotalPos' => '1',
+                    'realizedPnl' => '1', 'fee' => '0', 'fundingFee' => '0', 'liqPenalty' => '0',
+                    'openTime' => (string) ($now - 3600000), 'closeTime' => (string) ($now - 1800000),
+                ];
+            }
+            out(['code' => '0', 'msg' => '', 'data' => $data]);
+        }
+        if ($apiKey === 'okx-missing-position-cursor') {
+            $after = (string) ($_GET['after'] ?? '');
+            $page = $after === '' ? 1 : 2;
+            $data = [];
+            for ($i = 0; $i < 100; $i++) {
+                $row = [
+                    'posId' => ($page === 1 ? 'position-page1-' : 'missing-cursor-page2-') . sprintf('%03d', $i),
+                    'instId' => 'SOL-USDT-SWAP', 'posSide' => 'long',
+                    'openAvgPx' => '100', 'closeAvgPx' => '101', 'closeTotalPos' => '1',
+                    'realizedPnl' => '1', 'fee' => '0', 'fundingFee' => '0', 'liqPenalty' => '0',
+                    'openTime' => (string) ($now - 3600000), 'closeTime' => (string) ($now - 1800000),
+                ];
+                if ($page === 2 && $i === 99) unset($row['posId']);
+                $data[] = $row;
+            }
+            out(['code' => '0', 'msg' => '', 'data' => $data]);
+        }
+        if ($apiKey === 'okx-missing-spot-cursor') {
+            out(['code' => '0', 'msg' => '', 'data' => []]);
+        }
+        if ($apiKey === 'okx-atomic-invalid') {
+            out(['code' => '0', 'msg' => '', 'data' => [
+                [
+                    'posId' => 'atomic-good', 'instId' => 'SOL-USDT-SWAP', 'posSide' => 'long',
+                    'openAvgPx' => '150', 'closeAvgPx' => '155', 'closeTotalPos' => '1',
+                    'realizedPnl' => '5', 'fee' => '-0.1', 'fundingFee' => '0', 'liqPenalty' => '0',
+                    'openTime' => (string) ($now - 7200000), 'closeTime' => (string) ($now - 3600000),
+                ],
+                [
+                    'posId' => 'atomic-bad', 'instId' => 'SOL-USDT-SWAP', 'posSide' => 'long',
+                    'openAvgPx' => '0', 'closeAvgPx' => '155', 'closeTotalPos' => '1',
+                    'realizedPnl' => '5', 'fee' => '-0.1', 'fundingFee' => '0', 'liqPenalty' => '0',
+                    'openTime' => (string) ($now - 7200000), 'closeTime' => (string) ($now - 3600000),
+                ],
+            ]]);
+        }
         out(['code' => '0', 'msg' => '', 'data' => [
             [
                 'posId' => '111', 'instId' => 'BTC-USDT-SWAP', 'posSide' => 'long',
@@ -100,6 +160,26 @@ if (str_starts_with($path, '/okx/')) {
         ]]);
     }
     if ($path === '/okx/api/v5/trade/fills-history') {
+        if ($apiKey === 'okx-missing-spot-cursor') {
+            $data = [];
+            for ($i = 0; $i < 100; $i++) {
+                $row = [
+                    'billId' => 'missing-spot-cursor-' . sprintf('%03d', $i),
+                    'instId' => 'SOL-USDT',
+                    'side' => $i === 1 ? 'sell' : 'buy',
+                    'fillSz' => '1',
+                    'fillPx' => $i === 1 ? '101' : '100',
+                    'fee' => '0',
+                    'feeCcy' => 'USDT',
+                    'ts' => (string) ($now - 1800000 + $i),
+                ];
+                if ($i === 0) $row['billId'] = 'spot-closed-open';
+                if ($i === 1) $row['billId'] = 'spot-closed-close';
+                if ($i === 99) unset($row['billId']);
+                $data[] = $row;
+            }
+            out(['code' => '0', 'msg' => '', 'data' => $data]);
+        }
         out(['code' => '0', 'msg' => '', 'data' => []]);
     }
     out(['code' => '404', 'msg' => 'Not found', 'data' => []], 404);

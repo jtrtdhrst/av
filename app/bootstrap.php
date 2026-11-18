@@ -13,6 +13,8 @@ require_once $root . '/app/HttpException.php';
 require_once $root . '/app/Encoding.php';
 require_once $root . '/app/Http.php';
 require_once $root . '/app/Auth.php';
+require_once $root . '/app/TradeRules.php';
+require_once $root . '/app/Mcp/Support/RecordDiff.php';
 require_once $root . '/app/UserService.php';
 require_once $root . '/app/Discord.php';
 require_once $root . '/app/RoleGuard.php';

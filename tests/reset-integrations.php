@@ -7,7 +7,16 @@ declare(strict_types=1);
  */
 
 $root = dirname(__DIR__);
+require_once __DIR__ . '/mcp-test-environment.php';
+mcpLoadIsolatedCiConfig($root);
 [$config, $db] = require $root . '/app/bootstrap.php';
+
+$rateOnly = in_array('--rate-only', $argv, true);
+if ($rateOnly) {
+    $db->execute("DELETE FROM rate_limits WHERE bucket LIKE 'connections-%' OR bucket IN ('connection-sync', 'mt-ea')");
+    fwrite(STDOUT, "Integration rate limits reset (data preserved)\n");
+    exit(0);
+}
 
 $ids = array_map(static fn (array $row): int => (int) $row['id'], $db->query('SELECT id FROM users WHERE is_demo = 1'));
 $envUser = (int) getenv('TEST_USER_ID');

@@ -9,9 +9,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
+let fixtureUserId = 0;
 const candidates = [
   process.env.CHROME_PATH,
   path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -51,21 +55,25 @@ const fixture = {
   ],
   trades: []
 };
+// Pełne pola wykonania, żeby nowa walidacja stanu (TradeRules::validateTransition)
+// przy PUT /api/state nie odrzuciła seedu. Wyniki podatkowe zależą tylko od
+// `result`, `date`, `source` i `account` — te pola nie zmieniają oczekiwań.
+const exec = { dir: 'l', entry: '100', size: '1', sl: '95', exit: '101' };
 for (let i = 0; i < 47; i++) {
   fixture.trades.push({
     id: 'tax-w' + i, date: '2026-09-' + String((i % 27) + 1).padStart(2, '0') + 'T10:00:00.000Z',
-    pair: 'BTC/USDT', source: 'WEEX', account: 'WEEX', result: 1
+    pair: 'BTC/USDT', source: 'WEEX', account: 'WEEX', result: 1, ...exec
   });
 }
 for (let i = 0; i < 2; i++) {
   fixture.trades.push({
     id: 'tax-m' + i, date: '2026-10-0' + (i + 1) + 'T10:00:00.000Z',
-    pair: 'EUR/USD', source: 'MT5', account: 'MT5', result: 1
+    pair: 'EUR/USD', source: 'MT5', account: 'MT5', result: 1, ...exec
   });
 }
 fixture.trades.push({
   id: 'tax-old', date: '2025-11-01T10:00:00.000Z',
-  pair: 'ETH/USDT', source: 'WEEX', account: 'WEEX', result: 1
+  pair: 'ETH/USDT', source: 'WEEX', account: 'WEEX', result: 1, ...exec
 });
 
 const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
@@ -121,21 +129,27 @@ try {
     await page.click('#demoEnter');
     await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 15000 });
   }
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
   backup = await page.evaluate(() => JSON.stringify(AV.state));
-  const revisionBefore = await page.evaluate(() => AV.api.revision);
+  fixtureUserId = await page.evaluate(async () => (await (await fetch('/api/state')).json()).userId);
 
-  await page.evaluate((f) => {
-    AV.state.flows = f.flows;
-    AV.state.tax = f.tax;
-    AV.state.accounts = f.accounts;
-    AV.state.trades = f.trades;
-    AV.saveNow();
-  }, fixture);
-  await page.waitForFunction((revision) => AV.api.revision > revision, revisionBefore, { timeout: 15000 });
+  // Seed bezpośrednio w bazie: nowy backend blokuje masową podmianę transakcji
+  // przez validateTransition przy zwykłym PUT /api/state.
+  const seedState = JSON.parse(backup);
+  seedState.flows = fixture.flows;
+  seedState.tax = fixture.tax;
+  seedState.accounts = fixture.accounts;
+  seedState.trades = fixture.trades;
+  execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+    env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+    input: JSON.stringify({ state: seedState }),
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
 
   // odczyt po zapisie do MySQL i ponownym wczytaniu
   await page.reload({ waitUntil: 'load' });
   await page.waitForFunction(() => window.AV && AV.ready && AV.api.authenticated, null, { timeout: 15000 });
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
   await page.click('.navg button[data-v="tax"]');
   await page.waitForTimeout(300);
 
@@ -224,7 +238,11 @@ try {
   assert.deepEqual(emptyTax, { version: 2, carryLoss: 0, year: 2026 });
   log('puste konto bez starego demo', true, 'carryLoss 0');
 
-  assert.equal(consoleErrors.length, 0, 'console errors: ' + consoleErrors.join(' | '));
+  // 409 to obsłużony konflikt rewizji: state.js wykonuje retry ze świeżą
+  // rewizją. Chrome loguje każdy nie-2xx jako console error niezależnie od
+  // tego, że aplikacja go obsłużyła — nie jest to błąd JS.
+  const unexpectedErrors = consoleErrors.filter((message) => !/status of 409 \(Conflict\)/i.test(message));
+  assert.equal(unexpectedErrors.length, 0, 'console errors: ' + unexpectedErrors.join(' | '));
   assert.equal(pageErrors.length, 0, 'page errors: ' + pageErrors.join(' | '));
   log('brak błędów JS', true);
 } catch (err) {
@@ -232,8 +250,18 @@ try {
   process.exitCode = 1;
 } finally {
   if (backup) {
-    const restored = await restore(backup).catch((err) => ({ status: 0, body: { error: err.message } }));
-    log('przywrócenie stanu demo', restored.status === 200, 'HTTP ' + restored.status);
+    let restoredStatus = 0;
+    try {
+      execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+        env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+        input: JSON.stringify({ state: JSON.parse(backup) }),
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      restoredStatus = 200;
+    } catch (err) {
+      restoredStatus = 0;
+    }
+    log('przywrócenie stanu demo', restoredStatus === 200, 'HTTP ' + restoredStatus);
   }
   await browser.close();
   const failed = results.filter((r) => !r.ok);

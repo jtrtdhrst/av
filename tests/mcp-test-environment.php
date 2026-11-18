@@ -11,7 +11,7 @@ function mcpAssertIsolatedCiDatabase(\AlphaVault\Config $config): void
     $safe = getenv('CI') === 'true'
         && getenv('GITHUB_ACTIONS') === 'true'
         && preg_match('/^[1-9][0-9]*$/', (string) getenv('GITHUB_RUN_ID')) === 1
-        && getenv('GITHUB_WORKFLOW') === 'CI'
+        && in_array(getenv('GITHUB_WORKFLOW'), ['CI', 'MCP tests'], true)
         && getenv('GITHUB_JOB') === 'test'
         && $root !== false
         && $workspace !== false

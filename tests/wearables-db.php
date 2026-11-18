@@ -8,7 +8,10 @@ declare(strict_types=1);
  * Uruchom: php tests/wearables-db.php <command> [args]
  */
 
-[$config, $db] = require __DIR__ . '/../app/bootstrap.php';
+$root = dirname(__DIR__);
+require_once __DIR__ . '/mcp-test-environment.php';
+mcpLoadIsolatedCiConfig($root);
+[$config, $db] = require $root . '/app/bootstrap.php';
 
 function out(array $data): never
 {

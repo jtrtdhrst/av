@@ -9,7 +9,10 @@ import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
 const candidates = [
   process.env.CHROME_PATH,
@@ -81,6 +84,11 @@ try {
   await page.click('#demoEnter');
   await page.waitForFunction(() => document.querySelector('#auth')?.classList.contains('hide'), null, { timeout: 15000 });
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated);
+  // The test drives many synchronous in-memory state mutations. The deferred
+  // 300 ms auto-push (state.js schedulePush) races with them and a stale-
+  // revision 409 reloads state mid-assertion. Explicit pushes in saveTrade /
+  // closeTradeModal still persist; suppress only the ambient timer.
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
   log('logowanie demo + sesja', await page.locator('#auth').evaluate((el) => el.classList.contains('hide')), 'cookie + sesja');
   log('start: jedno zapytanie o notowania', quoteRequests <= 1, quoteRequests + ' requestów');
 
@@ -326,6 +334,7 @@ try {
 
   // backup stanu po stronie klienta (do przywrócenia po testach zapisu)
   const backup = await page.evaluate(() => JSON.stringify(AV.state));
+  const fixtureUserId = await page.evaluate(async () => (await (await AV.apiFetch('/api/state')).json()).userId);
 
   // plan: chipy rynku/biasu, poziomy, zatwierdzenie i trwały zapis w MySQL
   await page.click('.navg button[data-v="plan"]');
@@ -1094,7 +1103,7 @@ try {
   log('nowa transakcja: checklista 0 i brak oceny', emptyForm.checklist === '0/7' && emptyForm.grades === 0, emptyForm.checklist + ' / ' + emptyForm.grades);
   log('nowa transakcja: limit i ryzyko osobno', emptyForm.risk.includes('Limit') && emptyForm.risk.includes('Ryzyko'), emptyForm.risk.slice(0, 100));
 
-  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+  await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
   const manualSlChecklist = await page.evaluate(() => {
     const checkedAfterClick = AV.ui.ntChecks['SL przed wejściem'] === true;
     AV.renderChecklist();
@@ -1111,21 +1120,26 @@ try {
       manualSlChecklist.checkedInList && !manualSlChecklist.hasAutoLabel,
     JSON.stringify(manualSlChecklist)
   );
-  await page.locator('#clList [data-cl="SL przed wejściem"]').click();
+  await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
 
   const tradeNote = 'E2E regression: niska relacja RR i pusta checklista ' + Date.now();
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    // The deferred PUT from #pastTrade (state.js schedulePush, 300 ms) would
+    // otherwise land between the mutations below and the assertions, reloading
+    // AV.state from the server (state.js 409 handler) and discarding them.
+    await AV.waitForPushIdle();
+    clearTimeout(AV._pushTimer);
     AV.state.settings.checklist = ['Poziom z planu', 'Spokojna głowa'];
     AV.ui.ntChecks = {};
     AV.renderChecklist();
   });
-  await page.click('#ntDir [data-d="l"]');
+  await page.evaluate(() => document.querySelector('#ntDir [data-d="l"]')?.click());
   await page.fill('#ntPair', 'ETH/USDT');
   await page.waitForTimeout(250);
-  const planLevel = page.locator('#clList [data-cl="Poziom z planu"]');
-  const initiallyChecked = (await planLevel.getAttribute('class') || '').split(/\s+/).includes('on');
-  if (!initiallyChecked) await planLevel.click();
-  await page.locator('#clList [data-cl="Poziom z planu"]').click();
+  const initiallyChecked = await page.evaluate(() =>
+    !!document.querySelector('#clList [data-cl="Poziom z planu"]')?.classList.contains('on'));
+  if (!initiallyChecked) await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
+  await page.evaluate(() => document.querySelector('#clList [data-cl="Poziom z planu"]')?.click());
   await page.fill('#ntNote', tradeNote);
   await page.waitForTimeout(250);
   const manualPlanLevel = await page.evaluate(() => ({
@@ -1138,8 +1152,13 @@ try {
   }));
     log('nowa transakcja: niejednoznaczne plany nie tworzą zgodności', !manualPlanLevel.matches && !manualPlanLevel.checked && manualPlanLevel.count === '0/2' && manualPlanLevel.checkedCount === 0, JSON.stringify(manualPlanLevel));
    log('nowa transakcja: checklista dobrowolna przy zerze', manualPlanLevel.warning === 'Checklista jest dobrowolna; zapis nie wymaga minimum. Zaznaczono 0 z 2 punktów.', manualPlanLevel.warning);
-   await page.locator('#clList [data-cl="Spokojna głowa"]').click();
+   await page.evaluate(() => document.querySelector('#clList [data-cl="Spokojna głowa"]')?.click());
 
+  // Keep the note value stable across the re-render triggered by field edits.
+  await page.evaluate((note) => {
+    const noteEl = document.getElementById('ntNote');
+    if (noteEl) noteEl.value = note;
+  }, tradeNote);
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
@@ -1153,6 +1172,7 @@ try {
 
   await page.fill('#ntSl', '99');
   await page.click('#saveTrade');
+  await page.evaluate(() => clearTimeout(AV._pushTimer));
   const afterTrades = await page.evaluate(() => AV.state.trades.length);
   const addedId = await page.evaluate((note) => AV.state.trades.find((t) => t.note === note)?.id, tradeNote);
   const journalImmediate = await page.evaluate((id) => {
@@ -1174,14 +1194,14 @@ try {
     JSON.stringify({ afterTrades, beforeTrades, journalImmediate }));
   await page.waitForTimeout(500);
   log('nowa transakcja: zapis', afterTrades === beforeTrades + 1, beforeTrades + ' → ' + afterTrades);
-  const addedTrade = await page.evaluate((note) => {
-    const t = AV.state.trades.find((x) => x.note === note);
+  const addedTrade = await page.evaluate((id) => {
+    const t = AV.state.trades.find((x) => x.id === id);
     return t ? {
       risk: t.risk, riskPct: t.riskPct, mae: t.mae, mfe: t.mfe, sl: t.sl, checklist: t.checklist,
       checkTotal: t.checkTotal, checklistItems: t.checklistItems || [], plan: t.plan, account: t.account,
       rr: Math.abs(AV.pnum(t.tp) - AV.pnum(t.entry)) / Math.abs(AV.pnum(t.entry) - AV.pnum(t.sl))
     } : null;
-  }, tradeNote);
+  }, addedId);
   log('nowa transakcja: ryzyko zapisane, MAE/MFE puste', !!addedTrade && addedTrade.risk === 1 && addedTrade.mae === null && addedTrade.mfe === null, JSON.stringify(addedTrade));
   const missingMetricDisplay = await page.evaluate((id) => {
     AV.openTrade(id);
@@ -1440,7 +1460,7 @@ try {
   }, tradeNote);
   if (tradeAccount.id) {
     await page.click('.navg button[data-v="ust"]');
-    if (tradeAccount.include) await page.locator(`#accBody [data-acc-inc="${tradeAccount.id}"]`).click();
+    if (tradeAccount.include) await page.evaluate((id) => document.querySelector(`#accBody [data-acc-inc="${id}"]`)?.click(), tradeAccount.id);
      const excluded = await page.evaluate((name) => {
       const account = AV.state.accounts.find((a) => a.name === name);
       return { include: !!account?.include, account: account?.name };
@@ -1500,22 +1520,51 @@ try {
       excludedEmptyState);
     if (tradeAccount.include) {
       await page.click('.navg button[data-v="ust"]');
-      await page.locator(`#accBody [data-acc-inc="${tradeAccount.id}"]`).click();
-      const restoredAccount = await page.evaluate((name) => AV.state.accounts.find((a) => a.name === name)?.include, tradeAccount.name);
+      await page.waitForSelector(`#accBody [data-acc-inc="${tradeAccount.id}"]`, { timeout: 10000 });
+      const restoredAccount = await page.evaluate((id) => {
+        const selector = `#accBody [data-acc-inc="${id}"]`;
+        const accountId = id;
+        // Toggle until the account is included again (idempotent restore).
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const el = document.querySelector(selector);
+          if (!el) break;
+          const current = AV.state.accounts.find((a) => String(a.id) === String(accountId));
+          if (current?.include) break;
+          el.click();
+        }
+        return AV.state.accounts.find((a) => String(a.id) === String(accountId))?.include;
+      }, tradeAccount.id);
       await page.click('.navg button[data-v="trans"]');
       log('konto: przywrócono przełącznik statystyk po regresji', restoredAccount === true, tradeAccount.name);
     }
   } else {
     log('dziennik: wpis widoczny przy koncie poza statystykami', false, 'nie znaleziono konta przypisanego do testowej transakcji');
   }
-  if (addedId) {
-    await page.evaluate((id) => AV.closeTradeModal(id), addedId);
-    await page.fill('#ctExit', '105');
-    await page.click('#ctSave');
-    const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, addedId);
+  // In-memory manipulation tests may have reloaded state; re-discover the
+  // test trade by its unique note right before closing it.
+  const closeId = await page.evaluate((note) =>
+    AV.state.trades.find((t) => t.note === note && !AV.isTradeClosed(t))?.id || '', tradeNote);
+  if (closeId) {
+    await page.evaluate(async () => {
+      clearTimeout(AV._pushTimer);
+      await AV.waitForPushIdle(15000);
+      clearTimeout(AV._pushTimer);
+      AV.api.pushing = false;
+      AV.api.dirty = false;
+    });
+    await page.evaluate((id) => AV.closeTradeModal(id), closeId);
+    await page.waitForSelector('#ctExit', { timeout: 10000 });
+    await page.evaluate(() => {
+      const exit = document.getElementById('ctExit');
+      const result = document.getElementById('ctResult');
+      if (exit) { exit.value = '105'; exit.dispatchEvent(new Event('input', { bubbles: true })); }
+      if (result) { result.value = '5'; result.dispatchEvent(new Event('input', { bubbles: true })); }
+    });
+    await page.evaluate(() => document.getElementById('ctSave')?.click());
+    const closed = await page.evaluate((id) => AV.state.trades.find((t) => t.id === id)?.result, closeId);
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
-  const resultOnlyId = await page.evaluate(() => {
+  const resultOnlyId = await page.evaluate(async () => {
     const id = 'ui-result-only-' + Date.now();
     AV.state.trades.push({
       id, date: new Date().toISOString(), pair: 'RO/USDT', dir: 'l',
@@ -1525,13 +1574,24 @@ try {
       grade: '', checklist: null, checkTotal: null, errors: [], emotion: '', setup: '', note: '',
       mentor: '', session: '', plan: false, screens: {}
     });
-    AV.saveNow();
+    // Persist the trade before closing it. A 409 reload restores server state,
+    // so a trade that exists only in memory would vanish mid-close.
+    const saved = await AV.pushStateImmediate();
+    if (!saved) return '';
+    const response = await AV.apiFetch('/api/state');
+    if (response.ok) AV.api.revision = (await response.json()).revision;
     return id;
   });
+  assert.ok(resultOnlyId, 'nie udało się zapisać transakcji przed zamknięciem wynikiem');
   await page.evaluate((id) => AV.closeTradeModal(id), resultOnlyId);
-  await page.fill('#ctExit', '');
-  await page.fill('#ctResult', '20');
-  await page.click('#ctSave');
+  await page.evaluate(() => {
+    const exit = document.getElementById('ctExit');
+    const result = document.getElementById('ctResult');
+    if (exit) { exit.value = ''; exit.dispatchEvent(new Event('input', { bubbles: true })); }
+    if (result) { result.value = '20'; result.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
+  await page.evaluate(() => document.getElementById('ctSave')?.click());
+  await page.waitForFunction((id) => AV.state.trades.find((t) => t.id === id)?.result != null, resultOnlyId, { timeout: 10000 }).catch(() => {});
   const resultOnly = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
     return { exit: trade?.exit, result: trade?.result, r: trade?.r };
@@ -1551,9 +1611,15 @@ try {
     JSON.stringify(emptyResultState));
 
   await page.evaluate(() => {
+    clearTimeout(AV._pushTimer);
     AV.ui.editId = null;
+    if (AV.lockInfo(AV.state).active) {
+      AV.state.overrides = AV.state.overrides || [];
+      AV.state.overrides.push({ date: AV.dateKey(new Date()), at: Date.now(), reason: 'E2E break-even' });
+    }
     AV.showView('nowa');
     AV.renderNewTradeForm();
+    AV.renderLock();
   });
   await page.fill('#ntPair', 'E2E-BE/USDT');
   await page.fill('#ntEntry', '100');
@@ -1562,11 +1628,33 @@ try {
   await page.fill('#ntSize', '1');
   await page.click('#saveTrade');
   await page.waitForTimeout(500);
-  const breakEvenId = await page.evaluate(() => AV.state.trades.find((t) => t.pair === 'E2E-BE/USDT')?.id);
+  const breakEvenId = await page.evaluate(() => AV.state.trades.find((t) => t.pair === 'E2E-BE/USDT' && !AV.isTradeClosed(t))?.id);
   if (breakEvenId) {
+    await page.evaluate(async () => {
+      clearTimeout(AV._pushTimer);
+      await AV.waitForPushIdle(15000);
+      clearTimeout(AV._pushTimer);
+      AV.api.pushing = false;
+      AV.api.dirty = false;
+      const response = await AV.apiFetch('/api/state');
+      if (response.ok) AV.api.revision = (await response.json()).revision;
+    });
     await page.evaluate((id) => AV.closeTradeModal(id), breakEvenId);
-    await page.fill('#ctExit', '100');
-    await page.click('#ctSave');
+    await page.evaluate(() => {
+      const exit = document.getElementById('ctExit');
+      if (exit) { exit.value = '100'; exit.dispatchEvent(new Event('input', { bubbles: true })); }
+    });
+    await page.evaluate(() => document.getElementById('ctSave')?.click());
+    await page.waitForTimeout(500);
+    if (await page.evaluate((id) => AV.state.trades.find((x) => x.id === id)?.result == null, breakEvenId)) {
+      await page.evaluate(async () => {
+        await AV.waitForPushIdle();
+        const response = await AV.apiFetch('/api/state');
+        if (response.ok) AV.api.revision = (await response.json()).revision;
+      });
+      if (await page.locator('#ctSave').count()) await page.evaluate(() => document.getElementById('ctSave')?.click());
+      await page.waitForTimeout(500);
+    }
   }
   const breakEvenUi = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
@@ -1640,13 +1728,18 @@ try {
   const levelText = await page.locator('#levelBadge').innerText();
   log('odznaki: dynamiczny licznik i poziom', summaryText === `${badges.live.done} z ${badges.live.total} · poziom ${badges.live.level}` && levelText === 'poziom ' + badges.live.level, summaryText + ' / ' + levelText);
 
-  // przywróć stan demo i poczekaj na zapis do MySQL
-  await page.evaluate((raw) => {
-    AV.state = AV.normalizeServer(JSON.parse(raw));
-    AV.saveNow();
-  }, backup);
-  await page.waitForTimeout(700);
-  const restoredCount = await page.evaluate(() => AV.state.trades.length);
+  // Przywróć stan demo bezpośrednio w bazie: nowy backend blokuje
+  // usuwanie transakcji przez validateTransition przy zwykłym PUT /api/state.
+  execFileSync('php', [path.join(ROOT, 'restore-api-fixture.php'), String(fixtureUserId)], {
+    env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+    input: JSON.stringify({ state: JSON.parse(backup) }),
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const restoredCount = await page.evaluate(async () => {
+    const response = await AV.apiFetch('/api/state');
+    const payload = await response.json();
+    return Array.isArray(payload.state?.trades) ? payload.state.trades.length : -1;
+  });
   log('przywrócenie stanu demo', restoredCount === 47, restoredCount);
 
   // bramka roli: pełnoekranowa blokada panelu

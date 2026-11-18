@@ -52,7 +52,7 @@ paths:
     get:
       tags: [API]
       summary: Pobierz stan użytkownika
-      description: Historyczny mojibake (UTF-8 odczytany jako Windows-1250) jest naprawiany przed odpowiedzią i zapisywany z powrotem do MySQL bez zmiany rewizji. Poprawne znaki pozostają bez zmian.
+      description: Historyczny mojibake (UTF-8 odczytany jako Windows-1250) jest naprawiany przed odpowiedzią i zapisywany z powrotem do MySQL z podniesieniem rewizji, jeśli stan się zmienił. Poprawne znaki pozostają bez zmian.
       security: [{ cookieAuth: [] }]
       responses:
         '200':
@@ -65,7 +65,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
     put:
       tags: [API]
-      summary: Zapisz cały stan (optymistyczna rewizja)
+      summary: Zapisz cały stan po walidacji przejścia transakcji (optymistyczna rewizja)
+      description: TradeRules waliduje przejście stanu. Nowe transakcje ręczne wymagają SL; source podany przez klienta ani nowy wpis kosza nie omijają tego wymogu. Nowy wpis transakcji w koszu musi być dokładnym soft delete'em wcześniejszej aktywnej transakcji. Zaufany importer waliduje mapowany rekord i może zachować brak SL niedostarczanego przez źródło. Pusty wynik normalizuje się do null; każdy znany wynik liczbowy (w tym 0) lub poprawny closedAt oznacza zamknięcie, a brak closedAt pozostaje nieznany. ID istniejącej transakcji jest niezmienne, a pola wykonania transakcji zamkniętych/importowanych są chronione. Historyczny ręczny rekord bez SL można zamknąć bez zmian bazowych pól wykonania. Odrzucony zapis nie zmienia stanu ani rewizji, a semantyczny no-op zachowuje revision i updatedAt.
       security: [{ cookieAuth: [] }]
       requestBody:
         required: true
@@ -85,13 +86,19 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Złe Origin (CSRF)
+          description: Złe Origin (CSRF) lub próba zmiany pól wykonania importowanej transakcji
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Konflikt rewizji albo stan z karty innego konta (session_changed)
+          description: Konflikt rewizji, session_changed, state_corrupt albo próba zmiany ID/pól wykonania zamkniętej transakcji
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Nieprawidłowy kierunek, data, para (invalid_pair), liczby, wymagany SL, SL/TP, closedAt, kształt listy transakcji/kosza albo nowy wpis w koszu bez dokładnego źródła (trade_trash_source_invalid); stan i rewizja bez zmian
           content:
             application/json:
               schema:
@@ -147,14 +154,16 @@ paths:
   /api/connections/sync:
     post:
       tags: [API]
-      summary: Synchronizuj wszystkie połączenia
+      summary: Synchronizuj wszystkie połączenia (atomowo per połączenie)
+      description: Każde połączenie ma osobną transakcję obejmującą stan, rewizję i markery deduplikacji. Markery są odczytywane w porcjach po 500 ID; batch może obejmować ponad 500 rekordów, a błąd wycofuje całe połączenie. Import zachowuje czas źródłowy jako date/closedAt i zapisuje importedAt w UTC; OKX jawnie zgłasza limit stron i pełną stronę bez poprawnego kursora.
       responses:
         '200':
           description: Podsumowanie synchronizacji
   /api/connections/{id}/sync:
     post:
       tags: [API]
-      summary: Synchronizuj jedno połączenie
+      summary: Synchronizuj jedno połączenie atomowo
+      description: Błąd walidacji mapowanej transakcji wycofuje cały batch tego połączenia, w tym stan, rewizję i markery exchange_imports. Batch 501 rekordów jest pokryty w CI; niekompletna historia OKX zwraca history_page_limit albo history_cursor_missing zamiast sukcesu.
       parameters:
         - name: id
           in: path
@@ -164,6 +173,10 @@ paths:
       responses:
         '200':
           description: Podsumowanie synchronizacji
+        '422':
+          description: Nieprawidłowa transakcja; batch połączenia wycofany
+        '502':
+          description: OKX zgłosił limit stron albo pełną stronę bez kursora; nie zapisano niepełnego batcha
   /api/connections/{id}:
     delete:
       tags: [API]
@@ -576,7 +589,7 @@ components:
         proposalId: { type: string }
         kind:
           type: string
-          enum: [manual_trade, close_trade, trade_review, day_plan, checkin, setup, prop_challenge, account, capital_flow]
+          enum: [manual_trade, close_trade, trade_review, day_plan, checkin, setup, prop_challenge, account, capital_flow, write_op, trade_update, risk_rules]
         target: { type: string }
         status:
           type: string
@@ -586,11 +599,13 @@ components:
         changes:
           type: array
           items: { type: string }
-        before: { type: object, nullable: true }
-        after: { type: object, nullable: true }
+        before: { type: object, nullable: true, description: Payloady obrazów są redagowane do hash/rozmiaru. }
+        after: { type: object, nullable: true, description: Payloady obrazów są redagowane do hash/rozmiaru. }
         diff:
           type: array
-          items: { type: object }
+          items:
+            type: object
+            description: Payloady obrazów są redagowane do hash/rozmiaru.
         createdAt: { type: string }
         expiresAt: { type: string }
         decidedAt: { type: string, nullable: true }
@@ -680,11 +695,11 @@ components:
           additionalProperties: true
         revision: { type: integer }
         bytes: { type: integer }
-        updatedAt: { type: [string, 'null'] }
+        updatedAt: { type: [string, 'null'], format: date-time }
         userId: { type: integer }
     StatePutRequest:
       type: object
-      required: [state, baseRevision]
+      required: [state]
       properties:
         state:
           type: object

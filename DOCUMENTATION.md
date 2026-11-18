@@ -59,7 +59,7 @@ Apache + PHP 8.3 (LH.pl)
 | # | Punkt styku | Inicjator → odbiorca | Protokół | Uwierzytelnienie | Szczegóły |
 | --- | --- | --- | --- | --- | --- |
 | P1 | UI aplikacji | przeglądarka → Apache/PHP | HTTPS | brak (strona publiczna) | [§3](#3-cykl-życia-żądania-http) |
-| P2 | Stan użytkownika | przeglądarka → `/api/state` | JSON/HTTPS | cookie sesji + Origin | [§5](#5-stan-aplikacji) |
+| P2 | Stan użytkownika | przeglądarka → `/api/state` | JSON/HTTPS | cookie sesji + Origin | wspólne reguły transakcji, CAS i semantyczny no-op; [§5](#5-stan-aplikacji) |
 | P3 | Wydarzenia | przeglądarka → `/api/events` | JSON/HTTPS | cookie sesji | [§6](#6-api--kontrakt-i-zachowanie) |
 | P4 | Start OAuth | przeglądarka → `/auth/discord` → Discord | 302 | cookie `av_oauth` + `state` | [§4](#4-uwierzytelnianie-sesje-i-csrf) |
 | P5 | Powrót OAuth | Discord → `/auth/discord/callback` | 302 + code | `state` w DB i cookie | [§4](#4-uwierzytelnianie-sesje-i-csrf) |
@@ -67,7 +67,7 @@ Apache + PHP 8.3 (LH.pl)
 | P7 | Dane aplikacji | PHP → MySQL | PDO | dane z `config.json` | [§10](#10-baza-danych-i-transakcje) |
 | P8 | Uruchomienie sync | LH Cron → `bin/sync-discord-events.php` | CLI | użytkownik systemowy | [§9](#9-cron-i-niezawodność) |
 | P9 | Odczyt wydarzeń | sync → Discord REST | HTTPS | `Bot DISCORD_BOT_TOKEN` | [§7](#7-discord-scheduled-events--pełny-przepływ) |
-| P10 | Zapis wydarzeń | sync → MySQL | PDO + transakcja | dane z `config.json` | [§7](#7-discord-scheduled-events--pełny-przepływ) |
+| P10 | Zapis i import danych | sync → MySQL | PDO + transakcja | dane z `config.json` | wydarzenia Discord i atomowy import per połączenie; [§7](#7-discord-scheduled-events--pełny-przepływ), [§6.2](#62-mcp-32---panel-zapis-propozycje-i-zgoda-w-rozmowie) |
 | P11 | Administracja | admin → `/api/admin/events*` | JSON/HTTPS | cookie + `ADMIN_DISCORD_IDS` | [§13](#13-administracja-wydarzeniami) |
 | P12 | Offline | przeglądarka → `localStorage` | JS | brak | [§11](#11-frontend--od-bootstrapu-do-renderu) |
 | P13 | Deploy | GitHub Actions / WSL → LH | SSH + rsync | klucz ED25519 | [§14](#14-deployment) |
@@ -182,16 +182,21 @@ Dane w `rate_limits` (bucket, IP, window_start, count). Przekroczenie → 429.
 1. Frontend trzyma cały stan w `AV.state`.
 2. `AV.schedulePush()` zbiera zmiany i wysyła `PUT /api/state` z `{ state, baseRevision, ownerId }`.
 3. Serwer sprawdza sesję, `Origin`, rozmiar (`MAX_STATE_BYTES`, domyślnie 12 MiB), typ JSON oraz `ownerId`; stan z karty innego konta → 409 `session_changed`.
-4. `UPDATE user_states ... WHERE user_id = ? AND revision = ?`.
-5. Sukces → `revision + 1`, odpowiedź z nową rewizją i `userId`.
-6. Konflikt → 409; frontend pobiera świeży stan tylko wtedy, gdy `userId` zgadza się z sesją.
-7. `GET /api/state` zwraca `{ state, revision, updatedAt, userId }`. Historyczny mojibake (UTF-8 odczytany jako Windows-1250) jest naprawiany przed odpowiedzią i zapisywany z powrotem do `user_states` bez zmiany rewizji; zdarzenie trafia do `audit_log` jako `state.repair_encoding`.
-8. `DELETE /api/state` czyści stan (reset).
-9. `localStorage` jest fallbackiem offline i jest namespace'owany po `user.id`; po wylogowaniu cache użytkownika jest usuwany.
+4. `TradeRules` waliduje przejście: nowa transakcja ręczna wymaga prawidłowego kierunku, liczb i SL oraz poprawnego położenia SL/TP. `source` z żądania ani nowy wpis kosza nie wyłączają tego wymogu; nowy wpis transakcji w koszu musi być dokładnym soft delete'em wcześniej istniejącej transakcji. Zaufany importer waliduje rekord tą samą regułą, z wyjątkiem braku SL niedostarczanego przez źródło. Pusty wynik normalizuje się do `null`; każdy znany wynik liczbowy (w tym `0`) lub poprawny `closedAt` oznacza zamknięcie. Brak `closedAt` pozostaje nieznany. Historyczny ręczny wpis bez SL można zamknąć bez zmian bazowych pól wykonania. ID transakcji oraz pola wykonania zamkniętych/importowanych wpisów są niezmienne; adnotacje można edytować.
+5. Semantyczny no-op kończy się po blokującym odczycie rewizji bez zapisu do `user_states`; zachowuje `revision` i `updatedAt`.
+6. Przy realnej zmianie `UPDATE user_states ... WHERE user_id = ? AND revision = ?` stosuje CAS i zwiększa `revision`.
+7. Konflikt rewizji → 409; nieprawidłowe przejście → 409/422 (lub 403 dla pól giełdowych), bez zmiany stanu i rewizji. Frontend pobiera świeży stan po konflikcie tylko wtedy, gdy `userId` zgadza się z sesją.
+8. `GET /api/state` zwraca `{ state, revision, updatedAt, userId }`, z `updatedAt` w ISO 8601 UTC. Historyczny mojibake (UTF-8 odczytany jako Windows-1250) jest naprawiany przed odpowiedzią i zapisywany z powrotem do `user_states`; gdy JSON rzeczywiście się zmieni, rewizja rośnie i zdarzenie trafia do `audit_log` jako `state.repair_encoding`.
+9. `DELETE /api/state` czyści stan (reset).
+10. `localStorage` jest fallbackiem offline i jest namespace'owany po `user.id`; po wylogowaniu cache użytkownika jest usuwany.
 
 **Błąd:** brak sesji → 401; zły JSON → 400; za duży stan → 413; konflikt → 409.
 
 **Gdzie sprawdzić:** `user_states`, `audit_log`, `public/js/state.js`.
+
+W dzienniku transakcja jest uznana za zamkniętą po wyniku (w tym `0`) albo poprawnym
+`closedAt`; nieznany czas nie jest uzupełniany. Statystyki PnL uwzględniają wyłącznie
+transakcje z numerycznym, znanym `result`, aby nie przypisywać nieznanego wyniku do zysku/straty.
 
 ## 6. API — kontrakt i zachowanie
 
@@ -245,16 +250,23 @@ MCP (`mcp.alphavault.pl`) ma własny OAuth 2.1; przy włączonym zapisie rejestr
 46 odczytu oraz 33 zapisu (30 bezpośrednich, 3 obsługujące opcjonalne propozycje). Jedno
 połączenie z zakresem `alphavault.read` daje wtedy wszystkie 79 narzędzi; przy wyłączonym zapisie
 pozostaje 46 odczytu. Nie ma osobnego zakresu `alphavault.write` ani reconnectu po zmianie flagi.
-Narzędzia zapisu przechodzą przez `WriteEngine`, który waliduje argumenty, liczy formuły panelu
+Narzędzia zapisu przechodzą przez `WriteEngine`, który waliduje argumenty i przejście transakcji oraz liczy formuły panelu
 i zapisuje stan w transakcji MySQL z `SELECT ... FOR UPDATE`, kontrolą `expectedRevision` oraz
 idempotencją (`mcp_idempotency`, 24 h). Fingerprint `{op, args, expectedRevision}` wiąże klucz
 z payloadem; inna treść zwraca 409, a klucze są case-sensitive. Zgodna decyzja legacy bez
 fingerprintu jest odtwarzana tylko po walidacji statusu, diffu i użytego kodu.
 Każda z 30 operacji zapisu działa bezpośrednio i nie wymaga osobnego potwierdzenia.
-`propose_change` opcjonalnie tworzy wiersz `mcp_proposals` typu `write_op` z `{op, args}`;
-podgląd i wykonanie korzystają z tej samej funkcji. `approve_proposal` wymaga `confirmed: true`
-i zgodnego `diffHash`; klient powinien wysłać flagę po jednoznacznym „tak” użytkownika.
-Serwer weryfikuje flagę i diff, ale nie analizuje treści rozmowy; kod z panelu jest opcjonalny.
+`propose_change` opcjonalnie tworzy wiersz `mcp_proposals` typu `write_op` z argumentami,
+podglądem, pełnym planowanym stanem i jego hashem. Diff/hash obejmuje także skutki uboczne
+w całym stanie; screeny są przedstawiane przez hash i rozmiar, bez payloadu. Przy zgodnej
+`baseRevision` zatwierdzenie zapisuje dokładnie zamrożony snapshot, bez ponownego wykonania
+operacji ani rebase. Zmiana rewizji wymaga nowej propozycji. Idempotentne ponowienie zwraca
+pierwotny status, diff, hash i podgląd; replay tego samego `idempotencyKey` z innym
+`expectedRevision` zwraca `revision_conflict`, a replay z pierwotną rewizją nie wykonuje
+zapisu ponownie. Pominięcie opcjonalnego `expectedRevision` pozostawia replay bez
+porównania rewizji żądania. `approve_proposal` wymaga `confirmed: true` i zgodnego
+`diffHash`; klient powinien wysłać flagę po jednoznacznym „tak” użytkownika. Serwer weryfikuje
+flagę i diff, ale nie analizuje treści rozmowy; kod z panelu jest opcjonalny.
 Usunięcia trafiają do `state.trash[]` i wracają przez `restore_deleted_record`.
 Brak danych = puste tablice, brak metryki = `null`. Dane giełdowe są niezmienne.
 Zakres `alphavault.health` wymaga osobnej zgody OAuth i aktywnego urządzenia. Odmowa jedynego
@@ -263,6 +275,10 @@ Bez niego dashboard używa wyłącznie check-inu i nie zwraca wartości ani skł
 także z historycznego `state.health`; bez check-inu `readiness.score` jest `null`.
 Wynik gotowości z check-inu nie wymaga scope’u urządzeń. `account.include` filtruje analitykę,
 nie listy ani szczegóły transakcji.
+
+Odpowiedzi operacji zapisu, cache idempotencji, diffy i podglądy propozycji nie zawierają payloadów
+obrazów; zachowują hash i rozmiar. Jawny `get_trade_screenshots(includeImages=true)` pozostaje
+oddzielną ścieżką odczytu, z limitem 2 obrazów po maksymalnie 200 KB (łącznie 400 KB).
 Szczegóły: [docs/MCP.md](docs/MCP.md).
 
 ## 7. Discord Scheduled Events — pełny przepływ
@@ -874,27 +890,27 @@ narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptogra
 | Prop challenge | `tests/prop.unit.mjs` | szablony, limity, static/trailing, daty, statystyki | 27/27 PASS |
 | Prop parity | `tests/prop-parity.mjs` + `tests/prop-parity.php` | PHP ↔ JS: te same fixtures i metryki | PASS |
 | MCP migracja upgrade | `tests/mcp-migration-upgrade.test.php` | odtworzenie schematu sprzed 20261116, dodanie kolumn/fingerprintów, kolacje case-sensitive i ponowienie migracji | CI po zmianie |
-| MCP propozycje | `tests/mcp.test.php` | gotowość z brakującymi metrykami, wymagany SL, case-sensitive klucze propozycji/decyzji, kod jednorazowy, idempotencja decyzji powiązana z akcją i payloadem, zatwierdzenie po `confirmed` bez kodu, break-even, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | CI po zmianie |
+| MCP propozycje | `tests/mcp.test.php` | gotowość z brakującymi metrykami, wymagany SL, case-sensitive klucze propozycji/decyzji, kod jednorazowy, idempotencja decyzji powiązana z akcją i payloadem, zamrożony snapshot `write_op` po MySQL round-trip (także screenshot), skutki uboczne bez podwójnego prefiksu, zatwierdzenie po `confirmed` bez kodu, break-even, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | CI po zmianie |
 | MCP dashboard health | `tests/mcp-tools.e2e.mjs` | metryki aktywnego Oura widoczne wyłącznie dla tokenu z `alphavault.health`; bez scope'u brak metryk, także przy aktywnym połączeniu | CI po zmianie |
 | MCP konto/analityka | `tests/mcp-tools.test.php`, `tests/mcp-tools.e2e.mjs` | jawne `include=false` filtruje analitykę, legacy konta bez konfiguracji zachowują statystyki, listy i szczegóły pozostają pełne | CI po zmianie |
 | MCP analityka | `tests/mcp-tools.test.php` | Metrics, puste MAE/MFE jako `null`, break-even, dopasowanie rynku bez kolizji prefiksów, filtry kont, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38, odznaki, screeny | CI po zmianie |
-| MCP zapis | `tests/mcp-write.test.php` | 30 operacji bezpośrednich, 33 schematy, formuły check-inu i planu, wiele planów z jedną datą, wybór `planId`, stabilne ID propozycji, round-trip poziomów, wymagany SL, ścisła walidacja MAE/MFE, blokada `r` dla importów, kosz, reguły ryzyka | CI po zmianie |
+| MCP zapis | `tests/mcp-write.test.php` | 30 operacji bezpośrednich, 33 schematy, klucze idempotencji 8–120 znaków także w silniku, stabilne hashe screenów bez zależności od kolejności kluczy JSON, formuły check-inu i planu, wiele planów z jedną datą, wybór `planId`, stabilne ID propozycji, round-trip poziomów, wymagany SL, legacy close bez SL, ścisła walidacja MAE/MFE, blokada `r` dla importów, integralność kosza, reguły ryzyka i redakcja screenów | CI po zmianie |
 | MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, approve bez kodu, idempotencja decyzji, pilot | CI po zmianie |
-| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | dashboard Oura ze scope’em zdrowotnym, odmowa health-only bez rozszerzenia scope’u, każde narzędzie z rejestru ma udane wywołanie (79/79), fixture DB CI z fail-closed guardem i cleanupem, wydarzenia/paginacja, granice dat i DST, include=false, lifecycle transakcji, walidacja MAE/MFE i zachowanie pominiętego MFE przy zamknięciu, propozycje i workflow | CI po zmianie |
+| MCP tools E2E | `tests/mcp-tools.e2e.mjs` | dashboard Oura ze scope’em zdrowotnym, odmowa health-only bez rozszerzenia scope’u, każde narzędzie z rejestru ma udane wywołanie (79/79), fixture DB CI z fail-closed guardem i cleanupem, wydarzenia/paginacja, granice dat i DST, include=false, lifecycle transakcji, no-op bez zmiany rewizji, walidacja MAE/MFE i zachowanie pominiętego MFE przy zamknięciu, replay propozycji wymaga zgodnej rewizji i nie wykonuje zapisu ponownie, redakcja screenów | CI po zmianie |
 | MCP deploy provenance | `tests/deploy-mcp-guard.test.mjs` | blokada niezaufanego refu, SHA spoza `main`, PR/dispatch-only i CI bez sukcesu; wymóg checkoutu zatwierdzonego SHA i health revision | CI po zmianie |
 | MCP login | `tests/mcp-login.e2e.mjs` | mock Discord: rola, brak roli, duplikat konta | PASS |
 | MCP panel | `tests/mcp-ui.e2e.mjs` | diff, kod do rozmowy, approve, reject, reload, trwałość | PASS |
 | Routing | `tests/router.unit.mjs` | slugi widoków, aliasy starych adresów, `viewFromHash`, `showView` | 18/18 PASS |
 | Notowania | `tests/quotes.test.php` | cache, TTL, fallback, cząstkowe pobranie, uszkodzony cache | 14/14 PASS |
 | Daty demo | `tests/demo-state.test.php` | przesunięcie fixture na dziś, idempotencja, plany jako punkt zaczepienia, błędne dane | 15/15 PASS |
-| API | `tests/api.e2e.mjs` | health, sesja, CSRF, stan, events, macro, admin, eksport, prop | 23/23 PASS |
-| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro do +3 ze stanami partial/error/stale, wiele planów i poziomy z reloadem, saldo i kalkulator, legacy checklist także po zmianie konfiguracji, wymagany SL i elastyczne R:R, CSV bez fikcyjnych PnL/metryk, niezależne listy dziennika/statystyk/PnL, brakujące MAE/MFE i koszt wczesnego wyjścia, MCP status/fallback, Akademia i odznaki | CI po zmianie |
+| API | `tests/api.e2e.mjs` | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, blokada wstrzyknięcia wpisu przez kosz, no-op revision/updatedAt, zamknięcie legacy bez SL, stan, events, macro, admin, eksport, prop i cleanup fixture | CI po zmianie |
+| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro do +3 ze stanami partial/error/stale, wiele planów i poziomy z reloadem, saldo i kalkulator, legacy checklist także po zmianie konfiguracji, wymagany SL i elastyczne R:R, awaria zapisu zamknięcia bez komunikatu sukcesu, round-trip przez API i cleanup pełnego fixture, niezależne listy dziennika/statystyk/PnL, MCP status/fallback, Akademia i odznaki | CI po zmianie |
 | UI empty | `tests/ui-empty.e2e.mjs` | puste pola po sukcesie z `[]` | 12/12 PASS |
 | PWA mobile | `tests/pwa.e2e.mjs` | manifest, SW, instalacja, powiadomienie, deep link, 10 s, push, offline, brak przepełnienia 15 widoków przy 390 i 1024 px | PASS |
 | Urządzenia | `tests/wearables.e2e.mjs` | OAuth2 + PKCE Oura, rotacja tokenów i klucza, statusy, Apple, UI, bezpieczeństwo, wyłączenie Garmin/Whoop | PASS |
 | Konfiguracja urządzeń | `tests/wearables-config.test.php` | lista dostawców, brak fallbacku klucza, start OAuth 503, gotowość po ustawieniu klucza | 5/5 PASS |
 | Dokumentacja | `tests/docs.test.mjs` | linki, sekcje, spójność kopii publicznych | PASS |
-| Integracje giełd/API | `tests/integrations.e2e.mjs` | OKX, BingX, WEEX, MetaApi, EA, mocki; niezmierzone MAE/MFE pozostają `null` | wynik w CI |
+| Integracje giełd/API | `tests/integrations.e2e.mjs` | OKX, BingX, WEEX, MetaApi, EA, mocki; batch 501 rekordów, rollback batcha, timestampy źródłowe/UTC, limit stron i brak kursora bez częściowego importu, cleanup izolowanych danych | CI po zmianie |
 | Integracje UI | `tests/ui-integrations.e2e.mjs` | formularze, dziennik, licznik transakcji, chip nagłówka | 13/13 PASS |
 | Live Discord | `discord-sync-live-test.yml` | realne API → MySQL, 2 synchronizacje | 3/3, bez duplikatów |
 | Prod health/docs | `curl` + deploy verify | `/api/health`, `/docs/`, `.app` deny | PASS |
@@ -1005,6 +1021,8 @@ bin/sync-exchange-trades.php  ręczny/CRON worker
 - Kolejne przebiegi pobierają okno od ostatniej synchronizacji minus 1 dzień.
 - Każda transakcja ma `extId`; `exchange_imports` gwarantuje idempotencję.
 - Transakcja trafia do `user_states.state.trades` i jest widoczna w dzienniku.
+- Import per połączenie atomowo zapisuje stan, rewizję i markery; batch ponad 500 rekordów jest obsługiwany.
+- OKX zgłasza błąd przy limicie stron albo pełnej stronie bez kursora, zamiast uznać niepełną historię za sukces.
 - Błąd dostawcy nie usuwa ostatniego dobrego zestawu; połączenie dostaje status `error` i komunikat.
 
 ### 20.4. Harmonogram

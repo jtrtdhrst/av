@@ -188,14 +188,14 @@ Wymaga sesji (`401` bez). Zwraca stan JSON i rewizję.
   "state": { "version": 2, "user": {}, "trades": [], "...": "..." },
   "revision": 12,
   "bytes": 41487,
-  "updatedAt": "2026-11-12 14:30:00",
+  "updatedAt": "2026-11-12T14:30:00Z",
   "userId": 42
 }
 ```
 
 Nowe konto Discord: `state=null`. Konto demo bez stanu: seed z `db/demo-state.json`. Pole `userId` wiąże odpowiedź z sesją; klient odrzuca stan, jeśli nie należy do zalogowanego konta.
 
-Historyczny mojibake (UTF-8 odczytany jako Windows-1250) jest naprawiany przy odczycie. Jeśli stan się zmieni, serwer zapisuje poprawiony JSON z powrotem do `user_states` bez podnoszenia `revision` i zapisuje `audit_log.state.repair_encoding`. Poprawny polski tekst i ASCII nie są zmieniane.
+Historyczny mojibake (UTF-8 odczytany jako Windows-1250) jest naprawiany przy odczycie. Jeśli stan się zmieni, serwer zapisuje poprawiony JSON z powrotem do `user_states`, zwiększa `revision` i zapisuje `audit_log.state.repair_encoding`. Poprawny polski tekst i ASCII nie są zmieniane.
 
 ### 3.4. `PUT /api/state`
 
@@ -211,6 +211,8 @@ Wymaga sesji i poprawnego `Origin`. Akceptowany jest origin z `APP_URL` oraz jeg
 
 `ownerId` jest opcjonalny dla zgodności, ale klient zawsze go wysyła. Jeśli `ownerId` nie zgadza się z sesją (np. w karcie zalogowano inne konto), serwer zwraca `409 session_changed` i nie zapisuje stanu.
 
+Przed zapisem wspólne `TradeRules` sprawdza przejście transakcji. Nowa transakcja ręczna wymaga prawidłowego kierunku, daty, pary, dodatnich `entry` i `size`, wymaganego `sl` po właściwej stronie ceny wejścia oraz `tp` po właściwej stronie, jeśli jest podany. Klient nie może pominąć wymogu SL przez ustawienie `source: "CSV"` lub innej wartości; wyjątek braku SL dotyczy wyłącznie zaufanej ścieżki importera, gdy źródło nie dostarcza tej danej. API i MCP walidują przejście całego stanu, a importer waliduje mapowany rekord. `long`/`short` są normalizowane do `l`/`s`, pusty wynik do `null`; każdy znany wynik liczbowy (w tym `0`) lub poprawny `closedAt` oznacza zamknięcie. Brak `closedAt` pozostaje nieznany i nigdy nie jest uzupełniany automatycznie. Historyczny ręczny rekord bez SL można zamknąć, jeżeli bazowe pola wykonania pozostają niezmienione. ID istniejącej transakcji jest niezmienne, a pola wykonania zamkniętej lub importowanej transakcji nie mogą być zmieniane. Adnotacje pozostają edytowalne. Zapis odrzucony walidacją nie zmienia stanu ani rewizji. Semantyczny no-op zachowuje `revision` i `updatedAt`; `updatedAt` jest zwracane w ISO 8601 UTC.
+
 Odpowiedź:
 
 ```json
@@ -222,8 +224,9 @@ Odpowiedź:
 | 200 | zapisano |
 | 400 | `state` nie jest obiektem |
 | 401 | brak sesji |
-| 403 | złe `Origin` |
-| 409 | nieaktualne `baseRevision` albo `session_changed` |
+| 403 | złe `Origin` albo próba zmiany pól wykonania transakcji importowanej |
+| 409 | nieaktualne `baseRevision`, `session_changed`, uszkodzony poprzedni stan (`state_corrupt`), próba zmiany ID lub pól wykonania zamkniętej transakcji |
+| 422 | nieprawidłowy kierunek, data, para (`invalid_pair`), liczby, brak wymaganej SL, SL/TP, `closedAt`, kształt listy transakcji/kosza albo nowy wpis transakcji w koszu bez dokładnego źródła w aktywnym stanie (`trade_trash_source_invalid`) |
 | 413 | przekroczony `MAX_STATE_BYTES` |
 | 429 | limit 180 zapisów/min |
 
@@ -425,11 +428,11 @@ MetaTrader jest akceptowany wyłącznie przez MetaApi, gdy `investorMode:true`. 
 
 Wymaga sesji i `Origin`. Synchronizuje wszystkie połączenia użytkownika (opcjonalnie `{"provider":"okx"}`). Zwraca podsumowanie per połączenie: `fetched`, `imported`, `skipped`, `done`, `error`.
 
-Import jest idempotentny — deduplikacja po `external_id` w `exchange_imports` i `extId` w stanie dziennika.
+Import jest idempotentny — deduplikacja po `external_id` w `exchange_imports` i `extId` w stanie dziennika. Zapytania markerów są dzielone na paczki po maksymalnie 500 ID. Dla każdego połączenia stan dziennika, rewizja i markery `exchange_imports` są zapisywane w jednej transakcji. Błąd walidacji mapowanej transakcji wycofuje cały batch tego połączenia (w tym wcześniejsze rekordy i markery); synchronizacja wielu połączeń nie jest jedną globalną transakcją. E2E sprawdza 501 rekordów w jednym imporcie. Zapisana data transakcji i `closedAt` pochodzą z czasu źródłowego zamknięcia; `importedAt` jest czasem importu w UTC. OKX zgłasza `history_page_limit`, gdy przekroczy limit stron, oraz `history_cursor_missing`, gdy pełna strona nie ma poprawnego kursora; oba błędy przerywają całe połączenie bez częściowego zapisu.
 
 ### 3.15. `POST /api/connections/{id}/sync`
 
-Synchronizuje jedno połączenie. Używane po podłączeniu klucza i przez przycisk „Synchronizuj teraz”.
+Synchronizuje jedno połączenie. Używane po podłączeniu klucza i przez przycisk „Synchronizuj teraz”. Błąd walidacji transakcji zwraca `422 invalid_trade`; wycofany zostaje cały batch tego połączenia, a nie tylko wadliwy rekord. OKX zwraca `502 history_page_limit`, gdy limit stron dostawcy może oznaczać niekompletną historię, lub `502 history_cursor_missing`, gdy pełna strona nie ma nowego kursora. Żaden z tych błędów nie zapisuje częściowego wyniku.
 
 ### 3.16. `DELETE /api/connections/{id}`
 
@@ -526,6 +529,9 @@ Panel MCP: status, scope i oczekujące propozycje zmian.
 - `proposals` zawiera `proposalId`, `kind`, `target`, `baseRevision`, `diffHash`, `changes`,
   `before`, `after`, `diff`, `status`, `canApprove`, `approvalCodeActive`, `approvalCodeExpiresAt`,
   `createdAt`, `expiresAt`, `clientName`.
+- Payloady obrazów są redagowane z `before`, `after`, `diff`, podglądów i cache replay;
+  odpowiedzi zachowują hash i rozmiar. Jawny odczyt screenów z `includeImages=true` opisuje
+  [MCP.md](MCP.md) i pozostaje osobnym, opt-in narzędziem.
 - Propozycje wygasłe są oznaczane jako `expired` przy odczycie.
 
 ### 3.22. `POST /api/mcp/proposals/decide`
@@ -538,7 +544,8 @@ Zatwierdzenie lub odrzucenie propozycji MCP.
 
 - Wymaga sesji panelu, `Origin` zgodnego z aplikacją i rate limitu 60/min.
 - `approve` wykonuje transakcję MySQL z `SELECT ... FOR UPDATE`, sprawdza `base_revision`,
-  target, TTL i rozmiar stanu, inkrementuje `revision` i zapisuje audyt.
+  target, TTL i rozmiar stanu, zapisuje audyt; `revision` rośnie tylko wtedy, gdy stan faktycznie
+  się zmienił.
 - `reject` nie zmienia `user_states`.
 - Błędy: `not_found` (404), `proposal_closed` (409), `proposal_expired` (409),
   `revision_conflict` (409), `state_too_large` (413).

@@ -63,6 +63,9 @@ final class OKXProvider extends AbstractProvider
                 $trades[] = $trade;
             }
         } catch (IntegrationException $err) {
+            if (in_array($err->errorCode, ['history_page_limit', 'history_cursor_missing'], true)) {
+                throw $err;
+            }
             $errors[] = $err;
         }
 
@@ -71,6 +74,9 @@ final class OKXProvider extends AbstractProvider
                 $trades[] = $trade;
             }
         } catch (IntegrationException $err) {
+            if (in_array($err->errorCode, ['history_page_limit', 'history_cursor_missing'], true)) {
+                throw $err;
+            }
             $errors[] = $err;
         }
 
@@ -115,11 +121,23 @@ final class OKXProvider extends AbstractProvider
             if (count($rows) < 100) {
                 break;
             }
-            $last = $rows[count($rows) - 1];
-            $after = (string) ($last['posId'] ?? '');
-            if ($after === '') {
-                break;
+            if ($page === 9) {
+                throw new IntegrationException(
+                    'history_page_limit',
+                    'Historia pozycji OKX przekroczyła limit stron. Zawęź zakres dat i uruchom synchronizację ponownie.',
+                    502
+                );
             }
+            $last = $rows[count($rows) - 1];
+            $nextAfter = trim((string) ($last['posId'] ?? ''));
+            if ($nextAfter === '' || $nextAfter === $after) {
+                throw new IntegrationException(
+                    'history_cursor_missing',
+                    'OKX zwrócił pełną stronę historii pozycji bez poprawnego kursora. Synchronizacja nie zapisała niepełnych danych.',
+                    502
+                );
+            }
+            $after = $nextAfter;
         }
         return $out;
     }
@@ -181,11 +199,23 @@ final class OKXProvider extends AbstractProvider
             if (count($rows) < 100) {
                 break;
             }
-            $last = $rows[count($rows) - 1];
-            $after = (string) ($last['billId'] ?? '');
-            if ($after === '') {
-                break;
+            if ($page === 9) {
+                throw new IntegrationException(
+                    'history_page_limit',
+                    'Historia transakcji spot OKX przekroczyła limit stron. Zawęź zakres dat i uruchom synchronizację ponownie.',
+                    502
+                );
             }
+            $last = $rows[count($rows) - 1];
+            $nextAfter = trim((string) ($last['billId'] ?? ''));
+            if ($nextAfter === '' || $nextAfter === $after) {
+                throw new IntegrationException(
+                    'history_cursor_missing',
+                    'OKX zwrócił pełną stronę historii transakcji spot bez poprawnego kursora. Synchronizacja nie zapisała niepełnych danych.',
+                    502
+                );
+            }
+            $after = $nextAfter;
         }
         return PositionReconstructor::build(array_values($this->uniqueFills($fills)), 'okx', $this->label());
     }

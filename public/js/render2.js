@@ -1230,7 +1230,7 @@
       AV.openModal('<div class="eyebrow">Import · podgląd</div><h1 style="font-size:26px;margin-top:6px">' + parsed.length + ' ' + AV.plural(parsed.length, 'transakcja', 'transakcje', 'transakcji') + '</h1>' +
         '<p class="mut" style="margin-top:8px;font-size:13.5px">Sprawdź pierwsze wiersze. Duplikaty (data + para + wejście) zostaną pominięte.</p>' +
         '<div style="overflow-x:auto;margin-top:14px"><table><thead><tr><th>Data</th><th>Para</th><th>Kier.</th><th>Wejście</th><th>Wyjście</th><th>Wynik</th></tr></thead><tbody>' +
-        parsed.slice(0, 8).map((t) => '<tr><td class="mono dim">' + AV.dateTimeShort(t.date) + '</td><td><b>' + AV.esc(t.pair) + '</b></td><td>' + (t.dir === 'l' ? 'LONG' : 'SHORT') + '</td><td class="mono">' + AV.esc(t.entry) + '</td><td class="mono">' + AV.esc(t.exit) + '</td><td class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : '') + '">' + (t.result == null ? '—' : AV.signed(t.result, 2, '')) + '</td></tr>').join('') +
+        parsed.slice(0, 8).map((t) => '<tr><td class="mono dim">' + AV.dateTimeShort(t.date) + '</td><td><b>' + AV.esc(t.pair) + '</b></td><td>' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</td><td class="mono">' + AV.esc(t.entry) + '</td><td class="mono">' + AV.esc(t.exit) + '</td><td class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : '') + '">' + (t.result == null ? '—' : AV.signed(t.result, 2, '')) + '</td></tr>').join('') +
         '</tbody></table></div><div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px"><button class="btn g" data-gclose>Anuluj</button><button class="btn p" id="importGo">Importuj ' + parsed.length + '</button></div>');
       $('#importGo').onclick = () => {
         let added = 0;

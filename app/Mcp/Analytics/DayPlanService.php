@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace AlphaVault\Mcp\Analytics;
 
 use AlphaVault\Integrations\Normalizer;
+use AlphaVault\TradeRules;
 use AlphaVault\Mcp\Support\Dates;
 use AlphaVault\Mcp\Support\DayPlanLevels;
 use AlphaVault\Mcp\Support\DayPlanRecords;
@@ -518,7 +519,7 @@ final class DayPlanService
             $reasons[] = 'market_not_in_plan';
         }
         $bias = (string) ($plan['bias'] ?? 'none');
-        $direction = (string) ($trade['dir'] ?? 'l') === 's' ? 'short' : 'long';
+        $direction = TradeRules::normalizeDirection($trade['dir'] ?? 'l') === 's' ? 'short' : 'long';
         if ($bias === 'long' || $bias === 'short') {
             if ($bias !== $direction) {
                 $reasons[] = 'direction_against_bias';
@@ -601,7 +602,7 @@ final class DayPlanService
                 'planId' => $plan !== null ? $planId : null,
                 'date' => (string) ($trade['date'] ?? ''),
                 'pair' => (string) ($trade['pair'] ?? ''),
-                'direction' => (string) ($trade['dir'] ?? 'l') === 's' ? 'short' : 'long',
+                'direction' => TradeRules::normalizeDirection($trade['dir'] ?? 'l') === 's' ? 'short' : 'long',
                 'result' => $trade['result'] !== null ? Numbers::round((float) $trade['result']) : null,
                 'determined' => $determined,
                 'aligned' => $isAligned,
@@ -692,7 +693,7 @@ final class DayPlanService
             'localDate' => $local['date'],
             'localTime' => $local['time'],
             'pair' => (string) ($trade['pair'] ?? ''),
-            'direction' => (string) ($trade['dir'] ?? 'l') === 's' ? 'short' : 'long',
+            'direction' => TradeRules::normalizeDirection($trade['dir'] ?? 'l') === 's' ? 'short' : 'long',
             'entry' => $trade['entry'] ?? null,
             'exit' => $trade['exit'] ?? null,
             'stopLoss' => $trade['sl'] ?? null,

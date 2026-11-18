@@ -51,10 +51,10 @@ php app/db/migrate.php
 php -S 127.0.0.1:4173 -t public public/router.php
 
 npm ci
-npm test                 # API: 23 scenariusze
+npm test                 # API: SL/source także przez kosz, data/closedAt, legacy close, fixture cleanup i no-op revision/updatedAt
 npm run test:prop        # silnik prop challenge: 27 scenariuszy
 npm run test:router      # adresy podstron (hash routing): 18 scenariuszy
-npm run test:ui          # UI: rozwijane konta, wiele planów, historyczna checklista bez fikcyjnych wyborów, wymagany SL, elastyczne R:R, result-only close bez fabrykowanej ceny wyjścia, pusty wynik jako otwarty, eksport CSV z MAE/MFE, dziennik niezależny od statystyk
+npm run test:ui          # UI: rozwijane konta, wiele planów, wymagany SL, błąd zapisu zamknięcia, API round-trip i fixture cleanup
 npm run test:tax         # PIT-38: 8 scenariuszy (MySQL + UI)
 npm run test:isolation   # izolacja użytkowników: 9 scenariuszy
 npm run test:pwa         # PWA mobile: manifest, offline, brak przepełnienia 390/1024 px
@@ -66,8 +66,8 @@ npm run test:demo-state  # daty fixture demo: 15 scenariuszy
 npm run test:roles       # rola: login + cron recheck: 18 scenariuszy
 npm run test:wearables   # urządzenia zdrowotne API + UI: 42 scenariusze
 npm run test:mcp          # MCP 3.2: OAuth, 79 narzędzi w jednym zakresie, create→delete→restore (MySQL + PHP)
-npm run test:mcp:tools    # MCP: 79/79 wywołań narzędzi, odizolowane fixture'y, daty/paginacja, zapisy, analityka i workflow
-npm run test:mcp:write    # MCP: operacje zapisu, wymagany SL, MFE pominięte/null, wiele planów, round-trip poziomów
+npm run test:mcp:tools    # MCP: 79/79 wywołań, no-op bez rewizji, zamrożony snapshot, revision replay i redakcja screenów
+npm run test:mcp:write    # MCP: klucze idempotencji 8–120 znaków, stabilne hashe screenów, legacy close, kosz, precyzja i redakcja
 npm run test:mcp:contract # MCP: selektory, statusy i zgodność planów, filtry statystyk oraz checklisty
 npm run test:mcp:login    # mock Discord: rola, brak roli, duplikat konta
 npm run test:mcp:ui       # panel propozycji: diff, kod do rozmowy, approve, reject, reload
@@ -149,4 +149,4 @@ npm run test:integrations
 npm run test:ui:integrations
 ```
 
-Wymagają lokalnego mocka (`tests/fixtures/mock-providers.php`) i MySQL z `tests/config.test.json`. Szczegóły: [docs/TESTOWANIE.md](docs/TESTOWANIE.md).
+Test integracji obejmuje atomowość importu, batch 501 rekordów oraz limity stron i brak kursora OKX. CI generuje `tests/config.integrations.json` z bazowej konfiguracji testowej; lokalny AV-engineer nie uruchamia testów. Test wymaga mocka (`tests/fixtures/mock-providers.php`) i izolowanej bazy CI. Szczegóły: [docs/TESTOWANIE.md](docs/TESTOWANIE.md).

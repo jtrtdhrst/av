@@ -143,6 +143,8 @@ try {
   await page.click('#demoEnter');
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('#auth')?.classList.contains('hide'));
+  // Wyłącz tła.
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
 
   const layout = await page.evaluate(() => ({
     width: window.innerWidth,
@@ -212,11 +214,39 @@ try {
   log('powiadomienia włączone', /włączone/i.test(notifyLabel), notifyLabel);
 
   // 5. Powiadomienie po zamknięciu transakcji
-  const openTrade = await page.evaluate(() => AV.state.trades.find((trade) => trade.result == null)?.id);
-  assert.ok(openTrade, 'brak otwartej transakcji w stanie demo');
+  const openTrade = await page.evaluate(() => AV.state.trades.find((t) => t.result == null
+    && Number(AV.pnum(t.entry)) > 0 && Number(AV.pnum(t.size)) > 0
+    && String(t.sl || '').trim() !== '' && String(t.sl || '').trim() !== 'brak')?.id);
+  assert.ok(openTrade, 'brak otwartej transakcji z poprawnym SL w stanie demo');
+  // Ustabilizuj zapisy: początkowy push stanu demo może utknąć w pętli 409,
+  // przez co closeTradeModal przerwałby się na waitForPushIdle. Wyczyść
+  // harmonogram i zsynchronizuj rewizję przed zamknięciem.
+  await page.evaluate(async () => {
+    clearTimeout(AV._pushTimer);
+    await AV.waitForPushIdle(15000);
+    clearTimeout(AV._pushTimer);
+    AV.api.pushing = false;
+    AV.api.dirty = false;
+    const response = await AV.apiFetch('/api/state');
+    if (response.ok) AV.api.revision = (await response.json()).revision;
+  });
   await page.evaluate((id) => AV.closeTradeModal(id), openTrade);
-  await page.fill('#ctResult', '12.34');
-  await page.click('#ctSave');
+  await page.evaluate(() => {
+    const result = document.getElementById('ctResult');
+    if (result) { result.value = '12.34'; result.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
+  await page.evaluate(() => document.getElementById('ctSave')?.click());
+  // Retry once with a freshly synced revision if the first save lost a race.
+  await page.waitForTimeout(700);
+  if (await page.evaluate((id) => AV.state.trades.find((x) => x.id === id)?.result == null, openTrade)) {
+    await page.evaluate(async () => {
+      await AV.waitForPushIdle();
+      const response = await AV.apiFetch('/api/state');
+      if (response.ok) AV.api.revision = (await response.json()).revision;
+    });
+    const retryBtn = await page.locator('#ctSave').count();
+    if (retryBtn) await page.evaluate(() => document.getElementById('ctSave')?.click());
+  }
   await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade);
   await page.waitForFunction(() => !!(AV.pwa && AV.pwa.lastNotification
     && AV.pwa.lastNotification.url.includes('qa=')

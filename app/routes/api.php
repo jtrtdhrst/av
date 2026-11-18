@@ -29,6 +29,20 @@ function av_integration_sync_state(Config $config, Db $db): ?array
     }
 }
 
+function av_state_updated_at(mixed $value): ?string
+{
+    if (!is_string($value) || trim($value) === '') {
+        return null;
+    }
+    try {
+        return (new \DateTimeImmutable($value, new \DateTimeZone('UTC')))
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format('Y-m-d\TH:i:s\Z');
+    } catch (\Throwable) {
+        return null;
+    }
+}
+
 function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string $method, string $path): void
 {
     if (str_starts_with($path, '/api/mcp')) {
@@ -132,7 +146,7 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                 if ($demo !== false) {
                     $demo = \AlphaVault\DemoState::shiftToToday($demo) ?? $demo;
                     $db->execute(
-                        'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?) ON DUPLICATE KEY UPDATE state = VALUES(state)',
+                        'INSERT IGNORE INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
                         [$current['id'], $demo, strlen($demo)]
                     );
                     $row = $db->queryOne('SELECT state, revision, bytes, updated_at FROM user_states WHERE user_id = ?', [$current['id']]);
@@ -152,13 +166,16 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                     $json = json_encode($repaired, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                     if ($json !== false) {
                         $affected = $db->execute(
-                            'UPDATE user_states SET state = ?, bytes = ? WHERE user_id = ? AND revision = ?',
-                            [$json, strlen($json), $current['id'], (int) $row['revision']]
-                        );
-                        if ($affected > 0) {
-                            $auth->audit((int) $current['id'], 'state.repair_encoding', ['bytes' => strlen($json)]);
-                            $row['bytes'] = strlen($json);
-                            $state = $repaired;
+                        'UPDATE user_states SET state = ?, revision = revision + 1, bytes = ? WHERE user_id = ? AND revision = ?',
+                        [$json, strlen($json), $current['id'], (int) $row['revision']]
+                    );
+                    if ($affected > 0) {
+                        $auth->audit((int) $current['id'], 'state.repair_encoding', ['bytes' => strlen($json)]);
+                        $row = $db->queryOne(
+                            'SELECT state, revision, bytes, updated_at FROM user_states WHERE user_id = ?',
+                            [$current['id']]
+                        ) ?? $row;
+                        $state = $repaired;
                         } else {
                             $latest = $db->queryOne(
                                 'SELECT state, revision, bytes, updated_at FROM user_states WHERE user_id = ?',
@@ -179,7 +196,7 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                 'state' => $state,
                 'revision' => (int) $row['revision'],
                 'bytes' => (int) $row['bytes'],
-                'updatedAt' => $row['updated_at'],
+                'updatedAt' => av_state_updated_at($row['updated_at'] ?? null),
                 'userId' => (int) $current['id'],
             ]);
         }
@@ -211,6 +228,38 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                 ], 409);
             }
             $state = Encoding::repairValue($state);
+            $state = TradeRules::normalizeTradeState($state);
+            $existing = $db->queryOne('SELECT state, revision, bytes, updated_at FROM user_states WHERE user_id = ?', [$current['id']]);
+            $baseRevision = isset($body['baseRevision']) && is_numeric($body['baseRevision'])
+                ? (int) $body['baseRevision']
+                : null;
+            if ($existing !== null && $baseRevision !== null && $baseRevision !== (int) $existing['revision']) {
+                Http::json([
+                    'error' => 'revision_conflict',
+                    'message' => 'Dane zmienione w innej karcie.',
+                    'revision' => (int) $existing['revision'],
+                    'userId' => (int) $current['id'],
+                ], 409);
+            }
+            $beforeState = [];
+            if ($existing !== null) {
+                $beforeState = json_decode((string) $existing['state'], true);
+                if (!is_array($beforeState)) {
+                    Http::json([
+                        'error' => 'state_corrupt',
+                        'message' => 'Nie można bezpiecznie zweryfikować poprzedniego stanu.',
+                    ], 409);
+                }
+                $beforeState = TradeRules::normalizeTradeState($beforeState);
+            }
+            $tradeViolation = TradeRules::validateTransition($beforeState, $state);
+            if ($tradeViolation !== null) {
+                Http::json([
+                    'error' => (string) $tradeViolation['error'],
+                    'message' => (string) $tradeViolation['message'],
+                    'tradeId' => $tradeViolation['tradeId'] ?? null,
+                ], (int) ($tradeViolation['status'] ?? 422));
+            }
             $json = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             if ($json === false) {
                 Http::json(['error' => 'bad_state', 'message' => 'Nie można zakodować stanu.'], 400);
@@ -224,25 +273,61 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                     'limit' => $config->maxStateBytes,
                 ], 413);
             }
-            $existing = $db->queryOne('SELECT revision FROM user_states WHERE user_id = ?', [$current['id']]);
+            $stateChanged = $existing === null
+                || !\AlphaVault\Mcp\Support\RecordDiff::sameState($beforeState, $state);
+            if ($existing !== null && !$stateChanged) {
+                $pdo = $db->pdo();
+                $pdo->beginTransaction();
+                try {
+                    $latest = $db->queryOne(
+                        'SELECT revision, bytes, updated_at FROM user_states WHERE user_id = ? FOR UPDATE',
+                        [$current['id']]
+                    );
+                    if ($latest === null || (int) $latest['revision'] !== (int) $existing['revision']) {
+                        $pdo->rollBack();
+                        Http::json([
+                            'error' => 'revision_conflict',
+                            'message' => 'Dane zmienione w innej karcie.',
+                            'revision' => (int) ($latest['revision'] ?? 0),
+                            'userId' => (int) $current['id'],
+                        ], 409);
+                    }
+                    $pdo->commit();
+                } catch (\Throwable $err) {
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+                    throw $err;
+                }
+                Http::json([
+                    'ok' => true,
+                    'revision' => (int) $latest['revision'],
+                    'bytes' => (int) $latest['bytes'],
+                    'updatedAt' => av_state_updated_at($latest['updated_at'] ?? null),
+                    'userId' => (int) $current['id'],
+                ]);
+            }
             if ($existing === null) {
-                $db->execute(
-                    'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
-                    [$current['id'], $json, $bytes]
-                );
+                try {
+                    $db->execute(
+                        'INSERT INTO user_states (user_id, state, revision, bytes) VALUES (?, ?, 1, ?)',
+                        [$current['id'], $json, $bytes]
+                    );
+                } catch (\PDOException $error) {
+                    $errorInfo = $error->errorInfo ?? [];
+                    if ((int) ($errorInfo[1] ?? 0) !== 1062) {
+                        throw $error;
+                    }
+                    $latest = $db->queryOne('SELECT revision FROM user_states WHERE user_id = ?', [$current['id']]);
+                    Http::json([
+                        'error' => 'revision_conflict',
+                        'message' => 'Dane zapisano równolegle w innej karcie lub przez inną integrację.',
+                        'revision' => (int) ($latest['revision'] ?? 0),
+                        'userId' => (int) $current['id'],
+                    ], 409);
+                }
                 $auth->audit((int) $current['id'], 'state.create', ['bytes' => $bytes, 'revision' => 1]);
                 Http::json(['ok' => true, 'revision' => 1, 'bytes' => $bytes, 'updatedAt' => gmdate('Y-m-d\TH:i:s\Z'), 'userId' => (int) $current['id']]);
-            }
-            $baseRevision = isset($body['baseRevision']) && is_numeric($body['baseRevision'])
-                ? (int) $body['baseRevision']
-                : null;
-            if ($baseRevision !== null && $baseRevision !== (int) $existing['revision']) {
-                Http::json([
-                    'error' => 'revision_conflict',
-                    'message' => 'Dane zmienione w innej karcie.',
-                    'revision' => (int) $existing['revision'],
-                    'userId' => (int) $current['id'],
-                ], 409);
             }
             $nextRevision = (int) $existing['revision'] + 1;
             $affected = $db->execute(
@@ -289,7 +374,7 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
             $payload = [
                 'user' => $auth->publicUser($current),
                 'revision' => (int) ($row['revision'] ?? 0),
-                'updatedAt' => $row['updated_at'] ?? null,
+                'updatedAt' => av_state_updated_at($row['updated_at'] ?? null),
                 'state' => is_array($state) ? $state : null,
             ];
             http_response_code(200);

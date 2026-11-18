@@ -631,6 +631,7 @@
     clearTimeout(AV._pushTimer);
     if (AV.api.pushing) { AV.api.dirty = true; return false; }
     AV.api.pushing = true;
+    let succeeded = false;
     try {
       const res = await AV.apiFetch('/api/state', {
         method: 'PUT',
@@ -645,6 +646,24 @@
           if (payload.userId && Number(payload.userId) !== Number(AV.currentUserId)) {
             AV.forceSessionReset('Sesja w tej karcie należy do innego konta. Odśwież stronę.');
             return false;
+          }
+          // Conflict caused by a stale revision (another tab / background
+          // sync): retry once with the fresh revision, keeping local changes.
+          // This makes a just-executed user action (e.g. closing a trade)
+          // survive a benign race instead of being silently reverted.
+          if (typeof payload.revision === 'number') {
+            AV.api.revision = payload.revision;
+            const retry = await AV.apiFetch('/api/state', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ state: AV.state, baseRevision: AV.api.revision, ownerId: AV.currentUserId })
+            });
+            if (retry.ok) {
+              const retryPayload = await retry.json();
+              if (typeof retryPayload.revision === 'number') AV.api.revision = retryPayload.revision;
+              succeeded = true;
+              return true;
+            }
           }
           if (payload.state) {
             AV.state = AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo });
@@ -676,6 +695,7 @@
       AV.api.lastError = null;
       AV.api.saveError = null;
       AV.updateEnvBadge();
+      succeeded = true;
       return true;
     } catch (err) {
       AV.api.lastError = err.message;
@@ -689,7 +709,14 @@
       return false;
     } finally {
       AV.api.pushing = false;
-      if (AV.api.dirty) { AV.api.dirty = false; setTimeout(() => AV.pushStateImmediate(), 250); }
+      // Only reschedule when the last write actually landed. Rescheduling after
+      // a failed/conflicted PUT starts another PUT with the same stale revision,
+      // producing an endless 409 loop that can overwrite a just-closed trade.
+      if (succeeded && AV.api.dirty) {
+        AV.api.dirty = false;
+        clearTimeout(AV._pushTimer);
+        AV._pushTimer = setTimeout(() => AV.pushStateImmediate(), 250);
+      }
     }
   };
 
@@ -944,7 +971,32 @@
   };
   AV.hasKnownTradeResult = hasKnownTradeResult;
   AV.closedTrades = (state) => AV.includedTrades(state).filter(hasKnownTradeResult);
-  AV.openTrades = (state) => AV.includedTrades(state).filter((t) => !hasKnownTradeResult(t));
+  AV.tradeDirection = (direction) => {
+    const value = String(direction ?? '').trim().toLowerCase();
+    if (value === 'l' || value === 'long') return 'l';
+    if (value === 's' || value === 'short') return 's';
+    return null;
+  };
+  AV.isTradeClosed = (trade) => {
+    if (!trade) return false;
+    if (trade.result != null && !(typeof trade.result === 'string' &&
+      ['', 'brak', '—', '-'].includes(trade.result.trim().toLowerCase()))) return true;
+    if (typeof trade.closedAt !== 'string') return false;
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|([+-])(\d{2}):(\d{2}))$/.exec(trade.closedAt);
+    if (!match) return false;
+    const [, yearText, monthText, dayText, hourText, minuteText, secondText, , , offsetHourText, offsetMinuteText] = match;
+    const year = Number(yearText), month = Number(monthText), day = Number(dayText);
+    const hour = Number(hourText), minute = Number(minuteText), second = Number(secondText);
+    const offsetHour = Number(offsetHourText || 0), offsetMinute = Number(offsetMinuteText || 0);
+    if (year < 1 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59
+      || offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) return false;
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (day < 1 || day > daysInMonth[month - 1]) return false;
+    return Number.isFinite(Date.parse(trade.closedAt));
+  };
+  AV.lifecycleClosedTrades = (state) => AV.includedTrades(state).filter((trade) => AV.isTradeClosed(trade));
+  AV.openTrades = (state) => AV.includedTrades(state).filter((t) => !AV.isTradeClosed(t));
 
   AV.rangeTrades = (state, days) => {
     const all = AV.includedTrades(state).filter(hasKnownTradeResult);
@@ -1088,6 +1140,7 @@
     const pnl = closed.reduce((s, t) => s + t.result, 0);
     const losses = closed.filter((t) => t.result < 0).length;
     const risk = arr.reduce((s, t) => {
+      if (AV.isTradeClosed(t)) return s;
       if (t.result != null && t.r) return s + Math.abs(t.result / t.r);
       const entry = AV.pnum(t.entry), sl = AV.pnum(t.sl);
       const size = AV.pnum(t.size);
@@ -1508,8 +1561,9 @@
   };
   AV.planMatchesTrade = (plan, pair, dir) => {
     if (!plan || !plan.approvedAt || !AV.marketMatchesPlan(plan, pair)) return false;
-    if (plan.bias === 'long') return dir === 'l';
-    if (plan.bias === 'short') return dir === 's';
+    const direction = AV.tradeDirection(dir);
+    if (plan.bias === 'long') return direction === 'l';
+    if (plan.bias === 'short') return direction === 's';
     return false;
   };
   AV.tradePlanMatch = (state, trade) => {

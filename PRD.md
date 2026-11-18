@@ -4,8 +4,8 @@
 | --- | --- |
 | Produkt | Alpha Vault — prywatna strefa tradera Alpha Moves |
 | Domena | <https://alphavault.pl> |
-| Wersja dokumentu | 3.2 |
-| Data | 2026-11-16 |
+| Wersja dokumentu | 3.3 |
+| Data | 2026-11-17 |
 | Właściciel produktu | Alpha Moves |
 | Odbiorca | agent **AV-engineer**, zespół techniczny |
 | Status | wymagania produktu; odnotowany stan produkcji znajduje się w §11 |
@@ -256,6 +256,15 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 - MCP może tylko zaostrzać reguły ryzyka; nie podnosi limitów i nie wyłącza zabezpieczeń. Nazwy pól z `get_risk_rules` są akceptowane w `update_risk_rules`.
 - `MCP_WRITES_ENABLED=false` ukrywa 33 narzędzia zapisu (zostaje 46 odczytu) bez zmiany zakresów OAuth. `MCP_PILOT_DISCORD_IDS` opcjonalnie ogranicza zapis do wybranych kont; ekran zgody komunikuje oba warunki.
 
+### FR-22 — Integralność zapisu transakcji, importu i propozycji
+
+- API i MCP walidują przejście stanu przez wspólne `TradeRules`; importer waliduje każdy kanoniczny rekord tą samą regułą. Pole `source` podane przez klienta ani nowy wpis w koszu nie zwalniają z wymogu SL. Nowa transakcja ręczna wymaga prawidłowego SL, a zaufany importer może zachować brak SL, jeśli giełda go nie dostarcza.
+- Istniejący ręczny wpis historyczny bez SL może zostać zamknięty tylko bez zmiany pól bazowych wykonania. Puste `result` normalizuje się do `null`; każdy znany wynik liczbowy, w tym `result=0`, oznacza zamknięcie. Brak `closedAt` pozostaje nieznany; system nie uzupełnia czasu wstecz.
+- Walidacja odrzucona i semantyczny no-op nie zmieniają stanu ani rewizji; no-op zachowuje również `updatedAt`.
+- Sync jednego połączenia giełdowego jest atomowy dla transakcji, stanu, rewizji i markerów deduplikacji. Batch przekraczający 500 rekordów jest obsługiwany, a błąd rekordu wycofuje cały batch. Osiągnięcie limitu stron albo pełna strona bez poprawnego kursora zgłasza błąd zamiast cichego ucięcia.
+- Import zachowuje czas zamknięcia ze źródła i zapisuje `importedAt` w UTC.
+- Propozycja MCP `write_op` utrwala kompletny snapshot i podgląd; zatwierdzenie stosuje go tylko przy zgodnej rewizji, bez ponownego wykonania operacji ani rebase. Payloady obrazów są redagowane w odpowiedziach zapisu, diffach i propozycjach; jawny odczyt screenów pozostaje opt-in.
+
 ## 7. Wymagania niefunkcjonalne
 
 | Obszar | Wymaganie |
@@ -295,6 +304,9 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | AC-17 | Gotowość łączy urządzenie z check-inem i czyści się po odłączeniu | test API + UI E2E |
 | AC-18 | Tokeny dostawców nie są widoczne w API ani logach | test odpowiedzi API + audyt |
 | AC-19 | Kalendarz makro i widget korzystają z DB oraz są odporne na błąd feedu | `npm run test:macro` (okna FF/TV, granice i soft delete) + API/UI E2E |
+| AC-20 | Walidacja API/MCP/importu nie pozwala ominąć SL przez `source`; legacy close zachowuje nieznany `closedAt`, a każdy znany wynik liczbowy (w tym `0`) zamyka wpis | `tests/api.e2e.mjs`, `tests/mcp-write.test.php`, `tests/integrations.e2e.mjs` |
+| AC-21 | No-op nie podnosi rewizji ani `updatedAt`; batch 501 rekordów jest atomowy, ma markery i źródłowy czas zamknięcia oraz UTC `importedAt`; limit stron i brak kursora nie prowadzą do częściowego importu | API + integracje E2E w CI |
+| AC-22 | `write_op` stosuje zamrożony snapshot tylko przy zgodnej rewizji; obrazy nie wyciekają przez zapis, diff, preview ani replay | MCP unit/E2E w CI |
 
 ## 9. Metryki sukcesu
 
@@ -361,3 +373,4 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | FR-15 | [docs/API.md](docs/API.md) |
 | FR-16 | [DOCUMENTATION.md §17](DOCUMENTATION.md#17-zarządzanie-dokumentacją), [AGENTS.md](AGENTS.md) |
 | FR-19 | [docs/PROP.md](docs/PROP.md), [docs/FUNKCJE.md](docs/FUNKCJE.md) |
+| FR-22 | [DOCUMENTATION.md §5](DOCUMENTATION.md#5-stan-aplikacji), [docs/API.md](docs/API.md), [docs/MCP.md](docs/MCP.md), [docs/TESTOWANIE.md](docs/TESTOWANIE.md) |

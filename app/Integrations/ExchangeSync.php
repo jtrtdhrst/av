@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace AlphaVault\Integrations;
 
 use AlphaVault\Db;
+use AlphaVault\TradeRules;
 
 /**
  * Orkiestracja synchronizacji: pobranie transakcji, scalenie ze stanem użytkownika,
@@ -142,9 +143,6 @@ final class ExchangeSync
         if ($trades === []) {
             return ['imported' => 0, 'skipped' => 0];
         }
-        $max = 500;
-        $trades = array_slice($trades, 0, $max);
-
         return $this->db->withTransaction(function (Db $db) use ($userId, $provider, $trades, $label): array {
             $row = $db->queryOne('SELECT state, revision FROM user_states WHERE user_id = ? FOR UPDATE', [$userId]);
             if ($row === null) {
@@ -176,11 +174,16 @@ final class ExchangeSync
             }
             if ($wanted !== []) {
                 $wantedIds = array_keys($wanted);
-                $placeholders = implode(',', array_fill(0, count($wantedIds), '?'));
-                $imports = $db->query(
-                    'SELECT external_id FROM exchange_imports WHERE user_id = ? AND provider = ? AND external_id IN (' . $placeholders . ')',
-                    array_merge([$userId, $provider], $wantedIds)
-                );
+                foreach (array_chunk($wantedIds, 500) as $chunk) {
+                    $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+                    array_push(
+                        $imports,
+                        ...$db->query(
+                            'SELECT external_id FROM exchange_imports WHERE user_id = ? AND provider = ? AND external_id IN (' . $placeholders . ')',
+                            array_merge([$userId, $provider], $chunk)
+                        )
+                    );
+                }
             }
             foreach ($imports as $import) {
                 $existing[(string) $import['external_id']] = true;
@@ -209,7 +212,18 @@ final class ExchangeSync
                     continue;
                 }
                 $tradeId = 'tr' . bin2hex(random_bytes(5));
-                $stateTrades[] = $this->stateTrade($trade, $extId, $tradeId, $label, $accountName);
+                $mappedTrade = $this->stateTrade($trade, $extId, $tradeId, $label, $accountName);
+                // Imported positions often have no SL at the source. This is a
+                // trusted importer exception, never inferred from client fields.
+                $violation = TradeRules::validate($mappedTrade, allowMissingStopLoss: true);
+                if ($violation !== null) {
+                    throw new IntegrationException(
+                        'invalid_trade',
+                        'Importowana transakcja jest nieprawidłowa: ' . (string) $violation['message'],
+                        (int) ($violation['status'] ?? 422)
+                    );
+                }
+                $stateTrades[] = $mappedTrade;
                 $db->execute(
                     'INSERT IGNORE INTO exchange_imports (user_id, provider, external_id, trade_id, imported_at) VALUES (?, ?, ?, ?, NOW())',
                     [$userId, $provider, $extId, $tradeId]
@@ -284,18 +298,18 @@ final class ExchangeSync
     private function stateTrade(array $trade, string $extId, string $tradeId, string $label, string $accountName): array
     {
         $date = (string) $trade['date'];
-        $timestamp = strtotime($date);
         return [
             'id' => $tradeId,
             'date' => $date,
+            'closedAt' => $date,
             'pair' => (string) $trade['pair'],
-            'dir' => ($trade['dir'] ?? 'l') === 's' ? 's' : 'l',
+            'dir' => TradeRules::normalizeDirection($trade['dir'] ?? null) ?? (string) ($trade['dir'] ?? ''),
             'entry' => (string) ($trade['entry'] ?? ''),
             'exit' => (string) ($trade['exit'] ?? ''),
             'sl' => '',
             'tp' => '',
             'size' => (string) ($trade['size'] ?? ''),
-            'result' => round((float) $trade['result'], 8),
+            'result' => (float) $trade['result'],
             'r' => null,
             'grade' => '',
             'checklist' => null,
@@ -315,7 +329,7 @@ final class ExchangeSync
             'account' => $accountName,
             'screens' => (object) [],
             'extId' => $extId,
-            'importedAt' => $timestamp !== false ? gmdate('Y-m-d\TH:i:s\Z', $timestamp) : gmdate('Y-m-d\TH:i:s\Z'),
+            'importedAt' => gmdate('Y-m-d\TH:i:s\Z'),
         ];
     }
 

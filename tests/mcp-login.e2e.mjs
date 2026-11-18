@@ -317,6 +317,16 @@ $db->execute("DELETE FROM mcp_clients WHERE client_name = '${CLIENT_NAME}'");
   fs.unlinkSync(script);
 }
 
+const environmentGuard = spawnSync(PHP, [
+  ...PHP_ARGS,
+  path.join(ROOT, 'tests', 'mcp-helper.php'),
+  'assert-test-environment',
+], {
+  cwd: ROOT,
+  env: { ...process.env, ALPHA_VAULT_CONFIG: path.join(ROOT, 'tests', 'config.test.json') },
+  encoding: 'utf8',
+});
+assert.equal(environmentGuard.status, 0, `${environmentGuard.stdout}\n${environmentGuard.stderr}`);
 makeConfig();
 cleanup();
 const fake = await startFakeDiscord();

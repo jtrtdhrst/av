@@ -7,6 +7,8 @@ declare(strict_types=1);
  */
 
 $root = dirname(__DIR__);
+require_once __DIR__ . '/mcp-test-environment.php';
+mcpLoadIsolatedCiConfig($root);
 [$config, $db] = require $root . '/app/bootstrap.php';
 
 $userId = isset($argv[1]) ? (int) $argv[1] : 0;

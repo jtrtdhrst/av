@@ -24,12 +24,13 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Quotes tests | cache, TTL, fallback, E2E notowań |
 | Demo state tests | przesunięcie dat fixture demo, idempotencja, plany jako punkt zaczepienia |
 | Wearables E2E | OAuth2/PKCE, rotacja tokenów, UI, bezpieczeństwo |
-| API E2E | health, sesja, CSRF, stan, events, macro (kształt, impact i UTC), admin, eksport |
-| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia i poziomy, historyczna checklista przy zmianie konfiguracji, wymagany SL, import CSV bez fikcyjnych metryk/PnL, statystyki i niezależny kalendarz PnL |
+| API E2E | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, no-op zachowuje `revision` i ISO `updatedAt`, legacy close bez SL, stan, events, macro, admin, eksport i cleanup fixture |
+| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia i poziomy, historyczna checklista przy zmianie konfiguracji, wymagany SL, brak sukcesu przy błędzie zapisu zamknięcia i round-trip przez API, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup stanu fixture |
+| Integracje E2E | mocki OKX/BingX/WEEX/MetaApi/EA, batch 501, rollback, czas źródłowy/UTC, limit stron i brak kursora bez częściowego importu |
 | Tax E2E | PIT-38, CSV/PDF, wpłaty/wypłaty |
 | PWA E2E | manifest, SW, instalacja, push, offline |
 | UI empty-state E2E | puste pola po sukcesie z `[]` |
-| MCP unit/E2E | 79 narzędzi z runtime rejestru, regresje dat/metryk/transakcji, fixture'y testowe blokowane poza odizolowanym CI |
+| MCP unit/E2E | 79 narzędzi z runtime rejestru, klucze idempotencji 8–120 znaków, stabilny hash screenów przy zmianie kolejności kluczy JSON, screen `write_op` po MySQL round-trip, regresje dat/metryk/transakcji, semantyczny no-op bez zmiany rewizji, snapshot propozycji z kontrolą rewizji replay, redakcja screenów w odpowiedziach/diffach/replay, fixture'y testowe blokowane poza odizolowanym CI |
 | MCP deploy guard | tylko `main` lub pełny SHA z `main` z udanym `ci.yml` dla dokładnego SHA; health revision i liczba narzędzi |
 
 ## Podatki PIT-38 — 8 scenariuszy
@@ -390,3 +391,7 @@ npm run test:ui:integrations   # Playwright: formularze i dziennik
 Oba kroki są częścią `.github/workflows/ci.yml`. Lokalne uruchomienie jest dozwolone tylko dla developera i nie jest dowodem w raporcie AV-engineer.
 
 Zakres: OKX read-only i odrzucenie handlu, BingX `apiPermissions`, WEEX akceptacja klucza z handlem + rekonstrukcja fills, MetaApi `investorMode` i odrzucenie hasła z handlem, EA kod parowania + ingest + deduplikacja, UI formularze i licznik transakcji. Brak PnL w źródle pomija transakcję zamiast tworzyć break-even; jawne zero PnL i zerowa opłata pozostają znane (WEEX break-even po opłatach, BingX wynik `0` przy nieznanych opłatach i czasie).
+
+Regresje integralności: OKX importuje 501 rekordów w jednej rewizji, zapisuje `closedAt` ze źródła i UTC `importedAt`, a przekroczenie limitu stron lub pełna strona bez kursora kończy się jawnym błędem bez częściowego importu z żadnego źródła historii OKX. Wadliwy rekord wycofuje cały batch danego połączenia, stan, rewizję i markery deduplikacji. Testy integracji działają na odizolowanej bazie CI; reset startowy i końcowy musi zakończyć się kodem 0.
+
+API i UI E2E zapamiętują pełny stan serwerowego fixture i odtwarzają go po teście, również w ścieżce obsługi błędu; odtworzenie zwiększa rewizję. UI weryfikuje przywrócenie przez `/api/state`. To sprzątanie dotyczy wyłącznie odizolowanego konta demo CI, nie produkcji.

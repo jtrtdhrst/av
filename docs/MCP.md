@@ -102,20 +102,24 @@ Zasady odczytu:
   opisują stronicowanie po stabilnym sortowaniu czasu rozpoczęcia i ID,
 - zakresy dat `YYYY-MM-DD` obejmują cały dzień `Europe/Warsaw`; `from > to`
   jest odrzucane,
-- screeny zwracają metadane; obraz tylko po `includeImages=true` (limit 2, 200 KB),
+- screeny domyślnie zwracają metadane; obraz tylko po `includeImages=true` (domyślnie 1,
+  maks. 2 obrazy, 200 KB na obraz i 400 KB łącznie),
+- odpowiedzi zapisów, cache idempotencji, diffy, before/after i preview propozycji redagują
+  payloady obrazów do hash/rozmiaru; jawny odczyt z `includeImages=true` jest wyjątkiem opt-in,
 - dane giełdowe i `raw_payload` nie są udostępniane w surowej postaci.
 
 ## 4. Narzędzia zapisu (33)
 
 ### 4.1. Zapis bezpośredni (12)
 
-Wykonuje się od razu, w transakcji, i zwraca nowy `revision`.
+Wykonuje się od razu, w transakcji, i zwraca bieżący `revision`; zwiększa go tylko rzeczywista
+zmiana stanu. Semantyczny no-op nie tworzy nowej rewizji ani audytu mutacji.
 
 | Narzędzie | Operacja |
 | --- | --- |
 | `create_trade` | `trade.create` |
 | `update_trade` | `trade.update` (pola dziennika; MAE/MFE: nieujemna liczba albo `null` do wyczyszczenia; SL wymagany i nie można go usunąć; dane giełdowe zablokowane) |
-| `close_trade` | `trade.close` (wynik i R liczone serwerowo; pominięte `mfe` zachowuje zapisany pomiar, jawne nieujemne `mfe` aktualizuje, a `null` czyści) |
+| `close_trade` | `trade.close` (wymaga `result` lub `exitPrice`; gdy podano tylko `exitPrice`, serwer wylicza wynik. Jeśli podano oba, zapisuje jawny `result` bez sprawdzania zgodności z `exitPrice`; sam `result` pozostawia `exit` puste. Serwer wylicza R, ustawia `closedAt` i czas trwania; pominięte `mfe` zachowuje zapisany pomiar, jawne nieujemne `mfe` aktualizuje, a `null` czyści) |
 | `create_trade_review` | `review.create` |
 | `update_trade_review` | `review.update` |
 | `create_setup` | `setup.create` |
@@ -169,8 +173,8 @@ Każde wywołanie zapisu przyjmuje:
 
 | Pole | Wymagane | Znaczenie |
 | --- | --- | --- |
-| `idempotencyKey` | tak | 8-128 znaków; powtórka zwraca zapisaną odpowiedź z `duplicate: true` |
-| `expectedRevision` | nie | optimistic lock na `user_states.revision`; niezgodność = `revision_conflict` (409) |
+| `idempotencyKey` | tak | 8-120 znaków; powtórka zwraca zapisaną odpowiedź z `duplicate: true` |
+| `expectedRevision` | nie | optimistic lock na `user_states.revision`; niezgodność = `revision_conflict` (409); przy replayu `write_op` podana wartość musi zgadzać się z `baseRevision` propozycji |
 
 Odpowiedź bezpośrednia:
 
@@ -207,8 +211,18 @@ Odpowiedź propozycji:
 }
 ```
 
-Podgląd liczy ta sama funkcja co zapis (`WriteEngine::apply()`), więc diff nie
-może rozjechać się z wykonaniem. `revision` rośnie tylko przy realnym zapisie.
+Podgląd liczy ta sama funkcja co zapis (`WriteEngine::apply()`). Propozycja
+utrwala wygenerowany podgląd, pełny planowany stan i jego hash; zatwierdzenie
+stosuje ten zamrożony snapshot, nie uruchamia ponownie operacji. `diff` i
+`diffHash` obejmują także skutki uboczne w stanie, a zawartość screenów jest
+reprezentowana wyłącznie przez hash i rozmiar; hash mapy screenów nie zależy
+od kolejności kluczy JSON. Zgodna powtórka klucza zwraca
+pierwotny status, diff, hash i podgląd. `revision` rośnie tylko przy realnym
+zapisie. Powtórzenie propozycji `write_op` z tym samym `idempotencyKey`, ale
+innym podanym `expectedRevision` względem jej `baseRevision`, zwraca
+`revision_conflict`; replay z pierwotną rewizją zwraca istniejący wynik bez
+ponownego zastosowania zapisu. Ponieważ `expectedRevision` jest opcjonalne,
+jego pominięcie pozostawia replay bez porównania rewizji żądania.
 
 ## 6. Idempotencja, wersje i audyt
 
@@ -221,7 +235,12 @@ może rozjechać się z wykonaniem. `revision` rośnie tylko przy realnym zapisi
   odtwarzany tylko po zgodności statusu, diffu i — gdy użyto kodu — hasha kodu; stare decyzje,
   których treści nie da się zweryfikować, są odrzucane jako konflikt.
 - `expectedRevision` porównywane jest w transakcji `SELECT ... FOR UPDATE`.
-- Każdy zapis i decyzja trafia do `mcp_audit` (aktor, operacja, target, revision, zmiany).
+- Utworzenie propozycji blokuje użytkownika i sprawdza `baseRevision` razem z
+  zapisem propozycji. Zatwierdzenie stosuje snapshot wyłącznie przy zgodnej
+  rewizji; zmiana stanu oznacza `revision_conflict` i wymaga nowej propozycji
+  (bez rebase).
+- Każdy rzeczywisty zapis i decyzja trafia do `mcp_audit` (aktor, operacja, target, revision,
+  zmiany); semantyczny no-op i replay bezpośredniego zapisu nie tworzą wpisu audytu mutacji.
 - Propozycja ma `base_revision`; zatwierdzenie po zmianie stanu kończy się
   `revision_conflict` i wymaga nowej propozycji.
 
@@ -257,7 +276,7 @@ Agent → propose_change(operation, args) → propozycja pending + diffHash + pr
 Agent → pokazuje diff i pyta użytkownika wprost
 Użytkownik → „tak” w rozmowie
 Agent → approve_proposal(proposalId, expectedDiffHash, confirmed=true, idempotencyKey)
-Serwer → sprawdza diffHash, TTL i base_revision → zapis + revision
+Serwer → sprawdza diffHash, TTL i base_revision → stosuje zamrożony snapshot + revision
 ```
 
 - `confirmed: true` jest wymagane tylko dla `approve_proposal`; bez niego
@@ -278,8 +297,13 @@ Serwer → sprawdza diffHash, TTL i base_revision → zapis + revision
 | `mcp_idempotency` | case-sensitive klucz, fingerprint payloadu i odpowiedź zapisu na 24 h |
 | `mcp_audit` | ślad operacji agenta, użytkownika i systemu |
 
-`write_op` przechowuje `{op, args}`; zatwierdzenie uruchamia tę samą operację
-`WriteEngine`, więc wynik jest identyczny z podglądem. Typy historyczne
+`write_op` przechowuje `{op, args}`, `plannedPreview`, `plannedState` i hash
+stanu. Przy zatwierdzeniu serwer sprawdza snapshot, pełny diff i `base_revision`,
+a następnie zapisuje dokładnie `plannedState`; operacja nie jest wykonywana
+ponownie ani automatycznie rebazowana. Skutki uboczne poza rekordem docelowym
+wchodzą do diffu i `diffHash`; payloady screenów nie są ujawniane. Powtórka
+klucza zwraca zapisany status, diff, hash i podgląd bez dodatkowej mutacji.
+Typy historyczne
 (`manual_trade`, `trade_update`, `day_plan`, `checkin`, `setup`, `prop_challenge`,
 `account`, `capital_flow`, `risk_rules`, `trade_review`, `close_trade`) pozostają
 obsługiwane dla starszych wierszy.
@@ -309,6 +333,10 @@ obsługiwane dla starszych wierszy.
 | `not_found` / `*_missing` | 404 | brak rekordu |
 | `field_not_editable` | 400 | pole spoza kontraktu MCP |
 | `exchange_data_readonly` | 403 | dane wykonania transakcji giełdowej |
+| `closed_trade_execution_readonly` | 409 | próba zmiany pól wykonania zamkniętej transakcji |
+| `invalid_stop_loss` / `invalid_take_profit` | 422 | poziom po niewłaściwej stronie ceny wejścia |
+| `invalid_closed_at` | 422 | niepoprawny ISO 8601 `closedAt` |
+| `diff_mismatch` | 409 | utrwalony snapshot lub `expectedDiffHash` niezgodny z propozycją |
 | `risk_not_tightened` | 403 | próba poluzowania zabezpieczeń |
 | `confirmation_required` | 403 | brak `confirmed: true` albo aktywnego kodu |
 | `invalid_confirmation` | 403 | kod nieprawidłowy albo zużyty |
@@ -353,7 +381,7 @@ gh workflow run deploy-mcp.yml --repo miloszspyrka-code/av --ref main `
 | `php tests/mcp-tools.test.php` | statusy i selektory planów, dokładne dopasowanie rynku bez kolizji prefiksów, puste metryki API jako `null`, filtry kont i analityka |
 | `php tests/mcp.test.php` | propozycje i kod jednorazowy, wymagany SL, idempotencja decyzji, konflikt rewizji, zgodność ID `plan.create` z targetem, ochrona danych giełdowych, `target_missing`, izolacja i audyt |
 | `node tests/mcp.e2e.mjs` | OAuth, 79 narzędzi, gdy zapisy włączone, w przeciwnym razie 46 odczytu; cykl create → update → close → delete → restore, idempotencja, revision, `confirmed`, pilot |
-| `node tests/mcp-tools.e2e.mjs` | JSON-RPC: health-only consent, pełne cykle 33 narzędzi, selektory `planId`/`market`, MAE/MFE, pominięte vs jawne `null` przy zamknięciu, propozycje, kosz i workflow analityczne; odizolowane fixture'y i paginacja |
+| `node tests/mcp-tools.e2e.mjs` | JSON-RPC: health-only consent, pełne cykle 33 narzędzi, selektory `planId`/`market`, MAE/MFE, pominięte vs jawne `null` przy zamknięciu, semantyczny no-op bez zmiany rewizji, propozycje z kontrolą rewizji replay, kosz i workflow analityczne; odizolowane fixture'y i paginacja |
 | `node tests/deploy-mcp-guard.test.mjs` | odmowa niepełnego/niezaweryfikowanego SHA, PR/dispatch-only, złej gałęzi lub błędnego repo; wymóg checkoutu zatwierdzonego SHA i health provenance |
 | `node tests/mcp-login.e2e.mjs` | logowanie i panel MCP |
 
