@@ -214,9 +214,17 @@ try {
   // 5. Powiadomienie po zamknięciu transakcji
   const openTrade = await page.evaluate(() => AV.state.trades.find((trade) => trade.result == null)?.id);
   assert.ok(openTrade, 'brak otwartej transakcji w stanie demo');
+  // Synchronizuj rewizję: nowy closeTradeModal wykonuje pushStateImmediate i
+  // wycofuje zmianę przy 409, więc zapis musi użyć aktualnej rewizji.
+  await page.evaluate(async () => {
+    clearTimeout(AV._pushTimer);
+    await AV.waitForPushIdle();
+    const response = await AV.apiFetch('/api/state', { cache: 'no-store' });
+    if (response.ok) AV.api.revision = (await response.json()).revision;
+  });
   await page.evaluate((id) => AV.closeTradeModal(id), openTrade);
   await page.fill('#ctResult', '12.34');
-  await page.click('#ctSave');
+  await page.evaluate(() => document.getElementById('ctSave')?.click());
   await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade);
   await page.waitForFunction(() => !!(AV.pwa && AV.pwa.lastNotification
     && AV.pwa.lastNotification.url.includes('qa=')
