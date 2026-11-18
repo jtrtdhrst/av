@@ -631,6 +631,7 @@
     clearTimeout(AV._pushTimer);
     if (AV.api.pushing) { AV.api.dirty = true; return false; }
     AV.api.pushing = true;
+    let succeeded = false;
     try {
       const res = await AV.apiFetch('/api/state', {
         method: 'PUT',
@@ -660,6 +661,7 @@
             if (retry.ok) {
               const retryPayload = await retry.json();
               if (typeof retryPayload.revision === 'number') AV.api.revision = retryPayload.revision;
+              succeeded = true;
               return true;
             }
           }
@@ -693,6 +695,7 @@
       AV.api.lastError = null;
       AV.api.saveError = null;
       AV.updateEnvBadge();
+      succeeded = true;
       return true;
     } catch (err) {
       AV.api.lastError = err.message;
@@ -706,7 +709,14 @@
       return false;
     } finally {
       AV.api.pushing = false;
-      if (AV.api.dirty) { AV.api.dirty = false; setTimeout(() => AV.pushStateImmediate(), 250); }
+      // Only reschedule when the last write actually landed. Rescheduling after
+      // a failed/conflicted PUT starts another PUT with the same stale revision,
+      // producing an endless 409 loop that can overwrite a just-closed trade.
+      if (succeeded && AV.api.dirty) {
+        AV.api.dirty = false;
+        clearTimeout(AV._pushTimer);
+        AV._pushTimer = setTimeout(() => AV.pushStateImmediate(), 250);
+      }
     }
   };
 
