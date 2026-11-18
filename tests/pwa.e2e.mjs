@@ -219,7 +219,7 @@ try {
   await page.evaluate(async () => {
     clearTimeout(AV._pushTimer);
     await AV.waitForPushIdle();
-    const response = await AV.apiFetch('/api/state', { cache: 'no-store' });
+    const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
   });
   await page.evaluate((id) => AV.closeTradeModal(id), openTrade);
@@ -230,6 +230,13 @@ try {
   }, openTrade);
   console.log('DIAG pwa close:', JSON.stringify(pwaCloseDiag));
   await page.evaluate(() => document.getElementById('ctSave')?.click());
+  await page.waitForTimeout(600);
+  const pwaAfterClose = await page.evaluate((id) => ({
+    result: AV.state.trades.find((x) => x.id === id)?.result,
+    toast: document.getElementById('toast')?.textContent || '',
+    rev: AV.api.revision
+  }), openTrade);
+  console.log('DIAG pwa after close:', JSON.stringify(pwaAfterClose));
   await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade);
   await page.waitForFunction(() => !!(AV.pwa && AV.pwa.lastNotification
     && AV.pwa.lastNotification.url.includes('qa=')
