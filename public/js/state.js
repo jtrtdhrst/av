@@ -646,6 +646,23 @@
             AV.forceSessionReset('Sesja w tej karcie należy do innego konta. Odśwież stronę.');
             return false;
           }
+          // Conflict caused by a stale revision (another tab / background
+          // sync): retry once with the fresh revision, keeping local changes.
+          // This makes a just-executed user action (e.g. closing a trade)
+          // survive a benign race instead of being silently reverted.
+          if (typeof payload.revision === 'number') {
+            AV.api.revision = payload.revision;
+            const retry = await AV.apiFetch('/api/state', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ state: AV.state, baseRevision: AV.api.revision, ownerId: AV.currentUserId })
+            });
+            if (retry.ok) {
+              const retryPayload = await retry.json();
+              if (typeof retryPayload.revision === 'number') AV.api.revision = retryPayload.revision;
+              return true;
+            }
+          }
           if (payload.state) {
             AV.state = AV.normalizeServer(payload.state, { isDemo: !!AV.api.me?.isDemo });
             AV.applyServerUser(AV.api.me);
