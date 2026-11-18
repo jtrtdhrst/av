@@ -129,6 +129,7 @@ try {
     await page.click('#demoEnter');
     await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 15000 });
   }
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
   backup = await page.evaluate(() => JSON.stringify(AV.state));
   fixtureUserId = await page.evaluate(async () => (await (await fetch('/api/state')).json()).userId);
 
@@ -148,6 +149,7 @@ try {
   // odczyt po zapisie do MySQL i ponownym wczytaniu
   await page.reload({ waitUntil: 'load' });
   await page.waitForFunction(() => window.AV && AV.ready && AV.api.authenticated, null, { timeout: 15000 });
+  await page.evaluate(() => { AV.schedulePush = () => {}; });
   await page.click('.navg button[data-v="tax"]');
   await page.waitForTimeout(300);
 
