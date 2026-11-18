@@ -474,7 +474,7 @@
     const inst = AV.ui.mktInst || 'BTC';
     const trades = AV.closedTrades(s).filter((t) => t.pair.includes(inst));
     const wins = trades.filter((t) => t.result > 0);
-    const net = trades.reduce((a, t) => a + t.result, 0);
+    const net = trades.reduce((a, t) => a + AV.num(t.result), 0);
     const weekEvents = events.filter((e) => e.imp === 3 && new Date(e.date) >= AV.monday(new Date()) && new Date(e.date) <= AV.addDays(AV.monday(new Date()), 7));
     const base = AV.INST.crypto.find((x) => x[0].startsWith(inst)) || AV.INST.crypto[0];
     AV.setHTML('#marketAnalysis',
@@ -733,8 +733,9 @@
     AV.setText('#taxLoss', AV.fmt(t.carry, 2) + ' zł');
     AV.setText('#taxLossYear', t.year - 1);
     AV.setText('#taxLossHint', 'przeniesiona z zeznania za ' + (t.year - 1) + ' · zmień, jeśli masz inną kwotę');
-    AV.setText('#taxDue', '≈ ' + AV.fmt(t.due, 0) + ' zł');
-    AV.setText('#taxDueHint', 'od dochodu ' + AV.fmt(t.income, 2) + ' zł');
+    AV.setText('#taxDue', '≈ ' + AV.fmt(t.due, 2) + ' zł');
+    AV.setText('#taxDueHint', 'od dochodu ' + AV.fmt(t.income, 2) + ' zł' +
+      (t.invalidFlows ? ' · pominięto ' + t.invalidFlows + ' ' + AV.plural(t.invalidFlows, 'zdarzenie', 'zdarzenia', 'zdarzeń') + ' bez daty lub kursu NBP' : ''));
     AV.setText('#taxYearEyebrow', 'Podatki · rok ' + t.year);
     AV.setText('#taxYear', t.year);
     AV.setText('#taxDeadline', '30 kwietnia ' + (t.year + 1));
@@ -803,7 +804,7 @@
     const events = AV.buildEvents().filter((e) => e.imp === 3);
     const days = new Set(events.map((e) => AV.dateKey(new Date(e.date))));
     const trades = AV.closedTrades(s).filter((t) => days.has(AV.dateKey(new Date(t.date))));
-    const net = trades.reduce((a, t) => a + t.result, 0);
+    const net = trades.reduce((a, t) => a + AV.num(t.result), 0);
     const wr = trades.length ? trades.filter((t) => t.result > 0).length / trades.length * 100 : 0;
     const noSL = trades.filter((t) => t.sl === 'brak').length;
     AV.setText('#macroStats', events.length ? AV.signed(net, 2, '') : '');

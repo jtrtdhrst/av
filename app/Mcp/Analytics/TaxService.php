@@ -94,17 +94,29 @@ final class TaxService
         if ($year < 2000 || $year > 2100) {
             throw new \InvalidArgumentException('year musi być w zakresie 2000-2100.');
         }
-        $carry = max(0.0, (float) ($state['tax']['carryLoss'] ?? 0));
+        $carry = max(0.0, Numbers::round(Numbers::pnum($state['tax']['carryLoss'] ?? 0)));
         $events = [];
         $revenue = 0.0;
         $costs = 0.0;
+        $skippedFlows = 0;
         $currencies = [];
         foreach ((array) ($state['flows'] ?? []) as $flow) {
             if (!is_array($flow)) {
                 continue;
             }
             $date = (string) ($flow['date'] ?? '');
-            if ($date !== '' && substr($date, 0, 4) !== (string) $year) {
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}/', $date)) {
+                $skippedFlows++;
+                continue;
+            }
+            if (substr($date, 0, 4) !== (string) $year) {
+                continue;
+            }
+            $currency = strtoupper((string) ($flow['currency'] ?? 'PLN'));
+            $fiat = Numbers::pnum($flow['fiat'] ?? 0);
+            $fx = $currency === 'PLN' ? 1.0 : Numbers::pnum($flow['fx'] ?? 0);
+            if ($fiat <= 0 || $fx <= 0) {
+                $skippedFlows++;
                 continue;
             }
             $normalized = $this->normalizeFlow($flow);
@@ -170,6 +182,7 @@ final class TaxService
             ],
             'flows' => [
                 'count' => count($events),
+                'skippedFlows' => $skippedFlows,
                 'operations' => array_slice($events, 0, 100),
                 'currencies' => array_values($currencies),
             ],
@@ -189,11 +202,11 @@ final class TaxService
 
     private function normalizeFlow(array $flow): array
     {
-        $fx = (float) ($flow['fx'] ?? 1);
+        $fx = Numbers::pnum($flow['fx'] ?? 1);
         if ($fx <= 0) {
             $fx = 1.0;
         }
-        $fiat = (float) ($flow['fiat'] ?? 0);
+        $fiat = Numbers::pnum($flow['fiat'] ?? 0);
         $typeRaw = (string) ($flow['type'] ?? '');
         $type = in_array($typeRaw, ['Wpłata', 'deposit'], true) ? 'deposit' : 'withdrawal';
         $taxRaw = (string) ($flow['tax'] ?? '');
@@ -205,7 +218,7 @@ final class TaxService
             'date' => (string) ($flow['date'] ?? ''),
             'type' => $type,
             'operation' => (string) ($flow['op'] ?? ''),
-            'amount' => Numbers::round((float) ($flow['amount'] ?? 0), 8),
+            'amount' => Numbers::round(Numbers::pnum($flow['amount'] ?? 0), 8),
             'currency' => $currency,
             'fiat' => Numbers::round($fiat),
             'fx' => Numbers::round($fx, 6),
@@ -217,22 +230,26 @@ final class TaxService
     private function isForexTrade(array $trade, array $state): bool
     {
         $accountName = (string) ($trade['account'] ?? '');
-        $account = [];
+        $matched = [];
         foreach ((array) ($state['accounts'] ?? []) as $row) {
-            if (is_array($row) && ((string) ($row['id'] ?? '') === $accountName || (string) ($row['name'] ?? '') === $accountName)) {
-                $account = $row;
-                break;
+            if (!is_array($row)) {
+                continue;
+            }
+            $name = (string) ($row['name'] ?? '');
+            if ((string) ($row['id'] ?? '') === $accountName || $name === $accountName ||
+                ($name !== '' && stripos($accountName, $name) !== false)) {
+                $matched[] = $row;
             }
         }
-        $key = implode(' ', array_filter([
-            (string) ($trade['source'] ?? ''),
-            $accountName,
-            (string) ($account['exchange'] ?? ''),
-            (string) ($account['type'] ?? ''),
-            (string) ($account['name'] ?? ''),
-        ], static fn (string $value): bool => $value !== ''));
+        $keyParts = [(string) ($trade['source'] ?? ''), $accountName];
+        foreach ($matched as $row) {
+            $keyParts[] = (string) ($row['exchange'] ?? '');
+            $keyParts[] = (string) ($row['type'] ?? '');
+            $keyParts[] = (string) ($row['name'] ?? '');
+        }
+        $key = implode(' ', array_filter($keyParts, static fn (string $value): bool => $value !== ''));
 
-        return preg_match('/(^|[^a-z0-9])(mt4|mt5|metatrader)/i', $key) === 1;
+        return preg_match('/(^|[^a-z0-9])(mt4|mt5|metatrader|forex|cfd)/i', $key) === 1;
     }
 
     private function dateKey(mixed $value, string $field): ?string

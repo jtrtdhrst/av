@@ -159,7 +159,7 @@ try {
   assert.equal(t.revenue, '7420,74 zł');
   assert.equal(t.costs, '4980,00 zł');
   assert.equal(t.loss, '380,00 zł');
-  assert.equal(t.due, '≈ 392 zł');
+  assert.equal(t.due, '≈ 391,54 zł');
   assert.equal(t.dueHint, 'od dochodu 2060,74 zł');
   assert.equal(t.rows, 4, 'flow z 2025 nie może wejść do zestawienia 2026');
   assert.equal(t.neutral, '47 transakcji');
@@ -177,7 +177,7 @@ try {
   const edited = await readTax();
   assert.equal(edited.loss, '1000,00 zł');
   assert.equal(edited.dueHint, 'od dochodu 1440,74 zł');
-  assert.equal(edited.due, '≈ 274 zł');
+  assert.equal(edited.due, '≈ 273,74 zł');
   assert.equal(edited.tax.carryLoss, 1000);
   log('nadwyżka kosztów edytowalna i liczona w podatku', true, edited.loss);
   await page.evaluate(() => { AV.state.tax.carryLoss = 380; AV.saveNow(); });
@@ -192,6 +192,10 @@ try {
   assert.match(csv, /Nadwyżka kosztów z 2025/);
   assert.match(csv, /Neutralne podatkowo \(transakcje\);+47/);
   assert.match(csv, /Forex i CFD MT4\/MT5 \(transakcje\);+2/);
+  assert.match(csv, /Podatek 19%;+391,54/, 'kwoty w CSV mają przecinek dziesiętny');
+  assert.match(csv, /Przychód;+7420,74/);
+  const zipCsv = await page.evaluate(() => AV.taxCsvRows(AV.taxData(AV.state)).map((r) => r.join(';')).join('\n'));
+  assert.match(zipCsv, /Podatek 19%;+391,54/, 'podatki.csv z paczki ZIP ma ten sam format');
   log('CSV PIT-38 z roku podatkowego', true, download.suggestedFilename());
 
   // wydruk PDF
@@ -222,14 +226,62 @@ try {
   const toastText = await page.locator('#toast').innerText();
   assert.match(toastText, /kurs NBP/i);
   assert.equal(await page.locator('#flSave').count(), 1, 'modal nie może się zamknąć bez kursu');
+  await page.fill('#flAmount', '-1');
   await page.fill('#flFx', '4,3');
   await page.click('#flSave');
+  assert.match(await page.locator('#toast').innerText(), /dodatnią/i);
+  assert.equal(await page.locator('#flSave').count(), 1, 'modal nie może się zamknąć z ujemną kwotą');
+  await page.fill('#flAmount', '100');
+  await page.click('#flSave');
   await page.waitForTimeout(700);
+  const balance = await page.evaluate(() => AV.state.accounts.find((a) => a.name === 'WEEX').balance);
+  assert.equal(balance, 1712.4, 'saldo konta sumuje się numerycznie, nie konkatenuje tekstu');
   await page.click('.navg button[data-v="tax"]');
   const afterFlow = await readTax();
   assert.equal(afterFlow.data.revenue, 7807.74, '90 EUR × 4,3 = 387 PLN');
   assert.equal(afterFlow.rows, 5);
   log('formularz wpłaty/wypłaty zasila PIT-38', true, 'kurs NBP wymagany, +387 zł');
+
+  // Integralność danych: wpływy bez daty, bez kursu i z ujemną kwotą nie
+  // mogą zasilać zestawienia, a tekstowy carry liczy się numerycznie.
+  const dirtyTax = await page.evaluate(() => {
+    const d = AV.taxData({
+      tax: { version: 2, carryLoss: '1000,50', year: 2026 }, accounts: [], trades: [],
+      flows: [
+        { id: 'noDate', type: 'Wypłata', currency: 'PLN', fiat: 100, tax: 'income' },
+        { id: 'zeroFx', date: '2026-05-05', type: 'Wypłata', currency: 'EUR', fiat: 100, fx: 0, tax: 'income' },
+        { id: 'stringFx', date: '2026-05-06', type: 'Wypłata', currency: 'EUR', fiat: '100', fx: '4,265', tax: 'income' },
+        { id: 'negative', date: '2026-05-07', type: 'Wpłata', currency: 'PLN', fiat: -50, tax: 'cost' },
+        { id: 'otherYear', date: '2025-05-05', type: 'Wypłata', currency: 'EUR', fiat: 100, tax: 'income' }
+      ]
+    });
+    return {
+      revenue: d.revenue, costs: d.costs, carry: d.carry, invalidFlows: d.invalidFlows,
+      rows: d.ev.length, fx: d.ev[0] && d.ev[0].fx, pln: d.ev[0] && d.ev[0].pln,
+      normalized: AV.normalizeTax({ carryLoss: '1000,50', year: 2026 })
+    };
+  });
+  assert.equal(dirtyTax.revenue, 426.5, 'EUR bez kursu nie może być liczone 1:1');
+  assert.equal(dirtyTax.costs, 0, 'ujemna kwota nie może wejść do kosztów');
+  assert.equal(dirtyTax.carry, 1000.5, 'tekst "1000,50" liczy się jako 1000,50 zł');
+  assert.equal(dirtyTax.normalized.carryLoss, 1000.5);
+  assert.equal(dirtyTax.invalidFlows, 3, 'brak daty, brak kursu i ujemna kwota są pomijane');
+  assert.equal(dirtyTax.rows, 1, 'tylko poprawne zdarzenie wchodzi do zestawienia');
+  assert.equal(dirtyTax.fx, 4.265, 'kurs "4,265" jest parsowany z przecinkiem');
+  assert.equal(dirtyTax.pln, 426.5);
+  log('PIT-38: niekompletne dane nie zaniżają podatku', true, '3 zdarzenia pominięte');
+
+  const warning = await page.evaluate(() => {
+    const saved = AV.state.flows;
+    AV.state.flows = saved.concat([{ id: 'warn', date: '2026-11-13', type: 'Wypłata', currency: 'EUR', fiat: 100, fx: 0, tax: 'income' }]);
+    AV.renderTax();
+    const hint = document.querySelector('#taxDueHint').textContent;
+    AV.state.flows = saved;
+    AV.renderTax();
+    return hint;
+  });
+  assert.match(warning, /pominięto 1 zdarzenie bez daty lub kursu NBP/);
+  log('PIT-38: UI ostrzega o pominiętych zdarzeniach', true);
 
   // puste konto innego użytkownika nie dziedziczy demo 380 zł
   const emptyTax = await page.evaluate(() => AV.normalizeServer({

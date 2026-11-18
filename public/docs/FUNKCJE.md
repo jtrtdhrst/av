@@ -220,13 +220,13 @@ Szczegóły techniczne: [DOCUMENTATION.md §7](DOCUMENTATION.md#7-discord-schedu
 
 | Funkcja | Stan | Opis |
 |---|---|---|
-| Przychód/koszty/nadwyżka/podatek 19% | ✅ | z wpłat i wypłat roku podatkowego |
-| Zakres roku podatkowego | ✅ | zdarzenia i transakcje tylko z `tax.year`; rok i termin w nagłówku liczone dynamicznie |
-| Nadwyżka kosztów z poprzedniego roku | ✅ | edycja w panelu („zmień”), zapis w stanie; nowe konto = 0,00 zł |
-| Zdarzenia podatkowe | ✅ | tabela; waluty obce wymagają kursu NBP |
-| Eksport CSV | ✅ | zdarzenia, podsumowanie, transakcje neutralne/MT4-MT5, rok w nazwie |
+| Przychód/koszty/nadwyżka/podatek 19% | ✅ | z wpłat i wypłat roku podatkowego; podatek z dwoma miejscami po przecinku, tak samo jak w CSV i PDF |
+| Zakres roku podatkowego | ✅ | zdarzenia i transakcje tylko z `tax.year`; wpływy bez daty są pomijane; rok i termin w nagłówku liczone dynamicznie |
+| Nadwyżka kosztów z poprzedniego roku | ✅ | edycja w panelu („zmień”), zapis w stanie; tekst „1000,50” liczony numerycznie; nowe konto = 0,00 zł |
+| Zdarzenia podatkowe | ✅ | tabela; waluty obce wymagają dodatniego kursu NBP, kwoty ujemne są pomijane; liczba pominięć widoczna w podatku |
+| Eksport CSV | ✅ | zdarzenia, podsumowanie, transakcje neutralne/MT4-MT5, rok w nazwie; przecinek dziesiętny, ten sam format w `podatki.csv` z paczki ZIP |
 | „Drukuj / zapisz PDF” | 🟡 | otwiera okno wydruku (Zapisz jako PDF); fallback HTML; rok i podsumowanie |
-| Wpłaty/wypłaty | ✅ | dodawanie, usuwanie, wpływ na saldo konta; walidacja kursu NBP |
+| Wpłaty/wypłaty | ✅ | dodawanie, usuwanie, wpływ na saldo konta sumowany numerycznie; walidacja dodatnich kwot, daty i kursu NBP |
 | Neutralne podatkowo | ✅ | liczba transakcji z dziennika roku (futures/krypto, bez MT4/MT5) |
 | Forex i CFD (MT4/MT5) | ✅ | liczba transakcji roku rozpoznana po koncie/źródle MT4/MT5 |
 | Do przeniesienia na kolejny rok | ✅ | nadwyżka kosztów roku po odjęciu przychodu i wykorzystanej nadwyżki |
