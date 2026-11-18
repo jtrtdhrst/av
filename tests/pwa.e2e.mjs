@@ -226,6 +226,17 @@ try {
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
   });
+  await page.evaluate(() => {
+    window.__putLog = [];
+    const original = AV.apiFetch;
+    AV.apiFetch = async (path, options) => {
+      const res = await original(path, options);
+      if (options && options.method === 'PUT') {
+        window.__putLog.push({ status: res.status, body: await res.clone().text() });
+      }
+      return res;
+    };
+  });
   await page.evaluate((id) => AV.closeTradeModal(id), openTrade);
   await page.evaluate(() => {
     const result = document.getElementById('ctResult');
@@ -243,6 +254,7 @@ try {
     const retryBtn = await page.locator('#ctSave').count();
     if (retryBtn) await page.evaluate(() => document.getElementById('ctSave')?.click());
   }
+  console.log('DIAG pwa put log:', JSON.stringify(await page.evaluate(() => window.__putLog)));
   await page.waitForFunction((id) => AV.state.trades.find((trade) => trade.id === id)?.result != null, openTrade);
   await page.waitForFunction(() => !!(AV.pwa && AV.pwa.lastNotification
     && AV.pwa.lastNotification.url.includes('qa=')
