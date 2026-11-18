@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env node
 /**
- * Alpha Vault — UI E2E integracji: BingX, MetaTrader, EA.
+ * Alpha Vault — UI E2E integracji: wyłącznie BingX (formularz, link rejestracyjny, dziennik).
  * Uruchamia mock dostawców + serwer PHP, potem klika formularze w przeglądarce.
  *
  * Uruchom: npm run test:ui:integrations
@@ -128,27 +128,18 @@ try {
   assert.match(headerAfter.text, /BINGX/i, 'chip pokazuje BingX: ' + headerAfter.text);
   log('nagłówek: chip giełd pokazuje BingX po połączeniu', true, headerAfter.text.trim());
 
-  // MetaTrader — hasło inwestora
-  await page.click('.exl button[data-ex="mt"]');
-  await page.fill('#mtServer', 'Mock-Server');
-  await page.fill('#mtLogin', '81234567');
-  await page.fill('#mtPass', 'investor');
-  await page.click('[data-mtconnect]');
-  await waitConnected('mt');
-  await page.waitForFunction(() => (document.querySelector('#exBody')?.textContent || '').includes('Zaimportowane transakcje'), null, { timeout: 25000 });
-  log('MetaTrader: hasło inwestora przez UI', true);
+  // panel: wyłącznie BingX z linkiem rejestracyjnym
+  const tabs = await page.locator('.exl button').evaluateAll((els) => els.map((e) => e.dataset.ex));
+  assert.deepEqual(tabs, ['bingx'], 'zakładki panelu giełd: ' + tabs.join(','));
+  const regLink = await page.locator('#exBody a[href*="bingx.com/en/activity/task/7425469856"]').getAttribute('href');
+  assert.equal(regLink, 'https://bingx.com/en/activity/task/7425469856?themeType=2&ref=EUB5TF');
+  assert.equal(await page.locator('#mtServer, [data-import]').count(), 0);
+  log('panel giełd: tylko BingX z linkiem rejestracyjnym', true);
 
-  // EA — kod parowania
-  await page.click('#mtTabs [data-m="b"]');
-  await page.click('[data-mtpair]');
-  await page.waitForFunction(() => /^AV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test((document.querySelector('#mtCode')?.textContent || '').trim()), null, { timeout: 15000 });
-  const code = (await page.locator('#mtCode').innerText()).trim();
-  log('EA: kod parowania w UI', true, code);
-
-  // dziennik: 47 + 2 BingX + 1 MT = 50
+  // dziennik: 47 + 2 BingX = 49
   await page.click('.navg button[data-v="trans"]');
   const rows = await page.locator('#tbody tr').count();
-  assert.equal(rows, 50);
+  assert.equal(rows, 49);
   log('dziennik: transakcje z integracji widoczne', true, rows + ' transakcji');
 
   const html = await page.content();

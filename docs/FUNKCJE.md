@@ -270,16 +270,17 @@ Pełny E2E: `npm run test:wearables` (35 scenariuszy API + UI dla Oura i Apple, 
 
 | Funkcja | Stan | Opis |
 |---|---|---|
+| Panel „Podłącz BingX" | ✅ | jedyna zakładka w UI: formularz klucza API, instrukcja krok po kroku oraz link rejestracyjny BingX; bez MetaTrader i Import CSV |
 | WEEX/OKX/BingX — połączenie klucza | E2E | `POST /api/connections`; walidacja na żywo, szyfrowanie AES-256-GCM, brak sekretów w UI |
 | Uprawnienia klucza | E2E | OKX `perm` i BingX `apiPermissions` wymagają odczytu; WEEX przyjmuje każdy klucz z działającym odczytem konta |
 | Synchronizacja transakcji | E2E | OKX: zamknięte pozycje + spot fills; BingX: positionHistory; WEEX: fills → rekonstrukcja rund |
 | Atomowość importu | E2E | każda paczka połączenia zapisuje transakcje, rewizję i markery deduplikacji razem; błędny rekord wycofuje cały batch tego połączenia |
 | Automatyczny import | E2E | wywoływany przez istniejący LH Cron (co 5 min) z blokadą „co 25 min”; ręcznie `bin/sync-exchange-trades.php` |
 | Deduplikacja | E2E | `exchange_imports.external_id` + `extId` w transakcji; ponowna synchronizacja nie tworzy duplikatów |
-| MetaTrader — hasło inwestora | E2E (wymaga `METAAPI_TOKEN`) | MetaApi cloud, wyłącznie `investorMode:true`; hasło z prawem handlu odrzucane |
-| MetaTrader — EA | E2E | kod parowania `AV-XXXX-XXXX`, endpoint `POST /api/mt/ea`, EA w `integrations/mt5/AlphaVault.mq5` |
+| MetaTrader — hasło inwestora | E2E API (bez UI; wymaga `METAAPI_TOKEN`) | MetaApi cloud, wyłącznie `investorMode:true`; hasło z prawem handlu odrzucane |
+| MetaTrader — EA | E2E API (bez UI) | kod parowania `AV-XXXX-XXXX`, endpoint `POST /api/mt/ea`, EA w `integrations/mt5/AlphaVault.mq5` |
 | Odłączenie | E2E | usuwa połączenie i poświadczenia; transakcje zostają w dzienniku |
-| Import CSV | E2E | parser WEEX/OKX/BingX/Bybit/MT w przeglądarce, podgląd i deduplikacja |
+| Import CSV | parser w kodzie (bez UI) | parser WEEX/OKX/BingX/Bybit/MT w przeglądarce, podgląd i deduplikacja; nie jest dostępny z panelu Giełdy |
 | Import XLS/XLSX | — | komunikat „zapisz jako CSV” |
 | Błąd dostawcy | E2E | status `error` i komunikat w panelu; ostatni dobry zestaw transakcji pozostaje |
 
