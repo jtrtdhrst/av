@@ -393,7 +393,7 @@ npm run test:ui:integrations   # Playwright: formularze i dziennik
 
 Oba kroki są częścią `.github/workflows/ci.yml`. Lokalne uruchomienie jest dozwolone tylko dla developera i nie jest dowodem w raporcie AV-engineer.
 
-Zakres: OKX read-only i odrzucenie handlu, BingX `apiPermissions`, WEEX akceptacja klucza z handlem + rekonstrukcja fills, MetaApi `investorMode` i odrzucenie hasła z handlem, EA kod parowania + ingest + deduplikacja, UI formularze i licznik transakcji. Brak PnL w źródle pomija transakcję zamiast tworzyć break-even; jawne zero PnL i zerowa opłata pozostają znane (WEEX break-even po opłatach, BingX wynik `0` przy nieznanych opłatach i czasie).
+Zakres: OKX read-only i odrzucenie handlu, BingX `apiPermissions`, WEEX akceptacja klucza z handlem + rekonstrukcja fills, MetaApi `investorMode` i odrzucenie hasła z handlem, EA kod parowania + ingest + deduplikacja. UI weryfikuje wyłącznie formularz BingX, link rejestracyjny i licznik transakcji (bez zakładek MetaTrader i Import CSV). Brak PnL w źródle pomija transakcję zamiast tworzyć break-even; jawne zero PnL i zerowa opłata pozostają znane (WEEX break-even po opłatach, BingX wynik `0` przy nieznanych opłatach i czasie).
 
 Regresje integralności: OKX importuje 501 rekordów w jednej rewizji, zapisuje `closedAt` ze źródła i UTC `importedAt`, a przekroczenie limitu stron lub pełna strona bez kursora kończy się jawnym błędem bez częściowego importu z żadnego źródła historii OKX. Wadliwy rekord wycofuje cały batch danego połączenia, stan, rewizję i markery deduplikacji. Testy integracji działają na odizolowanej bazie CI; reset startowy i końcowy musi zakończyć się kodem 0.
 

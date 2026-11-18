@@ -625,7 +625,7 @@ Routing jest po stronie przeglądarki: jeden `public/index.html`, widoki przeł�
 | `mentor` | `#/mentor-ai` | Integracje AI |
 | `kal` | `#/kalendarz` | Kalendarz makro |
 | `cialo` | `#/cialo-i-glowa` | Ciało i głowa |
-| `gieldy` | `#/gieldy` | Giełdy i API |
+| `gieldy` | `#/gieldy` | BingX i API |
 | `ust` | `#/konto` | Konto i zasady |
 
 Widok `#/mentor-ai` to strona integracji MCP: adres `https://mcp.alphavault.pl/mcp` z kopiowaniem, przepływ „jak to działa”, zakładki ChatGPT/Claude/Grok z krokami konfiguracji, karty korzyści i bezpieczeństwa oraz nota o dostępności integracji. Claude korzysta z callbacku `https://claude.ai/api/mcp/auth_callback`, który musi być dopuszczony w allowliście OAuth. Karta wyjaśnia, że zakres zapisu zależy od konfiguracji serwera, i linkuje do polityki prywatności §13.2. Połączenie wymaga ekranu zgody na domenie MCP; token unieważnia się w `/oauth/connected`. Pill odczytuje `/api/mcp` i pokazuje skonfigurowany zakres (`MCP · TYLKO ODCZYT`, `MCP · ZAPIS`); nie sprawdza dostępności `mcp.alphavault.pl`. Widok nie zawiera czatu ani analiz.
@@ -731,7 +731,7 @@ Zasady:
 
 - `#ticker` — `GET /api/quotes` co 60 s; renderuje wyłącznie symbole zwrócone przez API; błąd zachowuje ostatni dobry zestaw, brak danych zostawia pasek pusty.
 - `#envBadge` (pasek nad aplikacją) — po zalogowaniu ukryty; pokazuje się tylko przy błędzie ostatniego zapisu, a przed logowaniem lub offline informuje o logowaniu albo trybie offline. Nie zawiera technicznych nazw bazy.
-- `#syncBadge` (chip w nagłówku) — widoczny tylko przy aktywnym połączeniu giełdy albo MetaTrader: nazwa dostawcy i godzina ostatniej synchronizacji; bez połączeń ukryty.
+- `#syncBadge` (chip w nagłówku) — widoczny tylko przy aktywnym połączeniu BingX: nazwa dostawcy i godzina ostatniej synchronizacji; bez połączeń ukryty.
 
 ### 11.1. Panel MCP
 
@@ -1004,11 +1004,13 @@ CI sprawdza linki, sekcje i brak dryfu (`node scripts/sync-docs.mjs --check` + `
 
 ```text
 public/js/state.js          loadConnections, connectExchange, syncConnections, reloadStateFromServer
-public/js/render2.js        panel Giełdy, formularze WEEX/OKX/BingX, MetaTrader, EA
+public/js/render2.js        panel „Podłącz BingX": formularz klucza, instrukcja, link rejestracyjny
 app/Integrations/           Crypto, HttpClient, providers, ConnectionStore, ExchangeSync, MtEa
 app/routes/api.php          /api/connections*, /api/mt/ea
 bin/sync-exchange-trades.php  ręczny/CRON worker
 ```
+
+Widok `#/gieldy` udostępnia w UI wyłącznie BingX: formularz klucza API (`API Key`, `Secret Key`), instrukcję „Jak zdobyć klucz" z linkiem rejestracyjnym `https://bingx.com/en/activity/task/7425469856?themeType=2&ref=EUB5TF` i licznik zaimportowanych transakcji. Zakładki MetaTrader (hasło inwestora, EA) oraz Import CSV zostały usunięte z panelu; endpointy i testy API pozostają bez zmian.
 
 ### 20.2. Połączenie klucza
 

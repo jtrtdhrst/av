@@ -2,6 +2,9 @@
 
 ## Nieopublikowane
 
+### Zmienione
+- Giełdy: panel „Podłącz BingX" pokazuje wyłącznie BingX — formularz klucza API, instrukcję i link rejestracyjny. Usunięto zakładki MetaTrader i Import CSV z UI; API i testy backendu pozostają bez zmian.
+
 ### Naprawione
 - Dane: wyniki transakcji i R przychodzące z API/MCP jako tekst są sumowane numerycznie w statystykach, PnL dnia, mentorze i setupach; saldo konta przy wpłacie/usunięciu wpływu nie konkatenuje tekstu.
 - PIT-38: wpływy bez daty, z ujemną kwotą lub bez kursu waluty obcej są pomijane i sygnalizowane w UI; tekstowy carry („1000,50”) liczy się numerycznie; podatek ma dwa miejsca po przecinku we wszystkich eksportach.

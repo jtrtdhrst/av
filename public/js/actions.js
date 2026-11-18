@@ -1615,9 +1615,8 @@
   AV.bindExchanges = () => {
     $$('.exl button').forEach((b) => b.addEventListener('click', () => AV.renderEx(b.dataset.ex)));
     $('#syncNow')?.addEventListener('click', async () => {
-      const c = AV.state.settings.connections || {};
-      const connected = Object.entries(c).filter(([k, v]) => v && v.connected && k !== 'file');
-      if (!connected.length) { AV.toast('Połącz najpierw giełdę albo MetaTrader'); return; }
+      const connected = !!AV.connections().bingx.connected;
+      if (!connected) { AV.toast('Połącz najpierw BingX'); return; }
       const btn = $('#syncNow');
       const old = btn ? btn.innerHTML : '';
       if (btn) { btn.disabled = true; btn.textContent = 'Synchronizuję…'; }
@@ -1626,7 +1625,7 @@
         AV.renderExchangeList();
         if (AV.renderEx) AV.renderEx(AV.exKey);
         AV.toast(data.imported > 0
-          ? 'Pobrano ' + data.imported + ' ' + AV.plural(data.imported, 'transakcję', 'transakcje', 'transakcji') + ' z ' + connected.length + ' połączeń'
+          ? 'Pobrano ' + data.imported + ' ' + AV.plural(data.imported, 'transakcję', 'transakcje', 'transakcji') + ' z BingX'
           : 'Synchronizacja gotowa · brak nowych transakcji', 5000);
       } catch (err) {
         AV.toast(err.message || 'Synchronizacja nie powiodła się.', 7000);
