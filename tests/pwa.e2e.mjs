@@ -236,6 +236,16 @@ try {
     if (result) { result.value = '12.34'; result.dispatchEvent(new Event('input', { bubbles: true })); }
   });
   await page.evaluate(() => document.getElementById('ctSave')?.click());
+  await page.waitForTimeout(700);
+  console.log('PWA close diag:', JSON.stringify(await page.evaluate((id) => ({
+    toast: document.getElementById('toast')?.textContent || '',
+    result: AV.state.trades.find((x) => x.id === id)?.result ?? null,
+    pushing: AV.api.pushing,
+    revision: AV.api.revision,
+    hasSave: !!document.getElementById('ctSave'),
+    online: AV.api.online,
+    authenticated: AV.api.authenticated
+  }), openTrade)));
   // Retry once with a freshly synced revision if the first save lost a race.
   await page.waitForTimeout(700);
   if (await page.evaluate((id) => AV.state.trades.find((x) => x.id === id)?.result == null, openTrade)) {
