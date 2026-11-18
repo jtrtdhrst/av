@@ -277,8 +277,6 @@
       createdAt: Date.now()
     };
     s.settings.connections = {
-      weex: { connected: false },
-      okx: { connected: false },
       bingx: { connected: false },
       mt: { connected: false, server: '', login: '', masked: '', code: '', codeAt: null }
     };
@@ -296,9 +294,7 @@
     if (s.meta.streakBase === 12) s.meta.streakBase = 0;
     if (Array.isArray(s.meta.sessions) && s.meta.sessions.some((x) => x && x.device === 'MacBook · Chrome')) s.meta.sessions = [];
     const c = s.settings && s.settings.connections;
-    if (c && c.weex && c.weex.masked === 'wx_live_••••7f2a') {
-      c.weex = { connected: false };
-    }
+    if (c) { delete c.weex; delete c.okx; }
     if (s.subscription && s.subscription.until === '2026-12-03') s.subscription.until = null;
     return s;
   };
@@ -757,10 +753,12 @@
       AV.api.integrationsConfigured = data.configured !== false;
       AV.api.metaApiConfigured = !!data.metaApiConfigured;
       const c = AV.connections();
-      ['weex', 'okx', 'bingx'].forEach((k) => { c[k] = { connected: false }; });
+      delete c.weex; delete c.okx;
+      c.bingx = { connected: false };
       c.mt = { connected: false, platform: (c.mt && c.mt.platform) || 'mt5', pairCode: (c.mt && c.mt.pairCode) || '' };
       (data.connections || []).forEach((row) => {
         const key = (row.provider === 'mt4' || row.provider === 'mt5') ? 'mt' : row.provider;
+        if (key === 'weex' || key === 'okx') return;
         c[key] = {
           connected: row.status === 'connected' || row.status === 'pending',
           pending: row.status === 'pending',
