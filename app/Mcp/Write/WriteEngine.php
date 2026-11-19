@@ -394,7 +394,7 @@ final class WriteEngine
             throw new WriteException('stop_loss_required', 'Stop loss jest wymagany przy zapisie transakcji.');
         }
         $tp = $this->optionalPositive($args['tp'] ?? null, 'tp');
-        if ($sl !== null && (($dir === 'l' && $sl >= $entry) || ($dir === 's' && $sl <= $entry))) {
+        if ($sl !== null && (($dir === 'l' && $sl > $entry) || ($dir === 's' && $sl < $entry))) {
             throw new WriteException('invalid_stop_loss', 'Stop loss jest po złej stronie ceny wejścia.');
         }
         if ($tp !== null && (($dir === 'l' && $tp <= $entry) || ($dir === 's' && $tp >= $entry))) {
@@ -620,7 +620,7 @@ final class WriteEngine
             $tpText = trim((string) ($updated['tp'] ?? ''));
             if ($slText !== '' && $slText !== 'brak' && $slText !== '—') {
                 $sl = $this->positive($slText, 'sl');
-                if (($dir === 'l' && $sl >= $entry) || ($dir === 's' && $sl <= $entry)) {
+                if (($dir === 'l' && $sl > $entry) || ($dir === 's' && $sl < $entry)) {
                     throw new WriteException('invalid_stop_loss', 'Stop loss jest po złej stronie ceny wejścia.');
                 }
             }

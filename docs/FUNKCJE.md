@@ -89,7 +89,7 @@ Legenda:
 | Weryfikacja źródła danych | ✅ | `source` przesłane przez klienta nie omija wymogu SL; import waliduje każdy zmapowany rekord i może zachować brak SL tylko wtedy, gdy giełda go nie dostarczyła |
 | Atomowość i czas importu | ✅ | rollback obejmuje batch połączenia, stan, rewizję i markery; CI pokrywa 501 rekordów, źródłowe `closedAt` i UTC `importedAt`; limit stron lub brak kursora OKX nie kończą się częściowym sukcesem |
 | Usunięcie transakcji | ✅ | potwierdzenie, kopia rekordu w `state.trash` (wymagane przez `TradeRules`), zapis w MySQL i rollback przy błędzie |
-| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; częściowe TP 25/50/75%, zabezpieczenie SL na wejściu (BE), wcześniejsze zamknięcie; każda część trafia do `partials`, a końcowy wynik sumuje części; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
+| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; częściowe TP 25/50/75%, zabezpieczenie SL na wejściu (BE) — SL równy wejściu jest poprawny, wcześniejsze zamknięcie; każda część trafia do `partials`, a końcowy wynik sumuje części; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
 | Wykres transakcji | ✅ | interwały 5m/15m/1h/4h przełączane w nagłówku; broker z transakcji; punkt wejścia przesunięty w lewo, żeby pokazać historię przed wejściem |
 | Eksport CSV | ✅ | średnik + BOM (Excel PL) |
 | Import CSV z giełdy | ✅ | parser WEEX/OKX/BingX/Bybit/MT, podgląd, deduplikacja; pomija wiersz bez PnL i bez danych do jego wyliczenia; MAE/MFE, opłaty i czas pozostają puste, gdy źródło ich nie zawiera |

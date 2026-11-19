@@ -932,7 +932,7 @@
       if (!entry) { AV.toast('Podaj cenę wejścia'); return; }
       if (!size) { AV.toast('Podaj wielkość pozycji'); return; }
       if (!sl && !existingHasNoStop) { AV.toast('Podaj stop loss'); return; }
-      if (sl && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? sl >= entry : sl <= entry)) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
+      if (sl && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? sl > entry : sl < entry)) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
       if (tp && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? tp <= entry : tp >= entry)) { AV.toast('Take profit jest po złej stronie wejścia'); return; }
     }
     const checklistPoints = AV.checklistPoints(s, AV.ui.editId ? AV.ui.ntChecklistHistory : []);

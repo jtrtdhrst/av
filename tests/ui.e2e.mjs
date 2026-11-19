@@ -1899,12 +1899,26 @@ try {
     const t = AV.state.trades.find((x) => x.id === id);
     return !!t && (t.partials || []).length === 1 && !AV.isTradeClosed(t);
   }, manageId, { timeout: 15000 });
-  const partialState = await page.evaluate((id) => {
+  await page.waitForFunction(async (id) => {
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const data = await res.json();
+    const t = (data.state?.trades || []).find((x) => x.id === id);
+    return !!t && (t.partials || []).length === 1 && Number(t.size) === 1;
+  }, manageId, { timeout: 15000 });
+  const partialState = await page.evaluate(async (id) => {
     const t = AV.state.trades.find((x) => x.id === id);
-    return { size: t?.size, partials: t?.partials, partialResult: t?.partialResult, open: !AV.isTradeClosed(t) };
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    const data = res.ok ? await res.json() : { state: {} };
+    const server = (data.state?.trades || []).find((x) => x.id === id);
+    return {
+      size: t?.size, partials: t?.partials, partialResult: t?.partialResult, open: !AV.isTradeClosed(t),
+      serverSize: server?.size, serverPartials: server?.partials, serverSl: server?.sl, serverBe: server?.be
+    };
   }, manageId);
   log('pozycja: częściowe TP zamyka 50% i zostawia resztę otwartą',
-    partialState.open && Number(partialState.size) === 1 && partialState.partials?.length === 1 && Number(partialState.partialResult) === 10,
+    partialState.open && Number(partialState.size) === 1 && partialState.partials?.length === 1 && Number(partialState.partialResult) === 10
+      && Number(partialState.serverSize) === 1 && partialState.serverPartials?.length === 1 && partialState.serverSl === '100' && partialState.serverBe === true,
     JSON.stringify(partialState));
   await page.evaluate(async () => {
     await AV.waitForPushIdle(15000);

@@ -1456,7 +1456,7 @@ final class ProposalService
         $slRaw = (string) ($after['sl'] ?? 'brak');
         if ($slRaw !== '' && $slRaw !== 'brak' && $slRaw !== '—') {
             $sl = (float) $slRaw;
-            if (($direction === 1 && $sl >= $entry) || ($direction === -1 && $sl <= $entry)) {
+            if (($direction === 1 && $sl > $entry) || ($direction === -1 && $sl < $entry)) {
                 throw new ProposalException('bad_proposal', 'Stop loss jest po złej stronie wejścia.', 400);
             }
             $risk = abs($entry - $sl) * $size;
