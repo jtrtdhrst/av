@@ -55,7 +55,7 @@ final class ProposalBuilder
         $tp = null;
         if (array_key_exists('sl', $args) && $args['sl'] !== null && $args['sl'] !== '') {
             $sl = $this->positiveNumber($args['sl'], 'sl');
-            if (($direction === 'l' && $sl >= $entry) || ($direction === 's' && $sl <= $entry)) {
+            if (($direction === 'l' && $sl > $entry) || ($direction === 's' && $sl < $entry)) {
                 throw new ProposalException('bad_request', 'Stop loss jest po złej stronie ceny wejścia.', 400);
             }
         }
@@ -806,7 +806,7 @@ final class ProposalBuilder
         $sl = null;
         if (array_key_exists('sl', $args) && $args['sl'] !== null && $args['sl'] !== '') {
             $sl = $this->positiveNumber($args['sl'], 'sl');
-            if (($direction === 'l' && $sl >= $entry) || ($direction === 's' && $sl <= $entry)) {
+            if (($direction === 'l' && $sl > $entry) || ($direction === 's' && $sl < $entry)) {
                 throw new ProposalException('bad_request', 'Stop loss jest po złej stronie ceny wejścia.', 400);
             }
         }

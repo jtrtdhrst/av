@@ -70,8 +70,9 @@ final class TradeRules
         if ($levels['sl'] === null && !$allowMissingStopLoss) {
             return self::failure('stop_loss_required', 'Stop loss jest wymagany dla transakcji ręcznej.');
         }
+        // SL równy wejściu oznacza break-even i jest dozwolony.
         if ($levels['sl'] !== null
-            && (($isLong && $levels['sl'] >= $entry) || (!$isLong && $levels['sl'] <= $entry))) {
+            && (($isLong && $levels['sl'] > $entry) || (!$isLong && $levels['sl'] < $entry))) {
             return self::failure('invalid_stop_loss', 'Stop loss jest po złej stronie ceny wejścia.');
         }
         if ($levels['tp'] !== null
@@ -80,8 +81,8 @@ final class TradeRules
         }
 
         $risk = self::riskAmount($entry, $size, $levels['sl']);
-        if (!is_finite($risk) || $risk <= 0) {
-            return self::failure('bad_number', 'Ryzyko transakcji musi być skończoną liczbą dodatnią.');
+        if (!is_finite($risk) || $risk < 0) {
+            return self::failure('bad_number', 'Ryzyko transakcji musi być skończoną liczbą nieujemną.');
         }
 
         foreach (['exit', 'result', 'r', 'risk', 'riskPct', 'fee', 'mae', 'mfe', 'durationMin'] as $field) {

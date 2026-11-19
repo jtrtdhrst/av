@@ -53,7 +53,7 @@ Legenda:
 |---|---|---|
 | Rynek, bias, uzasadnienie | ✅ | każdy plan ma własny rynek, bias i uzasadnienie; wiele niezależnych planów może przypadać na jedną datę; lista rynku zawiera instrumenty i „Inny rynek…” z własną nazwą |
 | Wybór planu | ✅ | selektor przełącza plany tej daty; utworzenie kolejnego nie nadpisuje istniejącego; historia otwiera konkretny plan |
-| Kluczowe poziomy | ✅ | dodawanie/usuwanie oporu, wsparcia, płynności i POI; typ, cena i opis są niezależne; pusty wiersz zostaje w szkicu |
+| Kluczowe poziomy | ✅ | dodawanie/usuwanie oporu, wsparcia, płynności, POI i własnego poziomu („Własny…”); typ, cena i opis są niezależne; pusty wiersz zostaje w szkicu |
 | Scenariusze główny/awaryjny | ✅ | |
 | Limity (ryzyko, max transakcji, godzina) | ✅ | wpływają na pulpit |
 | „Czego dziś nie robię” | ✅ | |
@@ -62,7 +62,8 @@ Legenda:
 | Kopiuj z wczoraj | ✅ | natychmiastowy zapis w MySQL |
 | Autosave szkicu | ✅ | debounce 700 ms; błąd zapisu pokazany toastem |
 | Trwały zapis w MySQL | ✅ | każdy plan ma własny identyfikator i rynek w `user_states.state.plans`; przeładowanie odtwarza wiele planów tej samej daty |
-| Dziś/Wczoraj/Historia | ✅ | historia planów, podgląd |
+| Dziś/Wczoraj/Globalnie/Historia | ✅ | „Globalnie” przechowuje scenariusze długoterminowe bez przypisania do dnia; trwały zapis i powrót po przeładowaniu |
+| Kafelki planów globalnych | ✅ | siatka planów w zakładce „Globalnie” z podglądem rynku, kierunku, poziomów i statusu; kliknięcie otwiera plan w edytorze |
 | Trzymanie się planu | ✅ | 5 dni wstecz |
 
 ---
@@ -77,7 +78,8 @@ Legenda:
 | Szukanie po parze/emocji/setupie | ✅ | |
 | Szczegóły transakcji | ✅ | wykres, MAE/MFE, checklist, notatka, mentor |
 | Screeny przed/po | ✅ | upload, drag&drop, Ctrl+V; JPEG w stanie |
-| Dodanie transakcji | ✅ | formularz startuje pusty; SL jest obowiązkowy, TP opcjonalny; R:R jest elastyczne i dobierane do setupu; ręczna checklista nie ma minimalnego progu zapisu; ryzyko = \|entry − SL\| × size |
+| Dodanie transakcji | ✅ | formularz startuje pusty; wybór portfela i brokera (WEEX, BingX, VTMarkets, OKX, Bybit, MT4, MT5, Inny); SL jest obowiązkowy, TP opcjonalny; R:R jest elastyczne i dobierane do setupu; ręczna checklista nie ma minimalnego progu zapisu; ryzyko = \|entry − SL\| × size |
+| Live P&L otwartej pozycji | ✅ | dziennik i szczegóły pokazują bieżący wynik oraz procent z notowań; brak notowań = status „Otwarta” |
 | Po zapisie | ✅ | formularz przełącza do dziennika i resetuje jego filtry |
 | Widoczność wpisów | ✅ | dziennik pokazuje wszystkie transakcje; „W statystykach” na koncie nadal filtruje statystyki, nie listę dziennika |
 | Pusty dziennik | ✅ | CTA „Dodaj transakcję” i „Giełdy i API” bez tekstu zastępczego; „Brak transakcji spełniających filtry” tylko przy aktywnym filtrze |
@@ -86,8 +88,9 @@ Legenda:
 | Rewizja i no-op | ✅ | zapis bez semantycznej zmiany zachowuje `revision` i `updatedAt`; nie tworzy audytu mutacji |
 | Weryfikacja źródła danych | ✅ | `source` przesłane przez klienta nie omija wymogu SL; import waliduje każdy zmapowany rekord i może zachować brak SL tylko wtedy, gdy giełda go nie dostarczyła |
 | Atomowość i czas importu | ✅ | rollback obejmuje batch połączenia, stan, rewizję i markery; CI pokrywa 501 rekordów, źródłowe `closedAt` i UTC `importedAt`; limit stron lub brak kursora OKX nie kończą się częściowym sukcesem |
-| Usunięcie transakcji | ✅ | potwierdzenie |
-| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
+| Usunięcie transakcji | ✅ | potwierdzenie, kopia rekordu w `state.trash` (wymagane przez `TradeRules`), zapis w MySQL i rollback przy błędzie |
+| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; częściowe TP 25/50/75%, zabezpieczenie SL na wejściu (BE) — SL równy wejściu jest poprawny, wcześniejsze zamknięcie; każda część trafia do `partials`, a końcowy wynik sumuje części; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
+| Wykres transakcji | ✅ | interwały 5m/15m/1h/4h przełączane w nagłówku; broker z transakcji; punkt wejścia przesunięty w lewo, żeby pokazać historię przed wejściem |
 | Eksport CSV | ✅ | średnik + BOM (Excel PL) |
 | Import CSV z giełdy | ✅ | parser WEEX/OKX/BingX/Bybit/MT, podgląd, deduplikacja; pomija wiersz bez PnL i bez danych do jego wyliczenia; MAE/MFE, opłaty i czas pozostają puste, gdy źródło ich nie zawiera |
 | Tryb ochronny (limit strat) | ✅ | blokada, countdown, obejście z powodem |
@@ -120,7 +123,10 @@ Import XLS/XLSX nie jest czytany — zapisz jako CSV (komunikat w UI).
 | Long/Short | ✅ | walidacja SL/TP |
 | Szybkie kwoty | ✅ | saldo, dźwignia, ryzyko |
 | Portfel i MM z planu | ✅ | wybór konta ustawia saldo, dźwignię i `settings.maxRisk`; wartości można zmienić ręcznie, wybór zapisany w `state.calc` |
-| Auto SL/TP z wybranym R:R | ✅ | 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własna wartość; tylko z aktualnej ceny rynkowej; kierunek Long/Short |
+| Auto SL/TP z wybranym R:R | ✅ | 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własna wartość; ręcznie wpisana cena wejścia jest zachowywana, a SL/TP liczone są od niej; przy pustym wejściu używana jest cena live; kierunek Long/Short |
+| Tryb odwrotny — wielkość kapitału | ✅ | „Zaproponuj wielkość kapitału” z entry i SL liczy depozyt (krypto) albo loty (FX) dla zadanego ryzyka i dźwigni |
+| Uśrednianie wejść | ✅ | wiele cen z procentowym podziałem kapitału, ważona średnia i przycisk ustawienia jej jako ceny wejścia |
+| Wiele take profitów | ✅ | poziomy TP z procentem pozycji, łączny zysk, ważone R:R i pokrycie pozycji |
 | Reset | ✅ | czyści wybór portfela, R:R i wartości |
 | Kroki obliczeń | ✅ | |
 
@@ -194,7 +200,8 @@ Limity liczone są z **zamkniętych** transakcji. Silnik nie zna ruchów śródd
 
 | Funkcja | Stan | Opis |
 |---|---|---|
-| Harmonogram live'ów | ✅ | synchronizacja Discord Scheduled Events → `/api/events`; grupowanie po `Europe/Warsaw`, `DZIŚ`, wiele wydarzeń dnia; widok tygodnia i miesiąca z nawigacją poprzedni/następny/bieżący |
+| Harmonogram live'ów | ✅ | synchronizacja Discord Scheduled Events → `/api/events`; grupowanie po `Europe/Warsaw`, `DZIŚ`, wiele wydarzeń dnia; widok tygodnia i miesiąca z nawigacją poprzedni/następny/bieżący; odświeżanie przy wejściu w Akademię i co 60 s, automatyczny rerender po zmianie dnia |
+| Wydarzenia cykliczne | ✅ | wystąpienia z `recurrence_rule` (daily/weekly/monthly) są rozwijane do 31 dni wprzód z deduplikacją po nazwie i czasie; obsługiwany interwał, liczba wystąpień i data końca |
 | Najbliższy live (bez countdownu) | ✅ | wyłącznie z realnego wydarzenia `live`; karta ukryta, gdy brak wydarzenia |
 | Liczba zainteresowanych | ✅ | z `user_count`, jeśli Discord je zwróci; brak = pole puste |
 | Konsultacje 1:1 | ✅ | karta „Najbliższa” z wydarzenia `consultation`; prowadzący i czas trwania tylko z danych wydarzenia |
@@ -203,11 +210,11 @@ Limity liczone są z **zamkniętych** transakcji. Silnik nie zna ruchów śródd
 | Błąd synchronizacji | ✅ | ostatni dobry zestaw pozostaje; UI pokazuje stan „błąd synchronizacji” |
 | Rezerwacja konsultacji | ✅ | niezależna od synchronizacji, zapis w stanie |
 | Dołącz / przypomnienie | ✅ | „Dołącz” widoczne od 15 minut przed startem; przypomnienie z wyborem 5/15/30/60 min, raz na wydarzenie |
-| Nagrania | ✅ | biblioteka z `state.recordings`, kategorie (Poranna odprawa, Sesja NY, Warsztat, Q&A, Psychologia), filtr; brak linku = pole do wklejenia, link YouTube odtwarzany w panelu |
+| Nagrania | ✅ | biblioteka z `state.recordings` z fallbackiem do wbudowanej listy `AV.RECORDINGS`, kategorie (Poranna odprawa, Sesja NY, Warsztat, Q&A, Psychologia), filtr; brak linku = pole do wklejenia, link YouTube odtwarzany w panelu; empty-state zamiast pustej sekcji |
+| Postęp kursu i bootcampu | ✅ | postęp kursu liczony z `meta.courseDone` (12 lekcji), bootcamp z `meta.bootcampDone` (6 modułów); checklisty w modalach zapisują się i od razu aktualizują paski |
 | Słownik krypto | ✅ | 55 pojęć w modalu z wyszukiwaniem |
 | Alpha Testy | ✅ | 6 pytań, wynik zapisany w `meta.alphaTestScore` |
 | Złote zasady bezpieczeństwa | ✅ | 8 zasad w modalu |
-| Materiały / postęp kursu | ✅ | postęp w stanie |
 | Plan solo vs pełny | ✅ | podgląd, nadpisywany przez subskrypcję |
 
 Szczegóły techniczne: [DOCUMENTATION.md §7](../DOCUMENTATION.md#7-discord-scheduled-events--pełny-przepływ), [DOCUMENTATION.md §12](../DOCUMENTATION.md#12-puste-pola-i-stany-brzegowe).
@@ -294,7 +301,7 @@ Poświadczenia są szyfrowane po stronie serwera (`INTEGRATIONS_KEY`) i nigdy ni
 | Personalizacja (rynki, akcent, strefa, godziny) | ✅ | |
 | Wyłącznik bezpieczeństwa | ✅ | limit strat, limit dzienny, czas blokady, wymóg powodu |
 | 3 zasady + punkty checklisty | ✅ | własny punkt checklisty |
-| Konta i kapitał | ✅ | dodawanie/usuwanie, włączanie do statystyk (bez ukrywania transakcji z list i szczegółów), edycja kapitału startowego i bieżącego salda bezpośrednio w tabeli |
+| Konta i kapitał | ✅ | dodawanie/usuwanie, włączanie do statystyk (bez ukrywania transakcji z list i szczegółów), edycja kapitału startowego i bieżącego salda bezpośrednio w tabeli; kolumna „Saldo” ma poszerzoną, czytelną szerokość |
 | Wpłaty/wypłaty | ✅ | saldo + PIT |
 | Odznaki | ✅ | 8 progów liczbowych z realnych danych; licznik „X z 8” i poziom wyliczane z liczby zdobytych; data zdobycia lub pozostała wartość w podpowiedzi |
 | Bezpieczeństwo i dane | ✅ | prawdziwa sesja serwerowa, wylogowanie, eksport, usunięcie konta; bez deklaracji 2FA i listy sesji |

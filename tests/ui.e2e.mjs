@@ -262,7 +262,7 @@ try {
     AV.renderStats();
     return out;
   });
-  log('statystyki: puste dane bez fikcji', emptyStats.pf === '—' && emptyStats.wr === '—' && emptyStats.plan === '—' && emptyStats.fees === '' && emptyStats.checklist.includes('Brak danych') && !emptyStats.checklist.includes('7/7') && !emptyStats.insight.includes('Tak trzymaj'), JSON.stringify(emptyStats));
+  log('statystyki: puste dane bez fikcji', emptyStats.pf === '—' && emptyStats.wr === '—' && emptyStats.plan === '—' && emptyStats.fees === '—' && emptyStats.checklist.includes('Brak danych') && !emptyStats.checklist.includes('7/7') && !emptyStats.insight.includes('Tak trzymaj'), JSON.stringify(emptyStats));
 
   // wyniki z API/MCP mogą przyjść jako tekst — sumy muszą być numeryczne
   const textNumberStats = await page.evaluate(() => {
@@ -380,13 +380,19 @@ try {
   const afterAdd = await page.locator('#lvls .lvl').count();
   const levelRow = page.locator('#lvls .lvl').last();
   await levelRow.locator('select').selectOption({ label: 'Płynność' });
-  await levelRow.locator('input').first().fill('70 123');
-  await levelRow.locator('input').nth(1).fill('E2E poziom');
+  await levelRow.locator('input.mono').fill('70 123');
+  await levelRow.locator('input:not(.mono):not(.lvl-type)').fill('E2E poziom');
   await page.click('#addLvl');
   const poiRow = page.locator('#lvls .lvl').last();
   await poiRow.locator('select').selectOption({ label: 'POI' });
-  await poiRow.locator('input').first().fill('70 124');
-  await poiRow.locator('input').nth(1).fill('E2E POI');
+  await poiRow.locator('input.mono').fill('70 124');
+  await poiRow.locator('input:not(.mono):not(.lvl-type)').fill('E2E POI');
+  await page.click('#addLvl');
+  const customRow = page.locator('#lvls .lvl').last();
+  await customRow.locator('select').selectOption({ label: 'Własny…' });
+  await customRow.locator('.lvl-type').fill('VWAP dzienny');
+  await customRow.locator('input.mono').fill('70 125');
+  await customRow.locator('input:not(.mono):not(.lvl-type)').fill('E2E własny poziom');
   await page.click('#planMarkets .chip[data-m="ETH"]');
   await page.click('#planBias .chip[data-b="short"]');
   const chips = await page.evaluate(() => ({
@@ -409,6 +415,7 @@ try {
   log('plan dnia: chipy rynku i biasu', chips.market === 'ETH' && chips.bias === 'short', JSON.stringify(chips));
   log('plan dnia: poziomy + zatwierdzenie', afterAdd === beforeLevels + 1 && approved.ok && approved.levels.length >= 2, JSON.stringify(approved));
   log('plan dnia: poziomy Liquidity (Płynność) i POI', approved.levels.some((l) => l.type === 'Liquidity' && l.price === '70 123') && approved.levels.some((l) => l.type === 'POI' && l.price === '70 124'), JSON.stringify(approved.levels));
+  log('plan dnia: własny kluczowy poziom', approved.levels.some((l) => l.type === 'VWAP dzienny' && l.price === '70 125'), JSON.stringify(approved.levels));
   const adherence = await page.evaluate(() => document.querySelector('#adherenceHint')?.textContent || '');
   log('plan: bez fikcyjnych statystyk', !adherence.includes('31,40') && !adherence.includes('42,10'), adherence);
   const navBadges = await page.evaluate(() => {
@@ -433,17 +440,49 @@ try {
       bias: document.querySelector('#planBias .chip.on')?.dataset.b,
       why: document.querySelector('#planWhy')?.value,
       levels: Array.from(document.querySelectorAll('#lvls .lvl')).map((row) => ({
-        type: row.querySelector('select').value,
-        price: row.querySelectorAll('input')[0].value
+        type: row.querySelector('select').value === '__custom' ? row.querySelector('.lvl-type').value : row.querySelector('select').value,
+        price: row.querySelector('input.mono').value
       })),
       approved: !!p?.approvedAt
     };
   });
   log('plan dnia: zapis w bazie po reloadzie', planReload.market === 'ETH' && planReload.bias === 'short' && planReload.why === why && planReload.levels.length >= 2 && planReload.approved, JSON.stringify(planReload));
    log('plan dnia: typy poziomów po reloadzie', planReload.levels.some((l) => l.type === 'Liquidity' && l.price === '70 123') && planReload.levels.some((l) => l.type === 'POI' && l.price === '70 124'), JSON.stringify(planReload.levels));
+   log('plan dnia: własny poziom po reloadzie', planReload.levels.some((l) => l.type === 'VWAP dzienny' && l.price === '70 125'), JSON.stringify(planReload.levels));
+
+  // plan globalny: zakładka, zapis bez daty i kafelkowy podgląd
+  await page.click('#planSeg button[data-day="global"]');
+  const globalWhy = 'E2E: plan globalny ' + Date.now();
+  await page.click('#addLvl');
+  const globalLevel = page.locator('#lvls .lvl').last();
+  await globalLevel.locator('input.mono').fill('68 500');
+  await globalLevel.locator('input:not(.mono):not(.lvl-type)').fill('E2E poziom globalny');
+  await page.click('#planMarkets .chip[data-m="BTC"]');
+  await page.click('#planBias .chip[data-b="long"]');
+  await page.fill('#planWhy', globalWhy);
+  await page.click('#savePlan');
+  await page.waitForFunction(() => AV.plansForDate(AV.state, 'global').some((p) => p.approvedAt), null, { timeout: 15000 });
+  const globalPlan = await page.evaluate(async () => {
+    const plans = AV.plansForDate(AV.state, 'global');
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    const data = await res.json();
+    return {
+      count: plans.length,
+      date: plans[0]?.date,
+      approved: !!plans[0]?.approvedAt,
+      why: plans[0]?.why,
+      tiles: document.querySelectorAll('#planGlobalGrid [data-plan-open="global"]').length,
+      tabOn: document.querySelector('#planSeg button[data-day="global"]')?.classList.contains('on'),
+      server: JSON.stringify(data.state?.plans?.global || '')
+    };
+  });
+  log('plan globalny: zapis i kafelki', globalPlan.count >= 1 && globalPlan.date === 'global' && globalPlan.approved && globalPlan.why === globalWhy && globalPlan.tiles >= 1 && globalPlan.tabOn, JSON.stringify(globalPlan));
+  log('plan globalny: trwały zapis w bazie', globalPlan.server.includes('global'), globalPlan.server.slice(0, 200));
 
   // dwa niezależne plany tego samego dnia i rynku pozostają osobnymi rekordami po reloadzie
   const firstPlanId = planReload.id;
+  await page.click('#planSeg button[data-day="0"]');
+  await page.waitForFunction(() => AV.planDate === AV.dateKey(new Date()), null, { timeout: 10000 });
   const sameMarketBefore = await page.evaluate(() => AV.plansForDate(AV.state, AV.planDate).filter((p) => p.market === 'ETH').length);
   const secondWhy = 'E2E: drugi plan ETH ' + Date.now();
   await page.click('#addPlan');
@@ -454,8 +493,8 @@ try {
   await page.click('#addLvl');
   const secondLevel = page.locator('#lvls .lvl').last();
   await secondLevel.locator('select').selectOption({ label: 'POI' });
-  await secondLevel.locator('input').first().fill('70 456');
-  await secondLevel.locator('input').nth(1).fill('E2E drugi plan');
+  await secondLevel.locator('input.mono').fill('70 456');
+  await secondLevel.locator('input:not(.mono):not(.lvl-type)').fill('E2E drugi plan');
   await page.click('#savePlan');
   await page.waitForFunction(async ({ id, why: expectedWhy }) => {
     const res = await fetch('/api/state', { cache: 'no-store' });
@@ -627,6 +666,46 @@ try {
   });
   log('kalkulator: własne R:R 4 i ustawiony SL', /1 : 4/.test(rrLabel) && rrRatio.sl > 0 && rrRatio.sl < rrRatio.en && rrRatio.tp > rrRatio.en && Math.abs(rrRatio.ratio - 4) < 0.2, JSON.stringify({ label: rrLabel, ...rrRatio }));
   await page.selectOption('#cRR', '3');
+
+  // kalkulator: cena wejścia nie jest nadpisywana przez live ani przez auto SL/TP
+  await page.fill('#cEn', '123.45');
+  await page.evaluate(() => AV.setPrice());
+  const entryAfterLive = await page.inputValue('#cEn');
+  await page.click('#cAuto');
+  const entryAfterAuto = await page.inputValue('#cEn');
+  log('kalkulator: cena wejścia pozostaje ręczna', entryAfterLive === '123.45' && entryAfterAuto === '123.45', JSON.stringify({ entryAfterLive, entryAfterAuto }));
+
+  // kalkulator: tryb odwrotny — kwota wejścia pod ryzyko
+  await page.fill('#cSl', '120');
+  await page.click('#cSize');
+  const sizeSuggestion = await page.evaluate(() => ({
+    label: document.querySelector('#rMainL')?.textContent || '',
+    value: document.querySelector('#rMain')?.textContent || '',
+    hint: document.querySelector('#rMainH')?.textContent || ''
+  }));
+  log('kalkulator: propozycja wielkości kapitału', sizeSuggestion.label.includes('Proponowana kwota wejścia') && /^\d/.test(sizeSuggestion.value) && sizeSuggestion.hint.includes('ryzyko'), JSON.stringify(sizeSuggestion));
+
+  // kalkulator: uśrednianie wejść i wiele TP
+  await page.click('#addAvg');
+  await page.click('#addAvg');
+  const avgRows = page.locator('#avgRows .avg-row');
+  await avgRows.nth(0).locator('.avg-price').fill('100');
+  await avgRows.nth(0).locator('.avg-pct').fill('50');
+  await avgRows.nth(1).locator('.avg-price').fill('120');
+  await avgRows.nth(1).locator('.avg-pct').fill('50');
+  const avgOut = await page.locator('#avgOut').innerText();
+  await page.click('#useAvg');
+  const avgEntry = await page.inputValue('#cEn');
+  await page.click('#addTp');
+  await page.click('#addTp');
+  const tpRows = page.locator('#tpRows .tp-row');
+  await tpRows.nth(0).locator('.tp-price').fill('120');
+  await tpRows.nth(0).locator('.tp-pct').fill('50');
+  await tpRows.nth(1).locator('.tp-price').fill('130');
+  await tpRows.nth(1).locator('.tp-pct').fill('50');
+  const tpOut = await page.locator('#tpOut').innerText();
+  log('kalkulator: uśrednianie wejść', avgOut.includes('110,00') && /^110([,.]0+)?$/.test(avgEntry), JSON.stringify({ avgOut, avgEntry }));
+  log('kalkulator: wiele TP i łączny zysk', tpOut.includes('Łączny zysk') && tpOut.includes('pokrycie 100,00%') && tpOut.includes('ważone R:R'), tpOut);
 
   // statystyki
   await page.click('.navg button[data-v="stat"]');
@@ -926,6 +1005,54 @@ try {
   await page.evaluate(() => AV.closeModal());
   log('nagrania: kategorie i odtwarzanie z linku', recFiltered === 1 && recPlay.iframe && /youtube/.test(recPlay.url), `${recFiltered} w kategorii, iframe=${recPlay.iframe}`);
 
+  const acadProgress = await page.evaluate(() => {
+    const meta = AV.state.meta;
+    const before = { done: (meta.courseDone || []).slice(), camp: (meta.bootcampDone || []).slice() };
+    meta.courseDone = [0, 1, 2];
+    meta.bootcampDone = [0, 1, 2, 3];
+    AV.renderAcademy();
+    const out = {
+      course: document.querySelector('#courseTxt')?.textContent || '',
+      courseBar: document.querySelector('#courseBar')?.style.width || '',
+      bootcamp: document.querySelector('#bootcampTxt')?.textContent || '',
+      bootcampBar: document.querySelector('#bootcampBar')?.style.width || ''
+    };
+    AV.openCourse();
+    out.courseChecks = document.querySelectorAll('#gBody [data-course-mod]').length;
+    out.courseChecked = document.querySelectorAll('#gBody [data-course-mod]:checked').length;
+    AV.closeModal();
+    AV.openBootcamp();
+    out.bootcampChecks = document.querySelectorAll('#gBody [data-bootcamp-mod]').length;
+    out.bootcampChecked = document.querySelectorAll('#gBody [data-bootcamp-mod]:checked').length;
+    AV.closeModal();
+    meta.courseDone = before.done;
+    meta.bootcampDone = before.camp;
+    AV.renderAcademy();
+    return out;
+  });
+  log('akademia: postęp kursu liczony z ukończonych lekcji', acadProgress.course.includes('25%') && acadProgress.courseBar === '25%' && acadProgress.courseChecks === 12 && acadProgress.courseChecked === 3, JSON.stringify(acadProgress));
+  log('akademia: licznik bootcampu i checklista modułów', acadProgress.bootcamp === 'moduł 4 z 6' && acadProgress.bootcampChecks === 6 && acadProgress.bootcampChecked === 4, JSON.stringify(acadProgress));
+
+  const recurring = await page.evaluate(() => {
+    const start = new Date(Date.now() - 2 * 864e5);
+    start.setUTCHours(8, 0, 0, 0);
+    const events = AV.expandAcadEvents([{
+      id: 'e2e-rec', name: 'E2E cykliczny', startAt: start.toISOString(),
+      recurrenceRule: { frequency: 3, interval: 1, count: 4 }
+    }]);
+    const duplicate = AV.expandAcadEvents([{
+      id: 'e2e-rec', name: 'E2E cykliczny', startAt: events[1]?.startAt,
+      recurrenceRule: { frequency: 3, interval: 1, count: 2 }
+    }]);
+    return {
+      len: events.length,
+      dates: Array.from(new Set(events.map((e) => e.localDate))).length,
+      generated: events.filter((e) => e.recurring).length,
+      deduped: duplicate.filter((e) => e.startAt === events[1]?.startAt).length
+    };
+  });
+  log('akademia: cykliczne live generują kolejne dni bez duplikatów', recurring.len >= 3 && recurring.dates === recurring.len && recurring.generated >= 2 && recurring.deduped === 1, JSON.stringify(recurring));
+
   const acadSchedule = await page.evaluate(() => {
     document.querySelector('#acadSeg [data-s="month"]').click();
     const month = { cells: document.querySelectorAll('#acad .mcell').length, range: document.querySelector('#acadRange').textContent, cls: document.querySelector('#acad').className };
@@ -1139,6 +1266,14 @@ try {
   log('nowa transakcja: formularz pusty', !emptyForm.pair && !emptyForm.entry && !emptyForm.size && !emptyForm.sl && !emptyForm.tp && !emptyForm.note, JSON.stringify(emptyForm));
   log('nowa transakcja: checklista 0 i brak oceny', emptyForm.checklist === '0/7' && emptyForm.grades === 0, emptyForm.checklist + ' / ' + emptyForm.grades);
   log('nowa transakcja: limit i ryzyko osobno', emptyForm.risk.includes('Limit') && emptyForm.risk.includes('Ryzyko'), emptyForm.risk.slice(0, 100));
+  const tradeSelectors = await page.evaluate(() => ({
+    accounts: Array.from(document.querySelectorAll('#ntAccount option')).map((o) => o.value),
+    brokers: Array.from(document.querySelectorAll('#ntBroker option')).map((o) => o.value),
+    account: document.querySelector('#ntAccount')?.value || '',
+    broker: document.querySelector('#ntBroker')?.value || ''
+  }));
+  log('nowa transakcja: wybór portfela i brokera', tradeSelectors.accounts.length >= 1 && tradeSelectors.brokers.includes('BingX') && tradeSelectors.brokers.includes('VTMarkets') && tradeSelectors.account === 'WEEX' && tradeSelectors.broker === 'WEEX', JSON.stringify(tradeSelectors));
+  await page.selectOption('#ntBroker', 'BingX');
 
   await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
   const manualSlChecklist = await page.evaluate(() => {
@@ -1235,11 +1370,12 @@ try {
     const t = AV.state.trades.find((x) => x.id === id);
     return t ? {
       risk: t.risk, riskPct: t.riskPct, mae: t.mae, mfe: t.mfe, sl: t.sl, checklist: t.checklist,
-      checkTotal: t.checkTotal, checklistItems: t.checklistItems || [], plan: t.plan, account: t.account,
+      checkTotal: t.checkTotal, checklistItems: t.checklistItems || [], plan: t.plan, account: t.account, broker: t.broker,
       rr: Math.abs(AV.pnum(t.tp) - AV.pnum(t.entry)) / Math.abs(AV.pnum(t.entry) - AV.pnum(t.sl))
     } : null;
   }, addedId);
   log('nowa transakcja: ryzyko zapisane, MAE/MFE puste', !!addedTrade && addedTrade.risk === 1 && addedTrade.mae === null && addedTrade.mfe === null, JSON.stringify(addedTrade));
+  log('nowa transakcja: portfel i broker zapisane', !!addedTrade && addedTrade.account === 'WEEX' && addedTrade.broker === 'BingX', JSON.stringify(addedTrade));
   const missingMetricDisplay = await page.evaluate((id) => {
     AV.openTrade(id);
     const metric = (label) => {
@@ -1602,6 +1738,7 @@ try {
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
   const resultOnlyId = await page.evaluate(async () => {
+    await AV.waitForPushIdle(15000);
     const id = 'ui-result-only-' + Date.now();
     AV.state.trades.push({
       id, date: new Date().toISOString(), pair: 'RO/USDT', dir: 'l',
@@ -1613,7 +1750,11 @@ try {
     });
     // Persist the trade before closing it. A 409 reload restores server state,
     // so a trade that exists only in memory would vanish mid-close.
-    const saved = await AV.pushStateImmediate();
+    let saved = await AV.pushStateImmediate();
+    if (!saved) {
+      await AV.waitForPushIdle(15000);
+      saved = await AV.pushStateImmediate();
+    }
     if (!saved) return '';
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
@@ -1707,6 +1848,103 @@ try {
     && breakEvenUi.mentor.includes('zero (break-even)')
     && !breakEvenUi.mentor.includes('zyskiem')
     && breakEvenUi.dashTitle.includes('Wynik na zero'), JSON.stringify(breakEvenUi));
+
+  // zarządzanie otwartą pozycją: live P&L, interwał, BE, częściowe TP i usuwanie
+  const manageId = await page.evaluate(async () => {
+    await AV.waitForPushIdle();
+    const id = 'ui-manage-' + Date.now();
+    AV.state.trades.push({
+      id, date: new Date().toISOString(), pair: 'E2E-MANAGE/USDT', dir: 'l', entry: '100', exit: 'otwarta',
+      sl: '95', tp: '120', size: '2', result: null, r: null, grade: 'B', checklist: 5, checkTotal: 7,
+      errors: [], emotion: 'Spokój', note: '', mentor: '', setup: 'E2E', session: 'Londyn',
+      mae: null, mfe: null, durationMin: null, fee: 0, plan: false, source: 'Ręcznie',
+      account: 'WEEX', broker: 'BingX', screens: {}
+    });
+    AV.saveNow();
+    clearTimeout(AV._pushTimer);
+    await AV.pushStateImmediate();
+    AV.renderAll();
+    return id;
+  });
+  const livePnlRow = await page.evaluate((id) => {
+    const original = AV.instrumentQuote;
+    AV.instrumentQuote = () => ({ price: 110, chg: 0 });
+    AV.renderJournal();
+    const row = Array.from(document.querySelectorAll('#tbody tr')).find((tr) => tr.dataset.id === id);
+    const text = row?.innerText || '';
+    AV.instrumentQuote = original;
+    AV.renderJournal();
+    return text;
+  }, manageId);
+  log('dziennik: otwarta pozycja pokazuje live P&L', livePnlRow.includes('+20,00') && livePnlRow.includes('+10,00%'), livePnlRow);
+  await page.evaluate((id) => AV.openTrade(id), manageId);
+  await page.click('#tmBody .tfs [data-tf="1h"]');
+  const tfState = await page.evaluate(() => ({
+    tf: AV.ui.chartTf,
+    header: document.querySelector('#tmBody .chartbox .hd')?.innerText || ''
+  }));
+  log('wykres: zmiana interwału działa', tfState.tf === '1h' && tfState.header.includes('1h'), JSON.stringify(tfState));
+  await page.evaluate((id) => AV.breakevenTrade(id), manageId);
+  const beState = await page.evaluate((id) => {
+    const t = AV.state.trades.find((x) => x.id === id);
+    return { sl: t?.sl, be: t?.be };
+  }, manageId);
+  log('pozycja: zabezpieczenie BE przenosi SL na wejście', beState.sl === '100' && beState.be === true, JSON.stringify(beState));
+  await page.evaluate((id) => AV.closeTradeModal(id), manageId);
+  await page.waitForSelector('#ctExit', { timeout: 10000 });
+  await page.click('#ctPct [data-pct="50"]');
+  await page.fill('#ctExit', '110');
+  await page.click('#ctSave');
+  await page.waitForFunction((id) => {
+    const t = AV.state.trades.find((x) => x.id === id);
+    return !!t && (t.partials || []).length === 1 && !AV.isTradeClosed(t);
+  }, manageId, { timeout: 15000 });
+  await page.waitForFunction(async (id) => {
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const data = await res.json();
+    const t = (data.state?.trades || []).find((x) => x.id === id);
+    return !!t && (t.partials || []).length === 1 && Number(t.size) === 1;
+  }, manageId, { timeout: 15000 });
+  const partialState = await page.evaluate(async (id) => {
+    const t = AV.state.trades.find((x) => x.id === id);
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    const data = res.ok ? await res.json() : { state: {} };
+    const server = (data.state?.trades || []).find((x) => x.id === id);
+    return {
+      size: t?.size, partials: t?.partials, partialResult: t?.partialResult, open: !AV.isTradeClosed(t),
+      serverSize: server?.size, serverPartials: server?.partials, serverSl: server?.sl, serverBe: server?.be
+    };
+  }, manageId);
+  log('pozycja: częściowe TP zamyka 50% i zostawia resztę otwartą',
+    partialState.open && Number(partialState.size) === 1 && partialState.partials?.length === 1 && Number(partialState.partialResult) === 10
+      && Number(partialState.serverSize) === 1 && partialState.serverPartials?.length === 1 && partialState.serverSl === '100' && partialState.serverBe === true,
+    JSON.stringify(partialState));
+  await page.evaluate(async () => {
+    await AV.waitForPushIdle(15000);
+    AV.closeModal();
+  });
+  await page.evaluate((id) => AV.openTrade(id), manageId);
+  await page.click('[data-trade-del="' + manageId + '"]');
+  await page.click('#gConfirmOk');
+  await page.waitForFunction(async (id) => {
+    if (AV.state.trades.some((t) => t.id === id)) return false;
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const data = await res.json();
+    return !(data.state?.trades || []).some((t) => t.id === id);
+  }, manageId, { timeout: 15000 });
+  const deleteState = await page.evaluate(async (id) => {
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    const data = await res.json();
+    return {
+      removed: !AV.state.trades.some((t) => t.id === id),
+      trash: (AV.state.trash || []).some((x) => x.kind === 'trade' && x.record?.id === id),
+      serverRemoved: !(data.state?.trades || []).some((t) => t.id === id),
+      serverTrash: (data.state?.trash || []).some((x) => x.kind === 'trade' && x.record?.id === id)
+    };
+  }, manageId);
+  log('dziennik: usuwanie pozycji działa i trafia do kosza', deleteState.removed && deleteState.trash && deleteState.serverRemoved && deleteState.serverTrash, JSON.stringify(deleteState));
 
   // odznaki: każda z 8 reguł niezależnie + dynamiczny licznik i poziom
   const badges = await page.evaluate(() => {

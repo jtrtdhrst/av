@@ -114,9 +114,10 @@
   AV.normalize = (raw, fallback, taxOpts) => {
     const demo = fallback || AV.buildDemo();
     const s = deepMerge(demo, raw || {});
-    ['plans', 'trades', 'setups', 'accounts', 'flows', 'checkins', 'chat', 'overrides', 'recordings'].forEach((k) => {
+    ['plans', 'trades', 'setups', 'accounts', 'flows', 'checkins', 'chat', 'overrides', 'recordings', 'trash'].forEach((k) => {
       if (!Array.isArray(s[k]) && k !== 'plans') s[k] = demo[k];
     });
+    if (!Array.isArray(s.trash)) s.trash = [];
     const rawHasPlans = !!raw && typeof raw === 'object' && Object.prototype.hasOwnProperty.call(raw, 'plans');
     const plansInput = rawHasPlans ? raw.plans : s.plans;
     const planSource = plansInput && typeof plansInput === 'object' ? plansInput : {};
@@ -127,7 +128,8 @@
       entries.forEach((plan) => {
         if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return;
         const keyDate = String(rawKey).match(/^\d{4}-\d{2}-\d{2}/)?.[0] || '';
-        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(plan.date || '')) ? String(plan.date) : keyDate;
+        const planDate = String(plan.date || '');
+        const date = planDate === 'global' ? 'global' : (/^\d{4}-\d{2}-\d{2}$/.test(planDate) ? planDate : keyDate);
         if (!date) return;
         const marketSlug = String(plan.market || 'market').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'market';
         const id = String(plan.id || ('legacy-' + date + '-' + marketSlug + '-' + (planRecords.length + 1)));
@@ -177,6 +179,9 @@
     });
     s.plans = normalizedPlans;
     if (!s.recordings || !Array.isArray(s.recordings)) s.recordings = [];
+    if (!s.meta || typeof s.meta !== 'object') s.meta = {};
+    if (!Array.isArray(s.meta.courseDone)) s.meta.courseDone = [];
+    if (!Array.isArray(s.meta.bootcampDone)) s.meta.bootcampDone = [];
     if (!s.settings) s.settings = {};
     if (Array.isArray(s.settings.checklist)) {
       s.settings.checklist = s.settings.checklist.map((item) => item === 'R:R ≥ 2' ? 'R:R zgodne z planem' : item);
@@ -273,6 +278,8 @@
       consultation: null,
       consultationUsed: 0,
       courseProgress: 0,
+      courseDone: [],
+      bootcampDone: [],
       sessions: [],
       createdAt: Date.now()
     };
@@ -1015,7 +1022,7 @@
     const expR = rs.length ? rs.reduce((s, t) => s + AV.num(t.r), 0) / rs.length : 0;
     const avgWin = wins.length ? gp / wins.length : 0;
     const avgLoss = losses.length ? -gl / losses.length : 0;
-    const start = AV.startCapital(state) || 2000;
+    const start = AV.startCapital(state) || 0;
     let eq = start, peak = start, maxDD = 0, maxDDpct = 0;
     const curve = [{ x: 0, eq: start, date: null }];
     trades.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((t, i) => {

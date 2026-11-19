@@ -115,7 +115,9 @@ Zachowane: pulpit, plan dnia, dziennik, playbook, nowa transakcja, kalkulator, p
 
 Każdy widok ma czytelny adres w hashu (`#/dziennik`, `#/akademia`, `#/podatki`, `#/konto`, …); stare krótkie adresy (`#/trans`, `#/akad`, `#/ust`) pozostają aliasami i są przepisywane na slug. Kontrakt: `DOCUMENTATION.md §11.1a`, test: `tests/router.unit.mjs`.
 
-- Karta salda na pulpicie rozwija listę kont. Plan dnia pozwala utrzymywać wiele niezależnych planów dla tej samej daty, każdy z własnym rynkiem i poziomami płynności/POI; dopasowanie transakcji nie wybiera arbitralnie, gdy kilka planów pasuje do tego samego rynku.
+- Karta salda na pulpicie rozwija listę kont. Plan dnia pozwala utrzymywać wiele niezależnych planów dla tej samej daty, każdy z własnym rynkiem i poziomami płynności/POI oraz własnym poziomem użytkownika; dopasowanie transakcji nie wybiera arbitralnie, gdy kilka planów pasuje do tego samego rynku. Zakładka „Globalnie” przechowuje scenariusze bez daty i pokazuje je jako kafelki.
+- Dziennik pozwala wybrać portfel i brokera przy dodawaniu transakcji, pokazuje live P&L otwartych pozycji, przełącza interwał wykresu oraz obsługuje częściowe TP, BE i wcześniejsze zamknięcie. Usunięcie trafia do kosza stanu, dzięki czemu przechodzi walidację integralności.
+- Kalkulator zachowuje ręcznie wpisaną cenę wejścia, oferuje tryb odwrotny „Zakładam SL → jaka kwota”, uśrednianie wielu wejść i wiele TP z łącznym zyskiem.
 - Ręczna checklista ocenia transakcję, ale nie narzuca minimalnej liczby zaznaczeń; wybór punktów jest ręczny. Edycja zachowuje historyczny wynik, a gdy starszy wpis nie zapisał nazw zaznaczonych punktów, UI nie dopisuje zmyślonego wyboru. Transakcja wymaga SL; R:R dobiera się do setupu, bez stałego minimum. Po zapisie formularz otwiera dziennik i resetuje jego filtry. Dziennik pokazuje wszystkie wpisy niezależnie od tego, czy ich konto jest włączone do statystyk.
 - Etykieta kapitału początkowego konta jest jawna („Kapitał startowy”). Zakres statystyk ogólnych pozostaje niezależny od zakresu kalendarza PnL.
 - MAE/MFE, opłaty, czas trwania i checklista z importu pozostają nieznane (`null`), jeśli źródło ich nie dostarcza; puste pomiary nie są liczone jak zero. CSV nie tworzy wpisu bez PnL i bez danych do jego wyliczenia, ale zachowuje jawny PnL równy 0.
@@ -172,7 +174,7 @@ Po błędzie synchronizacji ostatni poprawny zestaw pozostaje w bazie i UI.
 
 ### FR-10 — Wydarzenia cykliczne
 
-`recurrence_rule` jest przechowywane bez uproszczeń. Aplikacja nie generuje wystąpień, których nie ma w odpowiedzi Discord. Nieobsługiwany wariant nie może psuć harmonogramu.
+`recurrence_rule` jest przechowywane bez uproszczeń. Front rozwija wystąpienia daily/weekly/monthly do 31 dni wprzód na potrzeby harmonogramu, z poszanowaniem interwału, liczby wystąpień i daty końca oraz deduplikacją po nazwie i czasie; wystąpienia obecne w odpowiedzi Discord mają pierwszeństwo. Nieobsługiwany wariant nie może psuć harmonogramu.
 
 ### FR-11 — Synchronizacja CRON
 

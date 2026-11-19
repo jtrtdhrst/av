@@ -50,8 +50,8 @@
     AV.setText('#stSlHint', empty ? '—' : st.withSLCount + ' z ' + st.n + ' transakcji');
     setVal('stPlan', empty ? '—' : Math.round(st.planRate) + '%', '');
     AV.setText('#stPlanHint', empty ? '—' : 'cel: 85% · ' + st.planCount + ' z planem');
-    setVal('stFees', st.fees == null ? '' : (st.fees ? '−' + AV.fmt(st.fees, 2) : '0,00'), st.fees ? 'warnc' : '');
-    AV.setText('#stFeesHint', st.fees == null || empty ? '' : st.gp ? Math.round(st.fees / st.gp * 100) + '% zysków brutto' : 'brak zysków');
+    setVal('stFees', st.fees == null ? '—' : (st.fees ? '−' + AV.fmt(st.fees, 2) : '0,00'), st.fees ? 'warnc' : '');
+    AV.setText('#stFeesHint', st.fees == null || empty ? '—' : st.gp ? Math.round(st.fees / st.gp * 100) + '% zysków brutto' : 'brak zysków');
     AV.renderEquity(st);
     AV.renderPnlCal(AV.dailyMap(AV.closedTrades(s)));
     AV.renderGradeStats(st);
@@ -65,7 +65,7 @@
   AV.renderEquity = (st) => {
     const svg = $('#eqSvg');
     if (!svg) return;
-    const pts = st.curve.length ? st.curve : [{ x: 0, eq: AV.startCapital(AV.state) || 2000 }];
+    const pts = st.curve.length ? st.curve : [{ x: 0, eq: AV.startCapital(AV.state) || 0 }];
     const vals = pts.map((p) => p.eq), mn = Math.min(...vals), mx = Math.max(...vals), span = mx - mn || 1;
     const X = (i) => i / Math.max(1, pts.length - 1) * 600;
     const Y = (v) => 200 - (v - mn) / span * 180;
@@ -526,6 +526,68 @@
     return { now, target: start, sec, liveNow, live };
   };
 
+  AV.coursePct = () => {
+    const total = (AV.COURSE_MODULES || []).length;
+    const done = new Set((AV.state?.meta?.courseDone || []).filter((i) => Number.isInteger(i) && i >= 0 && i < total)).size;
+    if (total && done) return Math.min(100, Math.round(done / total * 100));
+    const legacy = Number(AV.state?.meta?.courseProgress) || 0;
+    return Math.max(0, Math.min(100, Math.round(legacy)));
+  };
+
+  AV.bootcampDoneCount = () => {
+    const total = (AV.BOOTCAMP_MODULES || []).length;
+    return Math.min(total, new Set(AV.state?.meta?.bootcampDone || []).size);
+  };
+
+  AV.expandAcadEvents = (events) => {
+    const horizon = Date.now() + 31 * 864e5;
+    const seen = new Set();
+    const out = [];
+    (events || []).forEach((event) => {
+      if (!event) return;
+      const keyOf = (name, time) => String(name || '') + '|' + new Date(time).getTime();
+      const originalKey = keyOf(event.name, event.startAt);
+      if (!seen.has(originalKey)) { seen.add(originalKey); out.push(event); }
+      const rule = event.recurrenceRule;
+      const start = new Date(event.startAt || '');
+      const frequency = Number(rule && rule.frequency);
+      if (!rule || Number.isNaN(start.getTime()) || ![1, 2, 3].includes(frequency)) return;
+      const interval = Math.max(1, Number(rule.interval) || 1);
+      const count = Math.max(1, Number(rule.count) || 60);
+      const until = rule.until ? new Date(rule.until).getTime() : Infinity;
+      const duration = event.durationMinutes ? event.durationMinutes * 60000 : null;
+      const timeFmt = new Intl.DateTimeFormat('pl-PL', { timeZone: 'Europe/Warsaw', hour: '2-digit', minute: '2-digit' });
+      for (let n = 1; n < Math.min(count, 90); n++) {
+        let current;
+        if (frequency === 3) current = new Date(start.getTime() + interval * n * 864e5);
+        else if (frequency === 2) current = new Date(start.getTime() + interval * n * 7 * 864e5);
+        else {
+          const monthIndex = start.getUTCMonth() + interval * n;
+          const year = start.getUTCFullYear() + Math.floor(monthIndex / 12);
+          const month = ((monthIndex % 12) + 12) % 12;
+          const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+          current = new Date(Date.UTC(
+            year, month, Math.min(start.getUTCDate(), lastDay),
+            start.getUTCHours(), start.getUTCMinutes(), start.getUTCSeconds(), start.getUTCMilliseconds()
+          ));
+        }
+        if (current.getTime() > horizon || current.getTime() > until) break;
+        const key = keyOf(event.name, current);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(Object.assign({}, event, {
+          id: String(event.id || '') + '-r' + n,
+          startAt: current.toISOString(),
+          endAt: duration ? new Date(current.getTime() + duration).toISOString() : event.endAt,
+          localDate: AV.warsawDateKey(current),
+          localTime: timeFmt.format(current),
+          recurring: true
+        }));
+      }
+    });
+    return out;
+  };
+
   AV.ui.acadScale = AV.ui.acadScale || 'week';
   AV.ui.acadOffset = AV.ui.acadOffset || 0;
   AV.renderAcadSchedule = (events, todayKey) => {
@@ -670,7 +732,7 @@
     const bar = document.querySelector('#consultBar');
     if (bar) bar.style.width = Math.min(100, (used / 3) * 100) + '%';
 
-    const liveEvents = (data.live || []).slice().sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
+    const liveEvents = AV.expandAcadEvents(data.live || []).sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
     AV.renderAcadSchedule(liveEvents, todayKey);
 
     const sync = data.sync;
@@ -704,15 +766,25 @@
       }
     }
 
-    const recs = Array.isArray(s.recordings) ? s.recordings : [];
+    const savedRecs = Array.isArray(s.recordings) ? s.recordings : [];
+    const recs = savedRecs.length ? savedRecs : (AV.RECORDINGS || []);
     if (!AV.ui.recCat) AV.ui.recCat = 'Wszystkie';
     const cats = ['Wszystkie'].concat(Array.from(new Set(recs.map((r) => r.category).filter(Boolean))));
     if (!cats.includes(AV.ui.recCat)) AV.ui.recCat = 'Wszystkie';
     AV.setHTML('#recCats', cats.length > 1 ? cats.map((c) => '<button type="button" class="chip ' + (c === AV.ui.recCat ? 'on' : '') + '" data-rcat="' + AV.attr(c) + '">' + AV.esc(c) + '</button>').join('') : '');
     const visibleRecs = recs.filter((r) => AV.ui.recCat === 'Wszystkie' || r.category === AV.ui.recCat);
-    AV.setHTML('#recList', visibleRecs.map((r) =>
+    AV.setHTML('#recList', visibleRecs.length ? visibleRecs.map((r) =>
       '<div class="rec" data-recording="' + AV.attr(r.id || r.title) + '" style="cursor:pointer"><div class="th">' + AV.ic('play') + '</div><div><b>' + AV.esc(r.title) + '</b><span>' +
-      AV.esc([r.category, r.meta].filter(Boolean).join(' · ')) + '</span></div></div>').join(''));
+      AV.esc([r.category, r.meta].filter(Boolean).join(' · ')) + '</span></div></div>').join('') : '<div class="dim">Nagrania pojawią się tutaj po pierwszym live.</div>');
+    const coursePct = AV.coursePct();
+    set('#courseTxt', coursePct + '% ukończone');
+    const courseBar = document.querySelector('#courseBar');
+    if (courseBar) courseBar.style.width = coursePct + '%';
+    const bootcampDone = AV.bootcampDoneCount();
+    const bootcampTotal = (AV.BOOTCAMP_MODULES || []).length;
+    set('#bootcampTxt', 'moduł ' + bootcampDone + ' z ' + bootcampTotal);
+    const bootcampBar = document.querySelector('#bootcampBar');
+    if (bootcampBar) bootcampBar.style.width = (bootcampTotal ? bootcampDone / bootcampTotal * 100 : 0) + '%';
     AV.setText('#glossaryCount', AV.GLOSSARY.length + ' ' + AV.plural(AV.GLOSSARY.length, 'pojęcie', 'pojęcia', 'pojęć'));
     AV.setText('#alphaTestScore', s.meta.alphaTestScore ? 'Wynik: ' + s.meta.alphaTestScore + ' z ' + AV.ALPHA_TEST.length : 'Test Tradera · Mini Gry');
 
