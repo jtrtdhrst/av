@@ -348,8 +348,10 @@
     AV.planId = p.id;
     AV.storePlan(AV.state, p);
     AV.save();
-    AV.renderPlan();
     AV.renderPlanSide();
+    AV.renderPlanGlobal();
+    AV.renderPlanHistory();
+    if (AV.renderNavBadges) AV.renderNavBadges();
     return p;
   };
   AV.selectPlanChip = (selector, chip) => {

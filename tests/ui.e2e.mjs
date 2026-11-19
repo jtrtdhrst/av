@@ -262,7 +262,7 @@ try {
     AV.renderStats();
     return out;
   });
-  log('statystyki: puste dane bez fikcji', emptyStats.pf === '—' && emptyStats.wr === '—' && emptyStats.plan === '—' && emptyStats.fees === '' && emptyStats.checklist.includes('Brak danych') && !emptyStats.checklist.includes('7/7') && !emptyStats.insight.includes('Tak trzymaj'), JSON.stringify(emptyStats));
+  log('statystyki: puste dane bez fikcji', emptyStats.pf === '—' && emptyStats.wr === '—' && emptyStats.plan === '—' && emptyStats.fees === '—' && emptyStats.checklist.includes('Brak danych') && !emptyStats.checklist.includes('7/7') && !emptyStats.insight.includes('Tak trzymaj'), JSON.stringify(emptyStats));
 
   // wyniki z API/MCP mogą przyjść jako tekst — sumy muszą być numeryczne
   const textNumberStats = await page.evaluate(() => {
@@ -491,8 +491,8 @@ try {
   await page.click('#addLvl');
   const secondLevel = page.locator('#lvls .lvl').last();
   await secondLevel.locator('select').selectOption({ label: 'POI' });
-  await secondLevel.locator('input').first().fill('70 456');
-  await secondLevel.locator('input').nth(1).fill('E2E drugi plan');
+  await secondLevel.locator('input.mono').fill('70 456');
+  await secondLevel.locator('input:not(.mono):not(.lvl-type)').fill('E2E drugi plan');
   await page.click('#savePlan');
   await page.waitForFunction(async ({ id, why: expectedWhy }) => {
     const res = await fetch('/api/state', { cache: 'no-store' });
