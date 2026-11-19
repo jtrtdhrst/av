@@ -54,7 +54,7 @@
     if (v === 'gieldy') { AV.renderExchangeList(); AV.renderEx(AV.exKey); }
     if (v === 'nowa') { AV.renderNewTradeForm(); AV.renderLock(); }
     if (v === 'kalk') AV.loadInstrumentQuotes();
-    if (v === 'akad') { AV.renderAcademy(); AV.loadEvents(); }
+    if (v === 'akad') { if (AV.renderAcademy) AV.renderAcademy(); if (AV.loadEvents) AV.loadEvents(); }
   };
 
   /* ---------- ticker ---------- */
