@@ -54,6 +54,7 @@
     if (v === 'gieldy') { AV.renderExchangeList(); AV.renderEx(AV.exKey); }
     if (v === 'nowa') { AV.renderNewTradeForm(); AV.renderLock(); }
     if (v === 'kalk') AV.loadInstrumentQuotes();
+    if (v === 'akad') { AV.renderAcademy(); AV.loadEvents(); }
   };
 
   /* ---------- ticker ---------- */
@@ -394,7 +395,7 @@
         if (AV.ui.planHistOpen) $('#planHistoryCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } else {
         AV.ui.planHistOpen = false;
-        AV.planDate = b.dataset.day === '0' ? AV.dateKey(new Date()) : AV.dateKey(AV.addDays(new Date(), -1));
+        AV.planDate = b.dataset.day === 'global' ? 'global' : b.dataset.day === '0' ? AV.dateKey(new Date()) : AV.dateKey(AV.addDays(new Date(), -1));
         AV.planId = null;
         AV.renderPlan();
       }
@@ -443,11 +444,23 @@
     $('#addLvl')?.addEventListener('click', () => {
       $('#lvls').insertAdjacentHTML('beforeend', AV.levelRow({ type: 'Wsparcie' }));
       const rows = $$('#lvls .lvl');
-      rows[rows.length - 1]?.querySelector('input')?.focus();
+      rows[rows.length - 1]?.querySelector('input.mono')?.focus();
       AV.savePlanDraft();
     });
     $('#lvls')?.addEventListener('click', (e) => {
       if (e.target.classList.contains('x')) { e.target.parentNode.remove(); AV.savePlanDraft(); }
+    });
+    $('#lvls')?.addEventListener('change', (e) => {
+      const sel = e.target.closest('select');
+      if (!sel) return;
+      const custom = sel.closest('.lvl')?.querySelector('.lvl-type');
+      if (custom) {
+        const own = sel.value === '__custom';
+        custom.style.display = own ? '' : 'none';
+        custom.closest('.lvl')?.classList.toggle('has-custom', own);
+        if (own) custom.focus();
+      }
+      AV.savePlanDraft();
     });
     $('#planEditor')?.addEventListener('input', AV.debounce(() => { AV.savePlanDraft(); }, AV.PLAN_AUTOSAVE_MS));
     $('#planEditor')?.addEventListener('change', () => AV.savePlanDraft());
@@ -459,6 +472,7 @@
       AV.renderPlan(); AV.renderDashboard(); AV.renderSettings();
     });
     $('#copyPlan')?.addEventListener('click', async () => {
+      if (AV.planDate === 'global') { AV.toast('Plan globalny nie jest przypisany do dnia — skopiuj go z listy planów dnia.'); return; }
       const yesterday = AV.dateKey(AV.addDays(new Date(AV.planDate + 'T12:00:00'), -1));
       const current = AV.planById(AV.state, AV.planId);
       const y = AV.plansForDate(AV.state, yesterday).find((item) => item.market === current?.market) || AV.plansForDate(AV.state, yesterday)[0];
@@ -505,6 +519,13 @@
     $('#tm')?.addEventListener('click', (e) => {
       if (e.target.id === 'tm' || e.target.closest('#mc')) $('#tm').classList.remove('on');
     });
+    $('#tmBody')?.addEventListener('click', (e) => {
+      const tf = e.target.closest('[data-tf]');
+      if (!tf) return;
+      e.preventDefault();
+      AV.ui.chartTf = tf.dataset.tf;
+      if (AV.ui.openTradeId) AV.openTrade(AV.ui.openTradeId);
+    });
     document.addEventListener('click', (e) => {
       const ed = e.target.closest('[data-trade-edit]');
       if (ed) { e.preventDefault(); AV.editTrade(ed.dataset.tradeEdit); return; }
@@ -514,15 +535,60 @@
         const t = AV.state.trades.find((x) => x.id === del.dataset.tradeDel);
         AV.confirm({
           title: 'Usunąć transakcję?', text: (t ? t.pair + ' · ' + AV.dateTimeShort(t.date) : '') + '. Tej operacji nie da się cofnąć.',
-          confirmLabel: 'Usuń', danger: true, onConfirm: () => {
-            AV.state.trades = AV.state.trades.filter((x) => x.id !== del.dataset.tradeDel);
-            AV.saveNow(); $('#tm').classList.remove('on'); AV.renderAll(); AV.toast('Transakcja usunięta');
-          }
+          confirmLabel: 'Usuń', danger: true, onConfirm: () => AV.deleteTrade(del.dataset.tradeDel)
         });
       }
+      const be = e.target.closest('[data-trade-be]');
+      if (be) { e.preventDefault(); AV.breakevenTrade(be.dataset.tradeBe); return; }
       const cl = e.target.closest('[data-trade-close]');
       if (cl) { e.preventDefault(); AV.closeTradeModal(cl.dataset.tradeClose); }
     });
+  };
+
+  AV.deleteTrade = async (id) => {
+    const trade = AV.state.trades.find((x) => x.id === id);
+    if (!trade) return false;
+    const beforeTrades = AV.state.trades.slice();
+    const beforeTrash = Array.isArray(AV.state.trash) ? AV.state.trash.slice() : null;
+    AV.state.trades = AV.state.trades.filter((x) => x.id !== id);
+    if (!Array.isArray(AV.state.trash)) AV.state.trash = [];
+    AV.state.trash.push({
+      id: AV.uid('trash'),
+      kind: 'trade',
+      label: trade.pair + ' · ' + AV.dateTimeShort(trade.date),
+      record: JSON.parse(JSON.stringify(trade)),
+      deletedAt: new Date().toISOString()
+    });
+    AV.saveNow();
+    clearTimeout(AV._pushTimer);
+    const saved = await AV.pushStateImmediate();
+    if (!saved && AV.api.online && AV.api.authenticated) {
+      AV.state.trades = beforeTrades;
+      if (beforeTrash) AV.state.trash = beforeTrash; else delete AV.state.trash;
+      AV.saveNow();
+      AV.renderAll();
+      AV.toast('Nie udało się usunąć transakcji — zapis na serwerze nie powiódł się. Spróbuj ponownie.', 5000);
+      return false;
+    }
+    $('#tm').classList.remove('on');
+    AV.renderAll();
+    AV.toast(saved ? 'Transakcja usunięta' : 'Transakcja usunięta lokalnie. Synchronizacja nastąpi po powrocie połączenia.', saved ? 3500 : 5000);
+    return true;
+  };
+
+  AV.breakevenTrade = async (id) => {
+    const t = AV.state.trades.find((x) => x.id === id);
+    if (!t || AV.isTradeClosed(t)) return;
+    if (String(t.sl).trim() === String(t.entry).trim()) { AV.toast('SL już jest na poziomie wejścia'); return; }
+    t.sl = String(t.entry);
+    t.be = true;
+    t.mentor = 'SL przeniesiony na wejście. Od tego momentu pozycja nie może przynieść straty.';
+    AV.saveNow();
+    clearTimeout(AV._pushTimer);
+    const saved = await AV.pushStateImmediate();
+    AV.openTrade(id);
+    AV.renderAll();
+    AV.toast(saved ? 'SL przeniesiony na BE' : 'SL przeniesiony lokalnie. Synchronizacja po powrocie połączenia.', saved ? 3000 : 5000);
   };
 
   AV.editTrade = (id) => {
@@ -550,6 +616,21 @@
     AV.setVal('#ntSl', t.sl);
     AV.setVal('#ntTp', t.tp);
     AV.setVal('#ntNote', t.note);
+    const accSel = $('#ntAccount');
+    if (accSel) {
+      if (!Array.from(accSel.options).some((o) => o.value === t.account)) {
+        accSel.insertAdjacentHTML('beforeend', '<option value="' + AV.attr(t.account || '') + '">' + AV.esc(t.account || '') + '</option>');
+      }
+      accSel.value = t.account || accSel.value;
+    }
+    const brokerSel = $('#ntBroker');
+    if (brokerSel) {
+      const brokerValue = t.broker || t.source || 'WEEX';
+      if (!Array.from(brokerSel.options).some((o) => o.value === brokerValue)) {
+        brokerSel.insertAdjacentHTML('beforeend', '<option value="' + AV.attr(brokerValue) + '">' + AV.esc(brokerValue) + '</option>');
+      }
+      brokerSel.value = brokerValue;
+    }
     $$('#ntDir .chip').forEach((c) => c.classList.toggle('on', c.dataset.d === AV.tradeDirection(t.dir)));
     ['#ntPair', '#ntEntry', '#ntSize', '#ntSl', '#ntTp'].forEach((selector) => {
       const input = $(selector);
@@ -584,22 +665,35 @@
     if (!t || AV.isTradeClosed(t)) return;
     let saving = false;
     const body = AV.openModal('<div class="eyebrow">Zamknięcie pozycji</div><h1 style="font-size:26px;margin-top:6px">' + AV.esc(t.pair) + ' · ' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</h1>' +
-      '<p class="mut" style="margin-top:8px;font-size:13.5px">Wpisz cenę wyjścia. Wynik policzę z wielkości pozycji. Możesz też podać wynik ręcznie.</p>' +
+      '<p class="mut" style="margin-top:8px;font-size:13.5px">Wpisz cenę wyjścia. Wynik policzę z wielkości pozycji. Możesz też podać wynik ręcznie. Część pozycji możesz zamknąć, wybierając procent.</p>' +
+      '<span class="label">Zamknij część pozycji</span><div class="chips sel" id="ctPct"><span class="chip" data-pct="25">25%</span><span class="chip" data-pct="50">50%</span><span class="chip" data-pct="75">75%</span><span class="chip on" data-pct="100">100%</span></div>' +
       '<div class="grid g2" style="margin-top:14px"><div><span class="label">Cena wyjścia</span><input class="input mono" id="ctExit" value="' + AV.attr(t.exit === 'otwarta' ? t.entry : t.exit) + '"></div><div><span class="label">Wynik USDT (opcjonalnie)</span><input class="input mono" id="ctResult" placeholder="np. 65,20"></div></div>' +
+      '<label class="check" style="margin-top:10px"><span class="box" id="ctBeBox"></span><span>Przenieś SL na wejście (BE)</span></label>' +
       '<div class="hint" id="ctHint" style="margin-top:10px">Wejście ' + AV.esc(t.entry) + ' · wielkość ' + AV.esc(t.size) + '</div>' +
       '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px"><button class="btn g" data-gclose>Anuluj</button><button class="btn p" id="ctSave">Zamknij pozycję</button></div>', { maxWidth: '520px' });
+    const pctValue = () => Number($('#ctPct .chip.on', body)?.dataset.pct || 100);
     const updateHint = () => {
-      const exit = AV.pnum($('#ctExit', body).value), entry = AV.pnum(t.entry), size = AV.pnum(t.size);
-      const calc = (exit - entry) * size * (AV.tradeDirection(t.dir) === 's' ? -1 : 1);
-      AV.setText('#ctHint', 'Szacowany wynik: ' + (Number.isFinite(calc) ? AV.signed(calc, 2, ' USDT') : '—') + ' · SL ' + t.sl + ' · TP ' + t.tp);
+      const exit = AV.pnum($('#ctExit', body).value), entry = AV.pnum(t.entry), size = AV.pnum(t.size), pct = pctValue();
+      const calc = (exit - entry) * size * (pct / 100) * (AV.tradeDirection(t.dir) === 's' ? -1 : 1);
+      const remaining = size * (1 - pct / 100);
+      AV.setText('#ctHint', 'Szacowany wynik: ' + (Number.isFinite(calc) ? AV.signed(calc, 2, ' USDT') : '—') + ' · zamykasz ' + pct + '% (' + AV.fmt(size * pct / 100, 4) + ')' + (pct < 100 ? ' · zostaje ' + AV.fmt(remaining, 4) : '') + ' · SL ' + t.sl + ' · TP ' + t.tp);
     };
+    $('#ctPct', body).addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip'); if (!chip) return;
+      $$('#ctPct .chip', body).forEach((c) => c.classList.toggle('on', c === chip));
+      updateHint();
+    });
+    let moveBe = false;
+    const beBox = $('#ctBeBox', body);
+    beBox.parentElement.addEventListener('click', () => { moveBe = !moveBe; beBox.classList.toggle('on', moveBe); });
     $('#ctExit', body).addEventListener('input', updateHint);
     updateHint();
     $('#ctSave', body).onclick = async () => {
       if (saving) return;
       const exitText = $('#ctExit', body).value.trim();
       const resultText = $('#ctResult', body).value.trim();
-      const entry = AV.pnum(t.entry), size = AV.pnum(t.size);
+      const pct = Math.min(100, Math.max(1, pctValue()));
+      const entry = AV.pnum(t.entry), fullSize = AV.pnum(t.size);
       let exit = null;
       if (exitText) {
         exit = AV.pnum(exitText);
@@ -608,8 +702,8 @@
       let result = resultText ? AV.pnum(resultText) : null;
       if (result == null) {
         if (exit == null) { AV.toast('Podaj cenę wyjścia albo wynik'); return; }
-        if (!(entry > 0) || !(size > 0)) { AV.toast('Brak ceny wejścia lub wielkości — podaj wynik ręcznie'); return; }
-        result = (exit - entry) * size * (AV.tradeDirection(t.dir) === 's' ? -1 : 1);
+        if (!(entry > 0) || !(fullSize > 0)) { AV.toast('Brak ceny wejścia lub wielkości — podaj wynik ręcznie'); return; }
+        result = (exit - entry) * fullSize * (pct / 100) * (AV.tradeDirection(t.dir) === 's' ? -1 : 1);
       }
       if (!Number.isFinite(result)) { AV.toast('Podaj cenę wyjścia albo wynik'); return; }
       if (!(await AV.waitForPushIdle())) {
@@ -621,22 +715,36 @@
       saveButton.disabled = true;
       saveButton.textContent = 'Zapisywanie…';
       const originalState = AV.state;
-      const originalTrade = { ...t };
+      const originalTrade = JSON.parse(JSON.stringify(t));
       const slText = String(t.sl ?? '').trim();
       const risk = slText !== '' && slText !== 'brak' && slText !== '—'
-        ? Math.abs(entry - AV.pnum(slText)) * size
+        ? Math.abs(entry - AV.pnum(slText)) * (AV.pnum(t.initialSize) > 0 ? AV.pnum(t.initialSize) : fullSize)
         : null;
-      t.exit = exit == null ? '' : AV.fmt(exit, AV.dec(exit));
-      t.result = Math.round(result * 100) / 100;
-      t.r = risk != null && risk > 0 ? Math.round(t.result / risk * 100) / 100 : null;
       const closedAtMs = Date.now();
-      t.closedAt = new Date(closedAtMs).toISOString();
-      t.durationMin = Math.max(1, Math.round((closedAtMs - new Date(t.date)) / 60000));
-      t.mentor = t.result > 0
-        ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
-        : (t.result < 0
-          ? 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.'
-          : 'Pozycja zamknięta na zero (break-even). Oceń, czy wyjście było zgodne z planem.');
+      const round2 = (value) => Math.round(value * 100) / 100;
+      const fullClose = pct >= 100;
+      if (fullClose) {
+        t.initialSize = AV.pnum(t.initialSize) > 0 ? t.initialSize : AV.fmt(fullSize, 4);
+        t.exit = exit == null ? '' : AV.fmt(exit, AV.dec(exit));
+        t.result = round2((AV.pnum(t.partialResult) || 0) + result);
+        t.r = risk != null && risk > 0 ? Math.round(t.result / risk * 100) / 100 : null;
+        t.closedAt = new Date(closedAtMs).toISOString();
+        t.durationMin = Math.max(1, Math.round((closedAtMs - new Date(t.date)) / 60000));
+        t.mentor = t.result > 0
+          ? 'Pozycja zamknięta z zyskiem. Sprawdź, czy wyszedłeś zgodnie z planem, a nie z emocji.'
+          : (t.result < 0
+            ? 'Pozycja zamknięta na minusie. Sprawdź, czy SL był ustawiony przed wejściem.'
+            : 'Pozycja zamknięta na zero (break-even). Oceń, czy wyjście było zgodne z planem.');
+        if (moveBe) t.be = true;
+      } else {
+        t.initialSize = AV.pnum(t.initialSize) > 0 ? t.initialSize : AV.fmt(fullSize, 4);
+        t.partials = Array.isArray(t.partials) ? t.partials : [];
+        t.partials.push({ price: exit == null ? '' : AV.fmt(exit, AV.dec(exit)), pct, result: round2(result), at: new Date(closedAtMs).toISOString() });
+        t.partialResult = round2((AV.pnum(t.partialResult) || 0) + result);
+        t.size = AV.fmt(Math.max(0, fullSize * (1 - pct / 100)), 4);
+        if (moveBe) { t.sl = String(t.entry); t.be = true; }
+        t.mentor = 'Zamknięto ' + pct + '% pozycji. Pozostała część nadal jest otwarta — prowadź ją według planu.';
+      }
       AV.saveNow();
       clearTimeout(AV._pushTimer);
       const saved = await AV.pushStateImmediate();
@@ -663,9 +771,9 @@
       $('#tm').classList.remove('on');
       AV.renderAll();
       AV.toast(saved
-        ? 'Pozycja zamknięta: ' + AV.signed(t.result, 2, ' USDT')
-        : 'Pozycja zamknięta lokalnie. Synchronizacja nastąpi po powrocie połączenia.', 5000);
-      if (saved && AV.pwa && AV.pwa.notifyTradeClosed) AV.pwa.notifyTradeClosed(t);
+        ? (fullClose ? 'Pozycja zamknięta: ' + AV.signed(t.result, 2, ' USDT') : 'Zamknięto ' + pct + '% pozycji: ' + AV.signed(result, 2, ' USDT'))
+        : 'Zmiana zapisana lokalnie. Synchronizacja nastąpi po powrocie połączenia.', 5000);
+      if (saved && fullClose && AV.pwa && AV.pwa.notifyTradeClosed) AV.pwa.notifyTradeClosed(t);
     };
   };
 
@@ -836,6 +944,8 @@
         risk: risk == null ? null : Math.round(risk * 100) / 100,
         riskPct: riskPct == null ? null : Math.round(riskPct * 100) / 100
       }),
+      account: executionLocked ? (existingTrade.account || '') : ($('#ntAccount')?.value || (s.accounts.find((a) => a.include)?.name || s.accounts[0]?.name || 'Konto główne')),
+      broker: executionLocked ? (existingTrade.broker || existingTrade.source || '') : ($('#ntBroker')?.value || existingTrade?.broker || existingTrade?.source || 'WEEX'),
       plan: planAligned,
       mentor: grade === 'A' ? 'Wzorowo: plan, pełna checklista, SL, spokojna głowa. Tak wyglądają Twoje najlepsze transakcje.' : grade === 'B' ? 'Setup z planu, drobne odstępstwa. Trzymaj się checklisty do końca.' : (errors.length ? 'Ocena C i ' + errors.length + ' ' + AV.plural(errors.length, 'błąd', 'błędy', 'błędów') + '. To nie pech, to decyzja. Wróć do planu.' : 'Ocena C: brak setupu albo pośpiech. Odczekaj i wróć z planem.')
     };
@@ -1021,6 +1131,7 @@
     if (typeof c.en === 'string' && c.en) AV.setVal('#cEn', c.en);
     if (typeof c.sl === 'string' && c.sl) AV.setVal('#cSl', c.sl);
     if (typeof c.tp === 'string' && c.tp) AV.setVal('#cTp', c.tp);
+    if (!AV.pnum($('#cEn')?.value)) AV.autoLv();
     AV.syncCalcRRUI();
     AV.renderCalcPortfolios();
     AV.calcResult();
@@ -1032,10 +1143,11 @@
     AV.selectInstrument(withQuotes);
   };
   AV.selectInstrument = (withQuotes = true) => {
-    AV.setPrice();
+    AV.setPrice(true);
+    AV.autoLv();
     if (withQuotes) AV.loadInstrumentQuotes();
   };
-  AV.setPrice = () => {
+  AV.setPrice = (resetEntry = false) => {
     const x = AV.INST[AV.calc.mode][+$('#cInst').value || 0];
     if (!x) return;
     const q = AV.instrumentQuote(x[0]);
@@ -1043,9 +1155,10 @@
       ? '<span class="win" style="font-size:11px;display:flex;align-items:center;gap:6px"><span class="pulse" style="width:6px;height:6px"></span>live</span>'
       : '<span class="dim" style="font-size:11px">brak notowań</span>';
     AV.setHTML('#cPrice', '<b>' + (q ? AV.fmt(q.price, AV.dec(q.price)) : '—') + '</b>' + badge);
-    AV.autoLv();
+    if (resetEntry && q) AV.setVal('#cEn', '');
+    AV.calcResult();
   };
-  AV.autoLv = () => {
+  AV.autoLv = (force = false) => {
     const x = AV.INST[AV.calc.mode][+$('#cInst').value || 0];
     if (!x) return;
     const q = AV.instrumentQuote(x[0]);
@@ -1053,9 +1166,11 @@
     const p = q.price, k = AV.calc.mode === 'crypto' ? 0.012 : x[2] === 'fx' ? 0.004 : 0.008;
     const s = AV.calc.dir === 'long' ? 1 : -1;
     const rr = AV.calcRR();
-    AV.setVal('#cEn', AV.fmt(p, AV.dec(p)));
-    AV.setVal('#cSl', AV.fmt(p * (1 - s * k), AV.dec(p)));
-    AV.setVal('#cTp', AV.fmt(p * (1 + s * k * rr), AV.dec(p)));
+    const typedEntry = AV.pnum($('#cEn')?.value);
+    const entry = typedEntry > 0 ? typedEntry : p;
+    if (!(typedEntry > 0)) AV.setVal('#cEn', AV.fmt(entry, AV.dec(entry)));
+    if (force || !AV.pnum($('#cSl')?.value)) AV.setVal('#cSl', AV.fmt(entry * (1 - s * k), AV.dec(entry)));
+    if (force || !AV.pnum($('#cTp')?.value)) AV.setVal('#cTp', AV.fmt(entry * (1 + s * k * rr), AV.dec(entry)));
     AV.calcResult();
   };
   AV.pipVal = (x, pr) => {
@@ -1127,6 +1242,89 @@
       ]));
     }
   };
+  AV.addAvgRow = (price = '', pct = '') => {
+    const host = $('#avgRows');
+    if (!host) return;
+    host.insertAdjacentHTML('beforeend', '<div class="avg-row" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr) auto 28px;gap:8px;margin-top:8px"><input class="input mono avg-price" inputmode="decimal" placeholder="Cena" value="' + AV.attr(price) + '"><input class="input mono avg-pct" inputmode="decimal" placeholder="% kapitału" value="' + AV.attr(pct) + '"><span class="dim mono avg-weight" style="align-self:center;font-size:12px">—</span><span class="x" data-avg-del style="cursor:pointer;color:var(--dim);text-align:center">✕</span></div>');
+    AV.calcAverage();
+  };
+  AV.calcAverage = () => {
+    const rows = AV.$$('#avgRows .avg-row');
+    let weight = 0, sum = 0;
+    rows.forEach((row) => {
+      const price = AV.pnum(row.querySelector('.avg-price')?.value);
+      const pct = AV.pnum(row.querySelector('.avg-pct')?.value);
+      const out = row.querySelector('.avg-weight');
+      if (price > 0 && pct > 0) {
+        weight += pct;
+        sum += price * pct;
+        if (out) out.textContent = AV.fmt(price * pct / 100, AV.dec(price));
+      } else if (out) out.textContent = '—';
+    });
+    const avg = weight > 0 ? sum / weight : null;
+    AV.setText('#avgOut', avg
+      ? 'Średnia cena wejścia: ' + AV.fmt(avg, AV.dec(avg)) + ' · łącznie ' + AV.fmt(weight, 2) + '% kapitału'
+      : 'Dodaj ceny wejść i udział kapitału, żeby policzyć średnią.');
+    AV.ui.avgEntry = avg;
+    AV.calcTargets();
+    return avg;
+  };
+  AV.addTpRow = (price = '', pct = '') => {
+    const host = $('#tpRows');
+    if (!host) return;
+    host.insertAdjacentHTML('beforeend', '<div class="tp-row" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr) 28px;gap:8px;margin-top:8px"><input class="input mono tp-price" inputmode="decimal" placeholder="Cena TP" value="' + AV.attr(price) + '"><input class="input mono tp-pct" inputmode="decimal" placeholder="% pozycji" value="' + AV.attr(pct) + '"><span class="x" data-tp-del style="cursor:pointer;color:var(--dim);text-align:center">✕</span></div>');
+    AV.calcTargets();
+  };
+  AV.calcTargets = () => {
+    const rows = AV.$$('#tpRows .tp-row');
+    let weight = 0, move = 0;
+    rows.forEach((row) => {
+      const tp = AV.pnum(row.querySelector('.tp-price')?.value);
+      const pct = AV.pnum(row.querySelector('.tp-pct')?.value);
+      const entry = AV.pnum($('#cEn')?.value) || AV.ui.avgEntry;
+      if (tp > 0 && pct > 0 && entry > 0) {
+        const sign = AV.calc.dir === 'long' ? 1 : -1;
+        weight += pct;
+        move += ((tp - entry) / entry * sign) * pct;
+      }
+    });
+    if (!(weight > 0)) {
+      AV.setText('#tpOut', 'Dodaj poziomy TP i procent pozycji, żeby policzyć łączny zysk.');
+      return;
+    }
+    const weightedMove = move / weight;
+    const entry = AV.pnum($('#cEn')?.value) || AV.ui.avgEntry;
+    const sl = AV.pnum($('#cSl')?.value);
+    const bal = AV.pnum($('#cBal')?.value), risk = AV.pnum($('#cRisk')?.value);
+    const slP = entry > 0 && sl > 0 ? Math.abs(entry - sl) / entry : 0;
+    const rr = slP > 0 ? weightedMove / slP : null;
+    const notional = slP > 0 && bal > 0 && risk > 0 ? (bal * risk / 100) / slP : null;
+    const profit = notional != null ? notional * weightedMove * Math.min(weight, 100) / 100 : null;
+    AV.setText('#tpOut', 'Łączny zysk przy TP: ' + (profit != null ? AV.signed(profit, 2, ' $') : '—') + ' · ważone R:R ' + (rr != null ? '1 : ' + AV.fmt(rr, 2) : '—') + ' · pokrycie ' + AV.fmt(weight, 2) + '% pozycji');
+  };
+  AV.suggestSize = () => {
+    const bal = AV.pnum($('#cBal')?.value), risk = AV.pnum($('#cRisk')?.value);
+    const en = AV.pnum($('#cEn')?.value), sl = AV.pnum($('#cSl')?.value), lev = Math.max(1, AV.pnum($('#cLev')?.value));
+    if (!(bal > 0) || !(risk > 0) || !(en > 0) || !(sl > 0)) { AV.toast('Podaj saldo, ryzyko, cenę wejścia i stop loss'); return; }
+    if (AV.calc.dir === 'long' ? sl >= en : sl <= en) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
+    AV.calcResult();
+    const ml = bal * risk / 100, slP = Math.abs(en - sl) / en;
+    if (AV.calc.mode === 'crypto') {
+      const notional = ml / slP, margin = notional / lev;
+      AV.setText('#rMainL', 'Proponowana kwota wejścia (depozyt)');
+      AV.setText('#rMain', AV.fmt(margin, 2) + ' $');
+      AV.setText('#rMainH', 'przy dżwigni ' + lev + '× · wartość pozycji ' + AV.fmt(notional, 2) + ' $ · ryzyko ' + AV.fmt(ml, 2) + ' $');
+      AV.toast('Wchodzisz kwotą ' + AV.fmt(margin, 2) + ' $ (dźwignia ' + lev + '×), ryzykując ' + AV.fmt(ml, 2) + ' $');
+    } else {
+      const x = AV.INST[AV.calc.mode][+$('#cInst').value || 0];
+      const pip = x[3], sp = Math.abs(en - sl) / pip, pv = AV.pipVal(x, en), lots = ml / (sp * pv);
+      AV.setText('#rMainL', 'Proponowana wielkość pozycji');
+      AV.setText('#rMain', AV.fmt(lots, 2) + ' lota');
+      AV.setText('#rMainH', 'SL ' + AV.fmt(sp, 1) + ' pipsa · ryzyko ' + AV.fmt(ml, 2) + ' $');
+      AV.toast('Wchodzisz ' + AV.fmt(lots, 2) + ' lota, ryzykując ' + AV.fmt(ml, 2) + ' $');
+    }
+    $('#rMain')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
   AV.bindCalc = () => {
     $$('#calcMode button').forEach((b) => b.addEventListener('click', () => {
       AV.calc.mode = b.dataset.m;
@@ -1138,7 +1336,8 @@
     $$('#cDir .chip').forEach((c) => c.addEventListener('click', () => {
       AV.calc.dir = c.dataset.d;
       $$('#cDir .chip').forEach((x) => x.classList.toggle('on', x === c));
-      AV.autoLv();
+      AV.autoLv(true);
+      AV.calcTargets();
       AV.saveCalcState();
     }));
     $$('.qk').forEach((q) => q.querySelectorAll('.chip').forEach((c) => c.onclick = () => {
@@ -1148,8 +1347,26 @@
       AV.saveCalcState();
     }));
     const persist = AV.debounce(() => AV.saveCalcState(), 400);
-    ['#cBal', '#cLev', '#cRisk', '#cEn', '#cSl', '#cTp'].forEach((i) => $(i)?.addEventListener('input', () => { AV.calcResult(); persist(); }));
-    $('#cAuto')?.addEventListener('click', () => { AV.autoLv(); AV.saveCalcState(); });
+    ['#cBal', '#cLev', '#cRisk', '#cEn', '#cSl', '#cTp'].forEach((i) => $(i)?.addEventListener('input', () => { AV.calcResult(); AV.calcTargets(); persist(); }));
+    $('#cAuto')?.addEventListener('click', () => { AV.autoLv(true); AV.calcTargets(); AV.saveCalcState(); });
+    $('#cSize')?.addEventListener('click', () => { AV.suggestSize(); AV.calcTargets(); });
+    $('#addAvg')?.addEventListener('click', () => { AV.addAvgRow(); AV.saveCalcState(); });
+    $('#addTp')?.addEventListener('click', () => { AV.addTpRow(); });
+    $('#avgRows')?.addEventListener('input', () => { AV.calcAverage(); persist(); });
+    $('#avgRows')?.addEventListener('click', (e) => {
+      if (e.target.closest('[data-avg-del]')) { e.target.closest('.avg-row')?.remove(); AV.calcAverage(); persist(); }
+    });
+    $('#tpRows')?.addEventListener('input', () => AV.calcTargets());
+    $('#tpRows')?.addEventListener('click', (e) => {
+      if (e.target.closest('[data-tp-del]')) { e.target.closest('.tp-row')?.remove(); AV.calcTargets(); }
+    });
+    $('#useAvg')?.addEventListener('click', () => {
+      const avg = AV.calcAverage();
+      if (!(avg > 0)) { AV.toast('Dodaj co najmniej jedno wejście z ceną i udziałem'); return; }
+      AV.setVal('#cEn', AV.fmt(avg, AV.dec(avg)));
+      AV.calcResult(); AV.calcTargets(); AV.saveCalcState();
+      AV.toast('Średnia cena wejścia ustawiona');
+    });
     $('#cPortfolio')?.addEventListener('change', (e) => {
       AV.calc.accountId = e.target.value;
       AV.applyCalcPortfolio();
@@ -1169,6 +1386,7 @@
       AV.calc.accountId = ''; AV.calc.rrMode = '3'; AV.calc.rrCustom = '';
       if (AV.state) delete AV.state.calc;
       AV.setVal('#cBal', '1000'); AV.setVal('#cLev', '50'); AV.setVal('#cRisk', '1');
+      AV.setVal('#cEn', ''); AV.setVal('#cSl', ''); AV.setVal('#cTp', '');
       $$('.qk .chip').forEach((x) => x.classList.remove('on'));
       AV.syncCalcRRUI();
       AV.renderCalcPortfolios();
@@ -1342,10 +1560,41 @@
     });
     $('#akBack')?.addEventListener('click', () => AV.setPlan(false));
     $('#recordsAll')?.addEventListener('click', () => AV.openRecordings());
+    $('#courseOpen')?.addEventListener('click', () => AV.openCourse());
+    $('#bootcampOpen')?.addEventListener('click', () => AV.openBootcamp());
+    document.addEventListener('change', (e) => {
+      const course = e.target.closest('[data-course-mod]');
+      if (course) {
+        const idx = Number(course.dataset.courseMod);
+        const current = new Set(AV.state.meta.courseDone || []);
+        if (course.checked) current.add(idx); else current.delete(idx);
+        AV.state.meta.courseDone = Array.from(current).sort((a, b) => a - b);
+        AV.state.meta.courseProgress = Math.round(current.size / Math.max(1, (AV.COURSE_MODULES || []).length) * 100);
+        AV.saveNow();
+        AV.renderAcademy();
+        AV.setText('#courseModalPct', AV.coursePct() + '%');
+        return;
+      }
+      const bootcamp = e.target.closest('[data-bootcamp-mod]');
+      if (bootcamp) {
+        const idx = Number(bootcamp.dataset.bootcampMod);
+        const current = new Set(AV.state.meta.bootcampDone || []);
+        if (bootcamp.checked) current.add(idx); else current.delete(idx);
+        AV.state.meta.bootcampDone = Array.from(current).sort((a, b) => a - b);
+        AV.saveNow();
+        AV.renderAcademy();
+        AV.setText('#bootcampModalDone', AV.bootcampDoneCount() + ' z ' + (AV.BOOTCAMP_MODULES || []).length);
+      }
+    });
     document.addEventListener('click', (e) => {
       const rec = e.target.closest('[data-recording]');
       if (rec) AV.openRecording(rec.dataset.recording);
     });
+  };
+
+  AV.recordingList = () => {
+    const saved = Array.isArray(AV.state?.recordings) ? AV.state.recordings : [];
+    return saved.length ? saved : (AV.RECORDINGS || []);
   };
 
   AV.youtubeId = (url) => {
@@ -1353,7 +1602,7 @@
     return m ? m[1] : '';
   };
   AV.openRecording = (key) => {
-    const list = Array.isArray(AV.state.recordings) ? AV.state.recordings : [];
+    const list = AV.recordingList();
     const rec = list.find((r) => r.id === key) || list.find((r) => r.title === key) || null;
     const title = rec ? rec.title : String(key || 'Nagranie');
     const url = rec ? String(rec.url || '') : '';
@@ -1379,7 +1628,9 @@
       const input = body.querySelector('#recUrlInput');
       const value = (input ? input.value : '').trim();
       if (!/^https?:\/\//i.test(value)) { AV.toast('Podaj pełny link zaczynający się od http(s)://'); return; }
-      if (!Array.isArray(AV.state.recordings)) AV.state.recordings = [];
+      if (!Array.isArray(AV.state.recordings) || !AV.state.recordings.length) {
+        AV.state.recordings = AV.recordingList().map((r) => Object.assign({}, r));
+      }
       let target = AV.state.recordings.find((r) => r && r.id === (rec && rec.id));
       if (!target) {
         target = { id: 'rec' + Date.now().toString(36), title, category: '', meta: '', url: '' };
@@ -1394,11 +1645,35 @@
     };
   };
   AV.openRecordings = () => {
-    const list = Array.isArray(AV.state.recordings) ? AV.state.recordings : [];
+    const list = AV.recordingList();
     AV.openModal('<div class="eyebrow">Biblioteka</div><h1 style="font-size:26px;margin-top:6px">Wszystkie nagrania</h1><div class="grid" style="margin-top:16px;gap:8px">' +
-      list.map((r) => '<div class="card flat" style="padding:14px;cursor:pointer" data-recording="' + AV.attr(r.id || r.title) + '"><b>' + AV.esc(r.title) + '</b><div class="hint">' +
-        AV.esc([r.category, r.meta].filter(Boolean).join(' · ')) + '</div></div>').join('') +
+      (list.length ? list.map((r) => '<div class="card flat" style="padding:14px;cursor:pointer" data-recording="' + AV.attr(r.id || r.title) + '"><b>' + AV.esc(r.title) + '</b><div class="hint">' +
+        AV.esc([r.category, r.meta].filter(Boolean).join(' · ')) + '</div></div>').join('') : '<div class="dim">Nagrania pojawią się tutaj po pierwszym live.</div>') +
       '</div><div style="display:flex;gap:10px;margin-top:18px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '620px' });
+  };
+
+  AV.openCourse = () => {
+    const modules = AV.COURSE_MODULES || [];
+    const done = new Set(AV.state?.meta?.courseDone || []);
+    const body = AV.openModal('<div class="eyebrow">Materiały</div><h1 style="font-size:26px;margin-top:6px">Kurs krypto od A do Z</h1>' +
+      '<p class="mut" style="font-size:13.5px;margin-top:6px">Oznacz ukończone lekcje. Postęp zapisuje się w Twoim profilu. <b id="courseModalPct">' + AV.coursePct() + '%</b></p>' +
+      '<div style="max-height:56vh;overflow-y:auto;margin-top:12px">' + modules.map((m, i) =>
+        '<label class="check" style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)">' +
+        '<input type="checkbox" data-course-mod="' + i + '" style="accent-color:var(--alpha);margin-top:3px"' + (done.has(i) ? ' checked' : '') + '>' +
+        '<span style="display:grid;gap:2px"><b>' + AV.esc(m.title) + '</b><span class="dim" style="font-size:12px">' + AV.esc(m.chapter) + '</span></span></label>').join('') +
+      '</div><div style="display:flex;gap:10px;margin-top:16px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '620px' });
+  };
+
+  AV.openBootcamp = () => {
+    const modules = AV.BOOTCAMP_MODULES || [];
+    const done = new Set(AV.state?.meta?.bootcampDone || []);
+    const body = AV.openModal('<div class="eyebrow">Materiały</div><h1 style="font-size:26px;margin-top:6px">Bootcamp</h1>' +
+      '<p class="mut" style="font-size:13.5px;margin-top:6px">Zaznacz ukończone moduły. Licznik pokaże realny postęp. <b id="bootcampModalDone">' + AV.bootcampDoneCount() + ' z ' + modules.length + '</b></p>' +
+      '<div style="margin-top:12px">' + modules.map((m, i) =>
+        '<label class="check" style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)">' +
+        '<input type="checkbox" data-bootcamp-mod="' + i + '" style="accent-color:var(--alpha)"' + (done.has(i) ? ' checked' : '') + '>' +
+        '<b>' + AV.esc(m.title) + '</b></label>').join('') +
+      '</div><div style="display:flex;gap:10px;margin-top:16px"><button class="btn g" data-gclose>Zamknij</button></div>', { maxWidth: '560px' });
   };
 
   AV.openGlossary = () => {
@@ -2141,7 +2416,14 @@
     setInterval(AV.loadQuotes, 60000);
     setInterval(() => { if (AV.currentView === 'kalk') AV.loadInstrumentQuotes(); }, 60000);
     setInterval(() => { if (AV.isLoggedIn()) { AV.renderCalendar(); AV.macroNotify(); if (AV.propNotify) AV.propNotify(); } }, 60000);
-    setInterval(() => { if (AV.isLoggedIn()) AV.loadEvents(); }, 300000);
+    let acadDay = AV.warsawDateKey(new Date());
+    setInterval(() => {
+      if (!AV.isLoggedIn()) return;
+      const day = AV.warsawDateKey(new Date());
+      if (day !== acadDay) { acadDay = day; AV.renderAcademy(); }
+      if (AV.currentView === 'akad') AV.loadEvents();
+    }, 60000);
+    setInterval(() => { if (AV.isLoggedIn() && AV.currentView !== 'akad') AV.loadEvents(); }, 300000);
     setInterval(() => { if (AV.isLoggedIn()) AV.loadMacroEvents(); }, 300000);
     setInterval(() => { if (AV.isLoggedIn()) AV.loadWearables(); }, 300000);
     const roleCheckEvery = Math.max(300, Number(AV.api.roleRecheckSeconds) || 300) * 1000 + 15000;

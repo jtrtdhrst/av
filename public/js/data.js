@@ -120,6 +120,30 @@
     { id: 'rec5', title: 'Psychologia straty', category: 'Psychologia', meta: 'Marysia · 47 min', url: '' }
   ];
 
+  AV.COURSE_MODULES = [
+    { chapter: 'Fundamenty', title: 'Jak działa rynek krypto' },
+    { chapter: 'Fundamenty', title: 'Giełdy, portfele i bezpieczeństwo' },
+    { chapter: 'Fundamenty', title: 'Order book, spread i płynność' },
+    { chapter: 'Analiza', title: 'Świece i struktura rynku' },
+    { chapter: 'Analiza', title: 'Poziomy, wsparcia i opory' },
+    { chapter: 'Analiza', title: 'Płynność, POI i retesty' },
+    { chapter: 'Zarządzanie', title: 'Stop loss i wielkość pozycji' },
+    { chapter: 'Zarządzanie', title: 'Risk : Reward i skuteczność' },
+    { chapter: 'Zarządzanie', title: 'Dziennik i analiza błędów' },
+    { chapter: 'Praktyka', title: 'Plan dnia i scenariusze' },
+    { chapter: 'Praktyka', title: 'Sesje: Azja, Londyn, Nowy Jork' },
+    { chapter: 'Praktyka', title: 'Psychologia i limit dzienny' }
+  ];
+
+  AV.BOOTCAMP_MODULES = [
+    { title: 'Moduł 1 · Fundamenty rynku' },
+    { title: 'Moduł 2 · Czytanie wykresu' },
+    { title: 'Moduł 3 · Plan i checklista' },
+    { title: 'Moduł 4 · Zarządzanie pozycją' },
+    { title: 'Moduł 5 · Dziennik i statystyki' },
+    { title: 'Moduł 6 · Egzamin praktyczny' }
+  ];
+
   AV.TIPS = [
     ['MM', 'Ryzykujesz maksymalnie 1% kapitału. Przy {kapital} USDT to {ryzyko1} USDT na transakcję. Ani dolara więcej.'],
     ['MM', 'Najpierw stop loss, potem wielkość pozycji. Nigdy odwrotnie.'],
@@ -502,7 +526,9 @@
         liveReminder: false,
         consultation: { date: '2026-11-17', time: '18:00', who: 'Marcin' },
         consultationUsed: 1,
-        courseProgress: 64,
+        courseProgress: 67,
+        courseDone: [0, 1, 2, 3, 4, 5, 6, 7],
+        bootcampDone: [0, 1, 2],
         sessions: [
           { device: 'MacBook · Chrome', place: 'Warszawa', when: 'teraz' },
           { device: 'iPhone · Alpha Vault', place: '', when: 'wczoraj 21:14' }

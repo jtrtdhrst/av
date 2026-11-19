@@ -128,6 +128,8 @@ td{padding:14px;border-bottom:1px solid var(--line);white-space:nowrap}
 #ust .accounts-table{min-width:960px}
 #ust .accounts-table th.acc-start{min-width:152px}
 #ust .accounts-table [data-acc-start]{min-width:128px}
+#ust .accounts-table th.acc-bal{min-width:150px}
+#ust .accounts-table [data-acc-balance]{min-width:130px}
 #dashBal>summary{list-style:none;cursor:pointer}
 #dashBal>summary::-webkit-details-marker{display:none}
 #dashBal>summary:focus-visible{outline:2px solid var(--alpha);outline-offset:4px;border-radius:10px}
@@ -216,6 +218,7 @@ textarea.input{resize:vertical;line-height:1.5}
 .biasseg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .biasseg .chip{text-align:center;padding:12px 6px;border-radius:14px}
 .lvl{display:grid;grid-template-columns:120px minmax(0,1fr) minmax(0,1.4fr) 36px;gap:8px;margin-top:8px;align-items:center}
+.lvl.has-custom{grid-template-columns:120px minmax(0,.8fr) minmax(0,1fr) minmax(0,1.4fr) 36px}
 .lvl>*{min-width:0}
 .lvl .x{color:var(--dim);cursor:pointer;text-align:center}
 .scen{border:1px solid var(--line);border-radius:16px;padding:14px;background:rgba(0,0,0,.18)}
@@ -414,7 +417,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
 .qa-float{display:none}
 #qaSave:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:760px){.modal{padding:18px 10px}#qa .mbox{padding:20px 16px 92px;border-radius:18px}.qa-grid{grid-template-columns:1fr;gap:20px}.qa-grid .phone{width:100%;height:auto;border-width:6px;border-radius:28px;margin:0;box-shadow:0 20px 40px -24px #000}.qa-grid .phone:before{display:none}.qa-grid .phone .scr{height:auto;padding:18px 14px 20px}.qa-float{display:block;position:fixed;left:14px;right:14px;bottom:14px;z-index:70;box-shadow:0 12px 30px rgba(0,0,0,.6)}.qa-float:disabled{opacity:.55}}
-@media(max-width:1100px){.hero{grid-template-columns:1fr 1fr}.calc{grid-template-columns:1fr}.rules4{grid-template-columns:1fr 1fr}}@media(max-width:900px){#auth{grid-template-columns:1fr}.auth-art{display:none}.app{grid-template-columns:1fr}aside{position:static;height:auto;flex-direction:row;overflow-x:auto;gap:4px;padding:10px}aside .logo,.me,.navg .gl{display:none}.navg{flex-direction:row}.navg button{white-space:nowrap}.navg button.on:before{display:none}.g3,.g4,.g2{grid-template-columns:1fr 1fr}.wrap{padding:26px 16px 110px}.top{padding:10px 16px}.ex{grid-template-columns:1fr}.hero{grid-template-columns:1fr}.hero>:first-child{grid-column:auto}.lvl{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media(max-width:1100px){.hero{grid-template-columns:1fr 1fr}.calc{grid-template-columns:1fr}.rules4{grid-template-columns:1fr 1fr}}@media(max-width:900px){#auth{grid-template-columns:1fr}.auth-art{display:none}.app{grid-template-columns:1fr}aside{position:static;height:auto;flex-direction:row;overflow-x:auto;gap:4px;padding:10px}aside .logo,.me,.navg .gl{display:none}.navg{flex-direction:row}.navg button{white-space:nowrap}.navg button.on:before{display:none}.g3,.g4,.g2{grid-template-columns:1fr 1fr}.wrap{padding:26px 16px 110px}.top{padding:10px 16px}.ex{grid-template-columns:1fr}.hero{grid-template-columns:1fr}.hero>:first-child{grid-column:auto}.lvl,.lvl.has-custom{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 @media(max-width:560px){.g3,.g4,.g2,.res,.rules4,.gradepick,.biasseg{grid-template-columns:1fr}.res .big{grid-column:auto}h1{font-size:30px}h1 .serif{font-size:36px}.ev{grid-template-columns:70px minmax(0,1fr) auto}.ev .flag{display:none}.chipst{display:none}.mw{right:12px;bottom:12px}.mw-panel{width:calc(100vw - 24px)}.lock{flex-wrap:wrap}.cd{margin-left:0}}
 .navtoggle{display:none}
 @media(max-width:900px){
@@ -441,7 +444,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
 @media(max-width:560px){
   #nowa .grid,#ust .grid{grid-template-columns:1fr!important}
   #nowa [style*="grid-column"]{grid-column:auto!important}
-  .lvl{grid-template-columns:1fr}
+  .lvl,.lvl.has-custom{grid-template-columns:1fr}
   .ready .ring{width:88px;height:88px}
   .ready .ring div{width:72px;height:72px}
   .mcal{gap:3px}
@@ -731,10 +734,10 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
 
 <!-- ================= PLAN DNIA ================= -->
 <section class="view" id="plan">
-  <div class="head"><div><div class="eyebrow">Przed sesją</div><h1>Plan <span class="serif">dnia.</span></h1><p>Zawodowiec wie, co zrobi, zanim rynek się otworzy. Bez planu każda transakcja jest decyzją pod wpływem chwili.</p></div><div class="seg" id="planSeg"><button class="on" data-day="0">Dziś</button><button data-day="-1">Wczoraj</button><button data-day="hist">Historia</button></div></div>
+  <div class="head"><div><div class="eyebrow">Przed sesją</div><h1>Plan <span class="serif">dnia.</span></h1><p>Zawodowiec wie, co zrobi, zanim rynek się otworzy. Bez planu każda transakcja jest decyzją pod wpływem chwili.</p></div><div class="seg" id="planSeg"><button class="on" data-day="0">Dziś</button><button data-day="-1">Wczoraj</button><button data-day="global">Globalnie</button><button data-day="hist">Historia</button></div></div>
   <div class="grid" style="grid-template-columns:1.35fr 1fr;align-items:start">
     <div class="grid" id="planEditor">
-      <div class="card"><div class="sech" style="margin:0"><div><h2>Plany dla tej daty</h2><p class="mut" style="font-size:13px;margin-top:4px">Każdy plan ma własny rynek i poziomy.</p></div><button class="btn g sm" id="addPlan" type="button">+ Nowy plan</button></div><select class="input" id="planSelect" aria-label="Wybierz plan tej daty" style="margin-top:14px"></select></div>
+      <div class="card"><div class="sech" style="margin:0"><div><h2 id="planListTitle">Plany dla tej daty</h2><p class="mut" style="font-size:13px;margin-top:4px">Każdy plan ma własny rynek i poziomy.</p></div><button class="btn g sm" id="addPlan" type="button">+ Nowy plan</button></div><select class="input" id="planSelect" aria-label="Wybierz plan tej daty" style="margin-top:14px"></select></div>
       <div class="card"><h2>Kierunek dnia</h2>
         <span class="label">Rynek w fokusie</span>
         <select class="input" id="planMarketSelect" aria-label="Rynek w fokusie"></select>
@@ -763,6 +766,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
       </div>
     </div>
     <div class="grid" style="position:sticky;top:80px" id="planSideWrap">
+      <div class="card" id="planGlobalCard" style="display:none"><div class="sech" style="margin:0"><div><h2>Plany globalne</h2><p class="mut" style="font-size:13px;margin-top:4px">Scenariusze długoterminowe, niezależne od dnia.</p></div><span class="mono dim" style="font-size:12px" id="planGlobalCount"></span></div><div id="planGlobalGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:14px"></div></div>
       <div class="card hl"><div class="sech" style="margin:0"><div class="lbl" id="planSideDay">Twój plan · czwartek</div><span class="tag praise" id="planSideTag">zatwierdzony 08:12</span></div>
         <div style="font-size:26px;font-weight:800;margin-top:14px;letter-spacing:-.6px" id="planSideTitle">BTC · <span class="win">long</span></div>
         <div class="mut" style="margin-top:4px" id="planSideSub">powyżej 68 500 · retest wybicia</div>
@@ -786,7 +790,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
     <input class="input" id="jSearch" placeholder="Szukaj pary, emocji, setupu…" style="max-width:260px;margin-left:auto">
   </div>
   <div class="card" style="padding:0;overflow-x:auto"><table>
-    <thead><tr><th>Data</th><th>Para</th><th>Kierunek</th><th>Ocena</th><th>Checklista</th><th>Wejście</th><th>Wyjście</th><th>R</th><th>Emocja</th><th>Błędy</th><th style="text-align:right">Wynik</th></tr></thead>
+    <thead><tr><th>Data</th><th>Para</th><th>Kierunek</th><th>Ocena</th><th>Checklista</th><th>Wejście</th><th>Wyjście</th><th>R</th><th>Emocja</th><th>Błędy</th><th style="text-align:right">Wynik / live</th><th></th></tr></thead>
     <tbody id="tbody"></tbody>
   </table></div>
   <div class="dim" id="jEmpty" style="display:none;text-align:center;padding:28px"></div>
@@ -842,6 +846,8 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
           <div class="grid g4" style="margin-top:4px">
             <div style="grid-column:span 2"><span class="label">Para</span><input class="input" id="ntPair" placeholder="np. BTC/USDT"></div>
             <div style="grid-column:span 2"><span class="label">Kierunek</span><div class="chips sel" id="ntDir"><span class="chip on" data-d="l" style="flex:1;text-align:center">LONG</span><span class="chip" data-d="s" style="flex:1;text-align:center">SHORT</span></div></div>
+            <div style="grid-column:span 2"><span class="label">Portfel</span><select class="input" id="ntAccount" aria-label="Portfel"></select></div>
+            <div style="grid-column:span 2"><span class="label">Broker</span><select class="input" id="ntBroker" aria-label="Broker"></select></div>
             <div><span class="label">Wejście</span><input class="input mono" id="ntEntry" placeholder="cena wejścia"></div>
             <div><span class="label">Wielkość</span><input class="input mono" id="ntSize" placeholder="wielkość pozycji"></div>
             <div><span class="label">Stop loss</span><input class="input mono" id="ntSl" placeholder="cena SL"></div>
@@ -915,6 +921,18 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
         <div id="cRRCustomWrap" style="display:none"><span class="label" style="margin-top:0">Własne R:R (1:x)</span><input class="input mono" id="cRRCustom" inputmode="decimal" placeholder="np. 1,2"></div>
       </div>
       <div style="display:flex;gap:10px;margin-top:14px"><button class="btn p" id="cAuto" style="flex:1">Zaproponuj SL i TP (1:3)</button><button class="btn g" id="cReset"><svg class="i"><use href="#i-sync"/></svg>Reset</button></div>
+      <div style="display:flex;gap:10px;margin-top:10px"><button class="btn g" id="cSize" style="flex:1">Zaproponuj wielkość kapitału</button></div>
+      <div class="card flat" style="margin-top:14px">
+        <div class="sech" style="margin:0"><h3>Uśrednianie wejść</h3><span class="link" id="addAvg">+ Dodaj wejście</span></div>
+        <div id="avgRows" style="margin-top:8px"></div>
+        <div class="hint" id="avgOut" style="margin-top:8px">Dodaj ceny wejść i udział kapitału, żeby policzyć średnią.</div>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btn g sm" id="useAvg" type="button">Użyj średniej jako wejście</button></div>
+      </div>
+      <div class="card flat" style="margin-top:12px">
+        <div class="sech" style="margin:0"><h3>Wiele take profitów</h3><span class="link" id="addTp">+ Dodaj TP</span></div>
+        <div id="tpRows" style="margin-top:8px"></div>
+        <div class="hint" id="tpOut" style="margin-top:8px">Dodaj poziomy TP i procent pozycji, żeby policzyć łączny zysk.</div>
+      </div>
     </div>
     <div class="grid">
       <div class="res">
@@ -1133,8 +1151,8 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
       <div id="recList"></div>
     </div>
     <div class="card"><div class="sech"><h2>Materiały</h2></div>
-      <div class="kv"><span>Kurs krypto od A do Z</span><b id="courseTxt">64% ukończone</b></div><div class="bar" style="margin:-2px 0 8px"><i id="courseBar" style="width:64%;background:var(--alpha)"></i></div>
-      <div class="kv"><span>Bootcamp</span><b>moduł 3 z 6</b></div>
+      <button type="button" class="kvbtn" id="courseOpen" aria-label="Otwórz listę lekcji kursu"><span>Kurs krypto od A do Z</span><b id="courseTxt">0% ukończone</b></button><div class="bar" style="margin:-2px 0 8px"><i id="courseBar" style="width:0;background:var(--alpha)"></i></div>
+      <button type="button" class="kvbtn" id="bootcampOpen" aria-label="Otwórz listę modułów bootcampu"><span>Bootcamp</span><b id="bootcampTxt">moduł 0 z 6</b></button><div class="bar" style="margin:-2px 0 8px"><i id="bootcampBar" style="width:0;background:var(--alpha)"></i></div>
       <button type="button" class="kvbtn" id="glossaryOpen"><span>Słownik krypto</span><b id="glossaryCount"></b></button>
       <button type="button" class="kvbtn" id="alphaTestsOpen"><span>Alpha Testy</span><b id="alphaTestScore">Test Tradera · Mini Gry</b></button>
       <button type="button" class="kvbtn" id="goldenRulesOpen"><span>Złote zasady bezpieczeństwa</span><b class="al">8 zasad</b></button>
@@ -1289,7 +1307,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
     </div>
   </div>
   <div class="card sec"><div class="sech"><div><h2>Konta i kapitał</h2><p class="mut" style="font-size:13.5px;margin-top:4px">Na tej podstawie liczą się ryzyko, statystyki i zestawienie do PIT-38.</p></div><button class="btn p sm" id="addAcc"><svg class="i"><use href="#i-plus"/></svg>Dodaj konto</button></div>
-    <div style="overflow-x:auto"><table class="accounts-table"><thead><tr><th>Konto</th><th>Typ</th><th>Waluta</th><th class="acc-start" style="text-align:right">Kapitał startowy</th><th>Od</th><th style="text-align:right">Saldo</th><th style="text-align:right">Wynik</th><th>Dźwignia</th><th>W statystykach</th></tr></thead><tbody id="accBody">
+    <div style="overflow-x:auto"><table class="accounts-table"><thead><tr><th>Konto</th><th>Typ</th><th>Waluta</th><th class="acc-start" style="text-align:right">Kapitał startowy</th><th>Od</th><th class="acc-bal" style="text-align:right">Saldo</th><th style="text-align:right">Wynik</th><th>Dźwignia</th><th>W statystykach</th></tr></thead><tbody id="accBody">
       <tr><td><b>WEEX</b> <span class="dim" style="font-size:12px">· główne</span></td><td class="mut">Futures</td><td class="mono">USDT</td><td class="mono" style="text-align:right">1 500,00</td><td class="mono dim">01.03.2026</td><td class="mono" style="text-align:right">1 812,40</td><td class="mono win" style="text-align:right">+20,8%</td><td class="mono">10×</td><td><div class="toggle on"></div></td></tr>
       <tr><td><b>OKX</b></td><td class="mut">Spot · długi termin</td><td class="mono">USDT</td><td class="mono" style="text-align:right">500,00</td><td class="mono dim">15.04.2026</td><td class="mono" style="text-align:right">600,40</td><td class="mono win" style="text-align:right">+20,1%</td><td class="mono">1×</td><td><div class="toggle on"></div></td></tr>
       <tr><td><b>MT5 · demo</b></td><td class="mut">Forex · ćwiczenia</td><td class="mono">USD</td><td class="mono" style="text-align:right">10 000,00</td><td class="mono dim">01.10.2026</td><td class="mono" style="text-align:right">9 640,00</td><td class="mono loss" style="text-align:right">−3,6%</td><td class="mono">30×</td><td><div class="toggle"></div></td></tr>

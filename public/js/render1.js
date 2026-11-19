@@ -63,9 +63,10 @@
         av.textContent = (u.name || 'A').slice(0, 1).toUpperCase();
       }
     });
-    AV.setText('#courseTop', (s.meta.courseProgress || 0) + '%');
-    AV.setText('#courseTxt', (s.meta.courseProgress || 0) + '% ukończone');
-    AV.$('#courseBar').style.width = (s.meta.courseProgress || 0) + '%';
+    const coursePct = typeof AV.coursePct === 'function' ? AV.coursePct() : (s.meta.courseProgress || 0);
+    AV.setText('#courseTop', coursePct + '%');
+    AV.setText('#courseTxt', coursePct + '% ukończone');
+    if (AV.$('#courseBar')) AV.$('#courseBar').style.width = coursePct + '%';
     AV.setText('#consultTop', AV.shortConsult(s));
   };
 
@@ -314,7 +315,7 @@
       picker.value = AV.planId || '';
       picker.disabled = plans.length < 2;
     }
-    AV.$$('#planSeg button').forEach((b) => b.classList.toggle('on', b.dataset.day === '0' ? key === AV.dateKey(new Date()) : b.dataset.day === '-1' ? key === AV.dateKey(AV.addDays(new Date(), -1)) : b.dataset.day === 'hist'));
+    AV.$$('#planSeg button').forEach((b) => b.classList.toggle('on', b.dataset.day === 'global' ? key === 'global' : b.dataset.day === 'hist' ? !!AV.ui.planHistOpen : b.dataset.day === '0' ? key === AV.dateKey(new Date()) : key === AV.dateKey(AV.addDays(new Date(), -1))));
     // Nie nadpisuj formularza, w którym użytkownik właśnie pisze (np. render po notowaniach).
     const editor = $('#planEditor');
     const active = document.activeElement;
@@ -335,21 +336,34 @@
       $('#lvls').innerHTML = (p.levels || []).map((l) => AV.levelRow(l)).join('') || '<div class="dim" style="padding:8px 0">Brak poziomów. Dodaj pierwszy.</div>';
     }
     AV.renderPlanSide();
+    AV.renderPlanGlobal();
     AV.renderPlanHistory();
     AV.renderAdherence();
+    const title = $('#planListTitle');
+    if (title) title.textContent = key === 'global' ? 'Plany globalne' : 'Plany dla tej daty';
     if (AV.renderNavBadges) AV.renderNavBadges();
   };
 
-  AV.levelRow = (l = {}) => '<div class="lvl"><select class="input" aria-label="Typ poziomu">' +
-    [['Opór', 'Opór'], ['Wsparcie', 'Wsparcie'], ['Liquidity', 'Płynność'], ['POI', 'POI']].map(([value, label]) => '<option value="' + value + '"' + (l.type === value || value === 'Liquidity' && l.type === 'Płynność' ? ' selected' : '') + '>' + label + '</option>').join('') +
-    '</select><input class="input mono" value="' + AV.attr(l.price || '') + '" placeholder="cena"><input class="input" value="' + AV.attr(l.note || '') + '" placeholder="opis"><span class="x">✕</span></div>';
+  AV.PLAN_LEVEL_TYPES = ['Opór', 'Wsparcie', 'Liquidity', 'Płynność', 'POI'];
+  AV.levelRow = (l = {}) => {
+    const known = AV.PLAN_LEVEL_TYPES.includes(l.type);
+    const custom = !!l.type && !known;
+    return '<div class="lvl' + (custom ? ' has-custom' : '') + '"><select class="input" aria-label="Typ poziomu">' +
+      [['Opór', 'Opór'], ['Wsparcie', 'Wsparcie'], ['Liquidity', 'Płynność'], ['POI', 'POI'], ['__custom', 'Własny…']].map(([value, label]) => '<option value="' + value + '"' + (l.type === value || value === 'Liquidity' && l.type === 'Płynność' || value === '__custom' && custom ? ' selected' : '') + '>' + label + '</option>').join('') +
+      '</select><input class="input lvl-type" value="' + AV.attr(custom ? l.type : '') + '" placeholder="własny poziom" style="' + (custom ? '' : 'display:none') + '"><input class="input mono" value="' + AV.attr(l.price || '') + '" placeholder="cena"><input class="input" value="' + AV.attr(l.note || '') + '" placeholder="opis"><span class="x">✕</span></div>';
+  };
 
   AV.readPlanForm = (opts = {}) => {
-    const levels = $$('#lvls .lvl').map((row) => ({
-      type: row.querySelector('select').value,
-      price: row.querySelectorAll('input')[0].value.trim(),
-      note: row.querySelectorAll('input')[1].value.trim()
-    }));
+    const levels = $$('#lvls .lvl').map((row) => {
+      const select = row.querySelector('select');
+      const custom = row.querySelector('.lvl-type');
+      const type = select.value === '__custom' ? ((custom && custom.value.trim()) || 'Własny') : select.value;
+      return {
+        type,
+        price: row.querySelectorAll('input.mono')[0].value.trim(),
+        note: row.querySelectorAll('input:not(.mono):not(.lvl-type)')[0].value.trim()
+      };
+    });
     const sel = $('#planMarketSelect');
     const selVal = sel ? sel.value : '';
     const market = selVal === '__other'
@@ -370,11 +384,33 @@
     };
   };
 
+  AV.renderPlanGlobal = () => {
+    const card = $('#planGlobalCard');
+    if (!card) return;
+    const active = AV.planDate === 'global';
+    card.style.display = active ? '' : 'none';
+    if (!active) return;
+    const plans = AV.plansForDate(AV.state, 'global');
+    AV.setText('#planGlobalCount', plans.length + ' ' + AV.plural(plans.length, 'plan', 'plany', 'planów'));
+    AV.setHTML('#planGlobalGrid', plans.length ? plans.map((p) => {
+      const bias = p.bias === 'long' ? '<span class="win">long</span>' : p.bias === 'short' ? '<span class="loss">short</span>' : p.bias === 'none' ? '<span class="dim">nie gram</span>' : '<span class="al">neutralnie</span>';
+      const levels = (p.levels || []).slice(0, 4).map((l) => '<div class="kv"><span>' + AV.esc(l.type || '') + (l.note ? ' · ' + AV.esc(l.note) : '') + '</span><b class="mono">' + AV.esc(l.price || '') + '</b></div>').join('');
+      return '<div class="card flat" data-plan-open="global" data-plan-id="' + AV.attr(p.id) + '" style="cursor:pointer;padding:14px;' + (p.id === AV.planId ? 'border-color:var(--alpha)' : '') + '">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:16px">' + AV.esc(p.market || 'Nowy plan') + '</b>' + bias +
+        '<span class="tag ' + (p.approvedAt ? 'praise' : 'info') + '" style="margin-left:auto">' + (p.approvedAt ? 'zatwierdzony' : 'szkic') + '</span></div>' +
+        (levels ? '<div style="margin-top:8px">' + levels + '</div>' : '') +
+        (p.ifMain ? '<div class="hint" style="margin-top:8px"><b>Główny:</b> ' + AV.esc(p.ifMain) + (p.thenMain ? ' → ' + AV.esc(p.thenMain) : '') + '</div>' : '') +
+        (p.ifAlt ? '<div class="hint" style="margin-top:4px"><b>Awaryjny:</b> ' + AV.esc(p.ifAlt) + (p.thenAlt ? ' → ' + AV.esc(p.thenAlt) : '') + '</div>' : '') +
+        '<div class="hint" style="margin-top:8px">ryzyko ' + AV.esc(p.risk || '—') + ' · max ' + AV.esc(p.maxTrades || '—') + ' transakcji' + (p.until ? ' · do ' + AV.esc(p.until) : '') + '</div></div>';
+    }).join('') : '<div class="dim" style="padding:8px 0">Brak planów globalnych. Dodaj pierwszy po lewej stronie.</div>');
+  };
+
   AV.renderPlanSide = () => {
     if (!AV.state.plans || typeof AV.state.plans !== 'object') AV.state.plans = {};
     const p = AV.planById(AV.state, AV.planId) || AV.readPlanForm();
+    const isGlobal = AV.planDate === 'global';
     const day = new Date(AV.planDate + 'T12:00:00');
-    AV.setText('#planSideDay', 'Twój plan · ' + day.toLocaleDateString('pl-PL', { weekday: 'long' }));
+    AV.setText('#planSideDay', isGlobal ? 'Plan globalny · długoterminowy' : 'Twój plan · ' + day.toLocaleDateString('pl-PL', { weekday: 'long' }));
     const tag = $('#planSideTag');
     if (tag) {
       tag.textContent = p.approvedAt ? 'zatwierdzony ' + new Date(p.approvedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' }) : 'szkic';
@@ -400,10 +436,10 @@
   AV.renderPlanHistory = () => {
     const card = $('#planHistoryCard');
     if (!card) return;
-    const showHist = AV.ui.planHistOpen || AV.planDate !== AV.dateKey(new Date()) && AV.planDate !== AV.dateKey(AV.addDays(new Date(), -1));
+    const showHist = AV.ui.planHistOpen || (AV.planDate !== 'global' && AV.planDate !== AV.dateKey(new Date()) && AV.planDate !== AV.dateKey(AV.addDays(new Date(), -1)));
     card.style.display = showHist ? '' : 'none';
     if (!showHist) return;
-    const plans = AV.allPlans(AV.state).sort((a, b) => b.date.localeCompare(a.date) || String(a.market).localeCompare(String(b.market)) || String(a.id).localeCompare(String(b.id)));
+    const plans = AV.allPlans(AV.state).filter((p) => p.date !== 'global').sort((a, b) => b.date.localeCompare(a.date) || String(a.market).localeCompare(String(b.market)) || String(a.id).localeCompare(String(b.id)));
     AV.setHTML('#planHistory', plans.length ? plans.map((p) => '<div class="kv" style="cursor:pointer" data-plan-open="' + AV.attr(p.date) + '" data-plan-id="' + AV.attr(p.id) + '"><span>' + new Date(p.date + 'T12:00:00').toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · ' + AV.esc(p.market || '') + ' ' + AV.esc(p.bias || '') + '</span><b class="' + (p.approvedAt ? 'win' : 'dim') + '">' + (p.approvedAt ? '✓ zatwierdzony' : 'szkic') + '</b></div>').join('') : '<div class="dim">Brak zapisanych planów.</div>');
   };
 
@@ -445,21 +481,45 @@
     return arr;
   };
 
+  AV.tradeLivePnl = (t) => {
+    if (!t || !AV.tradeDirection(t.dir)) return null;
+    const entry = AV.pnum(t.entry), size = AV.pnum(t.size);
+    if (!(entry > 0) || !(size > 0)) return null;
+    const key = String(t.pair || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    let price = null;
+    const iq = AV.instrumentQuote(t.pair);
+    if (iq) price = iq.price;
+    if (price == null && Array.isArray(AV.tickerData)) {
+      const hit = AV.tickerData.find((row) => String(row[0] || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase() === key);
+      if (hit) price = Number(hit[1]);
+    }
+    if (!Number.isFinite(price) || price <= 0) return null;
+    const sign = AV.tradeDirection(t.dir) === 's' ? -1 : 1;
+    return { price, value: (price - entry) * size * sign, pct: (price - entry) / entry * 100 * sign };
+  };
+
   AV.renderJournal = () => {
     const arr = AV.filteredTrades();
     AV.setHTML('#tbody', arr.map((t) => {
       const open = !AV.isTradeClosed(t);
+      const live = open ? AV.tradeLivePnl(t) : null;
       const checklist = t.checklist == null || t.checklist === '' ? null : Number(t.checklist);
       const totalValue = Number(t.checkTotal);
       const checkTotal = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 7;
       const checklistClass = checklist == null ? '' : (checklist === checkTotal ? 'win' : checklist >= Math.ceil(checkTotal * 0.7) ? 'warnc' : 'loss');
+      const resultCell = open
+        ? (live
+          ? '<span class="' + (live.value >= 0 ? 'win' : 'loss') + '">' + AV.signed(live.value, 2, '') + '</span> <span class="dim" style="font-size:11px">' + AV.signed(live.pct, 2, '%') + '</span>'
+          : '<span class="al">Otwarta</span>')
+        : (t.result == null ? '' : AV.signed(t.result, 2, ''));
       return '<tr data-id="' + t.id + '"><td class="mono dim">' + AV.dateTimeShort(t.date) + '</td><td><b>' + AV.esc(t.pair) + '</b>' + (t.sl === 'brak' || t.sl === '' ? '<span class="nosl">BEZ SL</span>' : '') + '</td>' +
         '<td><span class="pill ' + (AV.tradeDirection(t.dir) || 'l') + '">' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</span></td>' +
         '<td>' + AV.grade(t.grade) + '</td><td class="mono ' + checklistClass + '">' + (checklist == null ? '' : checklist + '/' + checkTotal) + '</td>' +
         '<td class="mono">' + AV.esc(t.entry) + '</td><td class="mono ' + (open ? 'al' : '') + '">' + AV.esc(t.exit) + '</td>' +
         '<td class="mono ' + (t.r > 0 ? 'win' : t.r < 0 ? 'loss' : 'dim') + '">' + (t.r == null ? '–' : AV.signed(t.r, 1, 'R')) + '</td>' +
         '<td class="mut">' + AV.esc(t.emotion) + '</td><td>' + ((t.errors || []).length ? '<span class="ecount" title="' + AV.attr(t.errors.join(', ')) + '">' + t.errors.length + '</span>' : '<span class="dim">–</span>') + '</td>' +
-        '<td class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : '') + '" style="text-align:right;font-weight:800">' + (open ? '–' : (t.result == null ? '' : AV.signed(t.result, 2, ''))) + '</td></tr>';
+        '<td class="mono ' + (open ? (live ? (live.value >= 0 ? 'win' : 'loss') : 'al') : (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : '')) + '" style="text-align:right;font-weight:800">' + resultCell + '</td>' +
+        '<td style="text-align:right">' + (open ? '<span class="link" data-trade-manage="' + t.id + '" title="Zarządzaj pozycją">⋯</span>' : '') + '</td></tr>';
     }).join(''));
     AV.show('#jEmpty', !arr.length);
     if (!arr.length) {
@@ -502,7 +562,10 @@
     return '<div class="shot"><span class="cap">' + AV.esc(label) + '</span><svg viewBox="0 0 600 230" width="100%" height="230" style="display:block">' + h + '</svg></div>';
   };
 
-  AV.proChart = (t) => {
+  AV.proChart = (t, tf) => {
+    const tfValue = ['5m', '15m', '1h', '4h'].includes(tf) ? tf : (AV.ui.chartTf || '15m');
+    const tfMin = { '5m': 5, '15m': 15, '1h': 60, '4h': 240 }[tfValue] || 15;
+    const broker = t.broker || t.source || 'WEEX';
     let s = t.pair.length * 13 + (t.date.charCodeAt(1) || 65) * 7;
     const r = () => (s = (s * 9301 + 49297) % 233280) / 233280;
     const long = AV.tradeDirection(t.dir) !== 's', en = AV.pnum(t.entry), open = !AV.isTradeClosed(t);
@@ -511,7 +574,7 @@
     const exitValue = AV.pnum(t.exit);
     const hasExit = Number.isFinite(exitValue) && exitValue > 0 && t.exit !== 'otwarta';
     const ex = open ? en * (long ? 1.004 : 0.996) : (hasExit ? exitValue : en);
-    const N = 64, E = 34, X = open ? N - 1 : Math.min(N - 6, E + 14), vol = Math.abs(en - sl) * 0.22;
+    const N = 64, E = 22, X = open ? N - 1 : Math.min(N - 6, E + 14), vol = Math.abs(en - sl) * 0.22;
     const P = [];
     let p = en - (long ? 1 : -1) * vol * 5;
     for (let i = 0; i < N; i++) {
@@ -534,7 +597,7 @@
     }
     const [hh, mm] = t.date ? new Date(t.date).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' }).split(':').map(Number) : [9, 0];
     for (let i = 2; i < N; i += 12) {
-      const m = hh * 60 + mm + (i - E) * 15, tt = ((m % 1440) + 1440) % 1440;
+      const m = hh * 60 + mm + (i - E) * tfMin, tt = ((m % 1440) + 1440) % 1440;
       g += '<text x="' + x(i) + '" y="' + (H - 10) + '" fill="#7f786f" font-size="10.5" text-anchor="middle" font-family="JetBrains Mono">' + String(tt / 60 | 0).padStart(2, '0') + ':' + String(tt % 60).padStart(2, '0') + '</text>';
     }
     const x0 = x(E), x1 = x(X) + cw / 2;
@@ -552,7 +615,7 @@
       const xe = x(X), win = t.result > 0;
       g += '<circle cx="' + xe + '" cy="' + y(ex) + '" r="5" fill="' + (win ? '#4fcf8a' : '#ff5d62') + '" stroke="#0b0a09" stroke-width="2"/><rect x="' + (xe + 8) + '" y="' + (y(ex) - 11) + '" width="70" height="20" rx="5" fill="rgba(11,10,9,.9)" stroke="' + (win ? '#4fcf8a' : '#ff5d62') + '"/><text x="' + (xe + 43) + '" y="' + (y(ex) + 3) + '" fill="' + (win ? '#4fcf8a' : '#ff5d62') + '" font-size="10.5" text-anchor="middle" font-family="JetBrains Mono" font-weight="700">' + AV.signed(t.result, 2, '') + '</text>';
     }
-    return '<div class="chartbox"><div class="hd"><b>' + AV.esc(t.pair) + '</b><span>15m · WEEX</span><span>wejście ' + AV.esc(t.entry) + ' · SL ' + AV.esc(t.sl) + ' · TP ' + AV.esc(t.tp) + '</span><span class="tag al" style="margin-left:6px">wykres automatyczny</span><div class="tfs"><span>5m</span><span class="on">15m</span><span>1h</span><span>4h</span></div></div><svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block">' + g + '</svg></div>';
+    return '<div class="chartbox"><div class="hd"><b>' + AV.esc(t.pair) + '</b><span>' + tfValue + ' · ' + AV.esc(broker) + '</span><span>wejście ' + AV.esc(t.entry) + ' · SL ' + AV.esc(t.sl) + ' · TP ' + AV.esc(t.tp) + '</span><span class="tag al" style="margin-left:6px">wykres automatyczny</span><div class="tfs">' + ['5m', '15m', '1h', '4h'].map((x) => '<span data-tf="' + x + '" class="' + (x === tfValue ? 'on' : '') + '">' + x + '</span>').join('') + '</div></div><svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block">' + g + '</svg></div>';
   };
 
   /* ---------- szczegóły transakcji ---------- */
@@ -565,22 +628,30 @@
       return '<label class="drop ' + (data ? 'has' : '') + '" data-drop data-shot="' + key + '" style="min-height:180px"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span>' + (data ? '' : '<div class="ic">' + AV.ic(icon) + '</div><b>' + label + '</b><span>kliknij, przeciągnij albo Ctrl+V</span>') + '</label>';
     };
     const open = !AV.isTradeClosed(t);
+    const live = open ? AV.tradeLivePnl(t) : null;
+    const liveHead = open
+      ? (live
+        ? '<span class="mono ' + (live.value >= 0 ? 'win' : 'loss') + '" style="margin-left:auto;text-align:right;font-weight:800"><span style="font-size:28px">' + AV.signed(live.value, 2, ' USDT') + '</span><span style="display:block;font-size:12px;opacity:.8">' + AV.signed(live.pct, 2, '%') + ' · live</span></span>'
+        : '<span class="mono al" style="margin-left:auto;font-size:28px;font-weight:800">otwarta</span>')
+      : '<span class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : 'al') + '" style="margin-left:auto;font-size:28px;font-weight:800">' + (t.result == null ? '' : AV.signed(t.result, 2, ' USDT')) + '</span>';
+    AV.ui.openTradeId = id;
     const checklist = t.checklist == null || t.checklist === '' ? null : Number(t.checklist);
     const totalValue = Number(t.checkTotal);
     const checkTotal = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : 7;
     const checklistClass = checklist == null ? '' : (checklist === checkTotal ? 'win' : checklist >= Math.ceil(checkTotal * 0.7) ? 'warnc' : 'loss');
     const metricValue = (value) => value == null || (typeof value === 'string' && value.trim() === '') ? '' : AV.fmt(value, 1) + 'R';
     AV.setHTML('#tmBody', '<span class="mclose" id="mc">' + AV.ic('x', 'width:16px;height:16px') + '</span><div class="eyebrow">Transakcja · ' + AV.dateTimeShort(t.date) + ' · ' + AV.esc(t.source || 'WEEX') + '</div>' +
-      '<div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap"><h1 style="font-size:32px;margin:0">' + AV.esc(t.pair) + '</h1><span class="pill ' + (AV.tradeDirection(t.dir) || 'l') + '">' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</span>' + AV.grade(t.grade) + (t.sl === 'brak' ? '<span class="nosl" style="margin:0">BEZ SL</span>' : '') + '<span class="mono ' + (t.result > 0 ? 'win' : t.result < 0 ? 'loss' : 'al') + '" style="margin-left:auto;font-size:28px;font-weight:800">' + (open ? 'otwarta' : (t.result == null ? '' : AV.signed(t.result, 2, ' USDT'))) + '</span></div>' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap"><h1 style="font-size:32px;margin:0">' + AV.esc(t.pair) + '</h1><span class="pill ' + (AV.tradeDirection(t.dir) || 'l') + '">' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</span>' + AV.grade(t.grade) + (t.sl === 'brak' ? '<span class="nosl" style="margin:0">BEZ SL</span>' : '') + liveHead + '</div>' +
       '<div class="grid" style="grid-template-columns:repeat(6,1fr);margin-top:20px;gap:10px">' + box('Wejście', AV.esc(t.entry)) + box('Wyjście', AV.esc(t.exit)) + box('Stop loss', AV.esc(t.sl), t.sl === 'brak' ? 'loss' : '') + box('Take profit', AV.esc(t.tp)) + box('MAE', metricValue(t.mae), 'loss') + box('MFE', metricValue(t.mfe), 'win') + '</div>' +
       '<div style="margin-top:16px">' + AV.proChart(t) + '</div>' +
+      ((t.partials || []).length ? '<div class="card flat" style="margin-top:12px;padding:14px"><div class="lbl">Zrealizowane części pozycji</div>' + t.partials.map((p) => '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:13px"><span class="mono">' + AV.esc(p.price) + ' · ' + AV.fmt(p.pct, 0) + '%</span><b class="mono ' + (p.result >= 0 ? 'win' : 'loss') + '">' + AV.signed(p.result, 2, ' USDT') + '</b></div>').join('') + (t.be ? '<div class="hint" style="margin-top:10px">SL przeniesiony na wejście (BE).</div>' : '') + '</div>' : '') +
       '<div class="sech" style="margin:18px 0 10px"><h3>Twoje screeny</h3><span class="dim" style="font-size:12.5px">opcjonalnie, jeśli chcesz zapisać swój własny widok</span></div>' +
       '<div class="grid g2">' + (t.screens && t.screens.before ? '<label class="drop has" data-drop data-shot="before"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span><img src="' + t.screens.before + '" alt="Screen przed wejściem"></label>' : drop('Dodaj screen PRZED wejściem', 'img', 'before')) + (t.screens && t.screens.after ? '<label class="drop has" data-drop data-shot="after"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span><img src="' + t.screens.after + '" alt="Screen po wyjściu"></label>' : drop('Dodaj screen PO wyjściu', 'flag', 'after')) + '</div>' +
        ((t.errors || []).length ? '<div class="card flat" style="margin-top:16px;padding:16px"><div class="lbl">Błędy w tej transakcji</div><div style="margin-top:8px">' + t.errors.map((e) => '<span class="etag">' + AV.esc(e) + '</span>').join('') + '</div></div>' : '') +
        '<div class="grid" style="grid-template-columns:1fr 1fr 1.2fr;margin-top:16px"><div class="card flat"><div class="lbl">Twoja notatka</div><p style="margin-top:8px;line-height:1.55;font-size:14px">' + AV.esc(t.note) + '</p><div class="chips" style="margin-top:12px">' + (t.emotion ? '<span class="chip on">' + AV.esc(t.emotion) + '</span>' : '') + (t.setup ? '<span class="chip">' + AV.esc(t.setup) + '</span>' : '') + '</div></div>' +
        '<div class="card flat"><div class="lbl">Checklista</div>' + (checklist == null ? '<div class="val"></div>' : '<div class="val ' + checklistClass + '">' + checklist + ' / ' + checkTotal + '</div><div class="bar"><i style="width:' + checklist / checkTotal * 100 + '%;background:' + (checklistClass === 'win' ? 'var(--win)' : checklistClass === 'warnc' ? 'var(--warn)' : 'var(--loss)') + '"></i></div>') + '</div>' +
       '<div class="card hl"><div class="lbl">α Mentor o tej transakcji</div><p style="margin-top:8px;line-height:1.55;font-size:14px">' + AV.esc(t.mentor) + '</p></div></div>' +
-      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap"><button class="btn g" data-trade-edit="' + t.id + '">Edytuj</button><button class="btn w" data-trade-del="' + t.id + '">Usuń transakcję</button></div>');
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">' + (open ? '<button class="btn g" data-trade-close="' + t.id + '">Zamknij / częściowo</button><button class="btn g" data-trade-be="' + t.id + '">Przenieś SL na BE</button>' : '') + '<button class="btn g" data-trade-edit="' + t.id + '">Edytuj</button><button class="btn w" data-trade-del="' + t.id + '">Usuń transakcję</button></div>');
     $('#tm').classList.add('on');
     AV.bindDrops($('#tmBody'), (data, key) => {
       if (!t.screens) t.screens = {};
@@ -753,8 +824,27 @@
       ' · R:R <b>' + (rr ? '1 : ' + AV.fmt(rr, 1) : '—') + '</b> · <span class="link" data-go="kalk" style="font-size:13.5px">Kalkulator Alpha</span>';
   };
 
+  AV.TRADE_BROKERS = ['WEEX', 'BingX', 'VTMarkets', 'OKX', 'Bybit', 'MetaTrader 4', 'MetaTrader 5', 'Inny'];
+  AV.renderTradeSelectors = () => {
+    const acc = $('#ntAccount');
+    if (acc) {
+      const current = acc.value;
+      acc.innerHTML = (AV.state.accounts || []).map((a) => '<option value="' + AV.attr(a.name) + '">' + AV.esc(a.name) + ' · ' + AV.esc(a.currency || 'USDT') + '</option>').join('');
+      const fallback = (AV.state.accounts || []).find((a) => a.include)?.name || (AV.state.accounts || [])[0]?.name || '';
+      acc.value = (AV.state.accounts || []).some((a) => a.name === current) ? current : fallback;
+      acc.disabled = (AV.state.accounts || []).length === 0;
+    }
+    const broker = $('#ntBroker');
+    if (broker) {
+      const current = broker.value;
+      broker.innerHTML = AV.TRADE_BROKERS.map((b) => '<option value="' + AV.attr(b) + '">' + AV.esc(b) + '</option>').join('');
+      broker.value = AV.TRADE_BROKERS.includes(current) ? current : 'WEEX';
+    }
+  };
+
   AV.renderNewTradeForm = () => {
     const d = AV.getDraft();
+    AV.renderTradeSelectors();
     const executionLocked = !!AV.ui.editId && !!AV.ui.ntExecutionLocked;
     AV.setVal('#ntPair', d.pair || '');
     AV.setVal('#ntEntry', d.entry || '');
