@@ -128,9 +128,11 @@
         }
       });
       AV.setPrice();
+      AV.autoLv();
       return true;
     } catch (err) {
       AV.setPrice();
+      AV.autoLv();
       return false;
     }
   };
