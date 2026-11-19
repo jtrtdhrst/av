@@ -1203,6 +1203,9 @@
   AV.calcResult = () => {
     const bal = AV.pnum($('#cBal').value), risk = AV.pnum($('#cRisk').value), lev = Math.max(1, AV.pnum($('#cLev').value));
     const en = AV.pnum($('#cEn').value), sl = AV.pnum($('#cSl').value), tp = AV.pnum($('#cTp').value);
+    const fxMode = AV.calc.mode !== 'crypto';
+    AV.setText('#rMainL', fxMode ? 'Wielkość pozycji (MT4 / MT5)' : 'Za tę kwotę wejdź w trade');
+    AV.setText('#rNotL', fxMode ? 'Odległość SL' : 'Wartość pozycji');
     const w = $('#cWarn');
     if (w) w.style.display = 'none';
     $('#cWarn2').style.display = risk > 5 ? 'block' : 'none';

@@ -1738,6 +1738,7 @@ try {
     log('zamknięcie pozycji', closed === 5, String(closed));
   }
   const resultOnlyId = await page.evaluate(async () => {
+    await AV.waitForPushIdle(15000);
     const id = 'ui-result-only-' + Date.now();
     AV.state.trades.push({
       id, date: new Date().toISOString(), pair: 'RO/USDT', dir: 'l',
@@ -1749,7 +1750,11 @@ try {
     });
     // Persist the trade before closing it. A 409 reload restores server state,
     // so a trade that exists only in memory would vanish mid-close.
-    const saved = await AV.pushStateImmediate();
+    let saved = await AV.pushStateImmediate();
+    if (!saved) {
+      await AV.waitForPushIdle(15000);
+      saved = await AV.pushStateImmediate();
+    }
     if (!saved) return '';
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
