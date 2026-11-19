@@ -33,7 +33,7 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | MCP unit/E2E | 79 narzędzi z runtime rejestru, klucze idempotencji 8–120 znaków, stabilny hash screenów przy zmianie kolejności kluczy JSON, screen `write_op` po MySQL round-trip, regresje dat/metryk/transakcji, semantyczny no-op bez zmiany rewizji, snapshot propozycji z kontrolą rewizji replay, redakcja screenów w odpowiedziach/diffach/replay, fixture'y testowe blokowane poza odizolowanym CI |
 | MCP deploy guard | tylko `main` lub pełny SHA z `main` z udanym `ci.yml` dla dokładnego SHA; health revision i liczba narzędzi |
 
-## Podatki PIT-38 — 8 scenariuszy
+## Podatki PIT-38 — 10 scenariuszy
 
 `npm run test:tax` (`tests/tax.e2e.mjs`) zapisuje deterministyczny stan do MySQL, wczytuje go ponownie i klika panel Podatki:
 
@@ -41,9 +41,11 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 - zdarzenie z 2025 nie wchodzi do zestawienia 2026,
 - edycja nadwyżki kosztów z poprzedniego roku,
 - neutralne podatkowo (47) i forex/MT5 (2) liczone z dziennika,
-- eksport CSV z podsumowaniem i rokiem w nazwie,
+- eksport CSV z podsumowaniem, przecinkiem dziesiętnym i rokiem w nazwie; `podatki.csv` w paczce ZIP ma ten sam format,
 - wydruk PDF z rokiem, nadwyżką i licznikami,
-- formularz wpłaty/wypłaty wymaga kursu NBP dla EUR i zasila PIT-38,
+- formularz wpłaty/wypłaty wymaga dodatnich kwot i kursu NBP dla EUR, zasila PIT-38 i sumuje saldo konta numerycznie,
+- wpływy bez daty, bez kursu waluty obcej i z ujemną kwotą są pomijane, a UI ostrzega o nich w podatku,
+- tekstowy carry (`"1000,50"`) jest liczony numerycznie,
 - puste konto nie dziedziczy demo 380 zł; brak błędów JS.
 
 Test przywraca poprzedni stan demo po zakończeniu.
@@ -219,6 +221,7 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - pulpit: puste saldo nie pokazuje fałszywej zmiany −100%,
 - kalkulator: wybór portfela ustawia saldo/MM, gotowe R:R 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własne; SL/TP zgodne z wybranym stosunkiem; ręczna cena wejścia nie jest nadpisywana przez live ani przez auto SL/TP; tryb odwrotny „Zaproponuj wielkość kapitału”, uśrednianie wejść i wiele TP,
 - statystyki: zakres ogólny pozostaje niezależny od kalendarza PnL przy zmianie obu zakresów; kalendarz PnL ma własny zakres 7/30 dni lub miesiąc i nawigację okresu,
+- statystyki: wyniki transakcji i R zapisane jako tekst (np. z API/MCP) są sumowane numerycznie — net, GP/GL, profit factor, expectation, equity, PnL dnia i statystyki setupu,
 - akademia: „Dołącz” dopiero 15 min przed startem, własny czas przypomnienia, harmonogram tydzień/miesiąc z odświeżaniem i rozwinięciem wydarzeń cyklicznych, kategorie nagrań, fallback biblioteki i odtwarzanie z linku, postęp kursu (12 lekcji) i bootcampu (6 modułów), słownik z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady,
 - filtry dziennika, szczegóły transakcji,
 - nagłówek: brak technicznego statusu bazy, ukryty chip giełd bez połączeń, ticker z `/api/quotes`,
@@ -273,7 +276,7 @@ To emulacja Chromium. Instalacja na fizycznym iPhone (Safari → Do ekranu pocz�
 | --- | --- |
 | `php tests/mcp-migration-upgrade.test.php` | CI-only symulacja schematu sprzed migracji 20261116, dodanie fingerprintów, kolacje case-sensitive i ponowne wykonanie migracji |
 | `php tests/mcp.test.php` | gotowość z brakującymi metrykami urządzenia, wymagany SL, propozycje, case-sensitive klucze propozycji i decyzji, kod jednorazowy, zatwierdzenie bez kodu (`confirmed`), fingerprint idempotencji decyzji (akcja i payload, także replay legacy), zysk i break-even, konflikt rewizji, TTL, ochrona danych giełdowych, `target_missing`, izolacja, audyt |
-| `php tests/mcp-tools.test.php` | silniki bez HTTP i DB: Metrics (null vs zero, break-even), puste MAE/MFE w API, dokładne dopasowanie rynku bez kolizji prefiksów, widoczność transakcji konta wyłączonego, zgodność z planem, ryzyko i tryb ochronny, raporty per grupa, kalkulator, PIT-38, odznaki, screeny |
+| `php tests/mcp-tools.test.php` | silniki bez HTTP i DB: Metrics (null vs zero, break-even), puste MAE/MFE w API, dokładne dopasowanie rynku bez kolizji prefiksów, widoczność transakcji konta wyłączonego, zgodność z planem, ryzyko i tryb ochronny, raporty per grupa, kalkulator, PIT-38 (pomijanie wpływów bez daty/kursu i ujemnych, tekstowy carry), odznaki, screeny |
 | `php tests/mcp-write.test.php` | rejestr 30 operacji zapisu (wszystkie bezpośrednie), 33 schematy wejścia z `idempotencyKey`, `confirmed` w `approve_proposal`, wymagany SL, ścisłe MAE/MFE, formuły check-inu i planu, walidacja setupów, kosza i przywracania, reguły ryzyka, prop, transakcje i screeny bez bazy |
 | `node tests/mcp-tools.e2e.mjs` | dashboard pobiera metryki Oura tylko z `alphavault.health`; jawna zgoda health-only nie obiecuje dostępu do tradingu ani zapisu; brak metryk pozostaje `null`; `include=false`, break-even, fingerprint idempotencji; pełne cykle 33 narzędzi, pominięte MFE zachowuje pomiar, jawne `null` go czyści, propozycje, kosz i workflow |
 | `node tests/mcp-login.e2e.mjs` | logowanie Discord na mocku: rola OK, brak roli, brak członkostwa, duplikat konta, `POST /oauth/authorize` z obcym `Origin` (303, bez `bad_origin`), decyzja zgody z obcego `Origin` i sfałszowany CSRF bez wydania kodu, `GET /oauth/connected` + `POST /oauth/connected/revoke` (`Origin: null` z poprawnym CSRF = 302 i unieważniony token, obcy `Origin` i zły CSRF = 403) |
@@ -390,7 +393,7 @@ npm run test:ui:integrations   # Playwright: formularze i dziennik
 
 Oba kroki są częścią `.github/workflows/ci.yml`. Lokalne uruchomienie jest dozwolone tylko dla developera i nie jest dowodem w raporcie AV-engineer.
 
-Zakres: OKX read-only i odrzucenie handlu, BingX `apiPermissions`, WEEX akceptacja klucza z handlem + rekonstrukcja fills, MetaApi `investorMode` i odrzucenie hasła z handlem, EA kod parowania + ingest + deduplikacja, UI formularze i licznik transakcji. Brak PnL w źródle pomija transakcję zamiast tworzyć break-even; jawne zero PnL i zerowa opłata pozostają znane (WEEX break-even po opłatach, BingX wynik `0` przy nieznanych opłatach i czasie).
+Zakres: OKX read-only i odrzucenie handlu, BingX `apiPermissions`, WEEX akceptacja klucza z handlem + rekonstrukcja fills, MetaApi `investorMode` i odrzucenie hasła z handlem, EA kod parowania + ingest + deduplikacja. UI weryfikuje wyłącznie formularz BingX, link rejestracyjny i licznik transakcji (bez zakładek MetaTrader i Import CSV). Brak PnL w źródle pomija transakcję zamiast tworzyć break-even; jawne zero PnL i zerowa opłata pozostają znane (WEEX break-even po opłatach, BingX wynik `0` przy nieznanych opłatach i czasie).
 
 Regresje integralności: OKX importuje 501 rekordów w jednej rewizji, zapisuje `closedAt` ze źródła i UTC `importedAt`, a przekroczenie limitu stron lub pełna strona bez kursora kończy się jawnym błędem bez częściowego importu z żadnego źródła historii OKX. Wadliwy rekord wycofuje cały batch danego połączenia, stan, rewizję i markery deduplikacji. Testy integracji działają na odizolowanej bazie CI; reset startowy i końcowy musi zakończyć się kodem 0.
 

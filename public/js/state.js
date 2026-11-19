@@ -106,7 +106,7 @@
   AV.normalizeTax = (raw, opts = {}) => {
     const src = raw && typeof raw === 'object' ? raw : {};
     const year = Number(src.year) >= 2000 ? Math.trunc(Number(src.year)) : new Date().getFullYear();
-    let carryLoss = Math.max(0, Number(src.carryLoss) || 0);
+    let carryLoss = Math.max(0, Math.round(AV.pnum(src.carryLoss) * 100) / 100);
     if (opts.migrateDemoSeed && carryLoss === 380) carryLoss = 0;
     return { version: AV.TAX_VERSION, carryLoss, year };
   };
@@ -1016,17 +1016,17 @@
     const wins = trades.filter((t) => t.result > 0);
     const losses = trades.filter((t) => t.result < 0);
     const net = trades.reduce((s, t) => s + (Number(t.result) || 0), 0);
-    const gp = wins.reduce((s, t) => s + t.result, 0);
-    const gl = Math.abs(losses.reduce((s, t) => s + t.result, 0));
+    const gp = wins.reduce((s, t) => s + AV.num(t.result), 0);
+    const gl = Math.abs(losses.reduce((s, t) => s + AV.num(t.result), 0));
     const rs = trades.filter((t) => t.r != null);
-    const expR = rs.length ? rs.reduce((s, t) => s + t.r, 0) / rs.length : 0;
+    const expR = rs.length ? rs.reduce((s, t) => s + AV.num(t.r), 0) / rs.length : 0;
     const avgWin = wins.length ? gp / wins.length : 0;
     const avgLoss = losses.length ? -gl / losses.length : 0;
     const start = AV.startCapital(state) || 0;
     let eq = start, peak = start, maxDD = 0, maxDDpct = 0;
     const curve = [{ x: 0, eq: start, date: null }];
     trades.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((t, i) => {
-      eq += t.result;
+      eq += AV.num(t.result);
       peak = Math.max(peak, eq);
       const dd = eq - peak;
       if (dd < maxDD) maxDD = dd;
@@ -1036,7 +1036,7 @@
     const byGrade = AV.GRADES.map((g) => {
       const arr = trades.filter((t) => t.grade === g);
       const w = arr.filter((t) => t.result > 0).length;
-      return { grade: g, n: arr.length, wr: arr.length ? w / arr.length * 100 : 0, net: arr.reduce((s, t) => s + t.result, 0) };
+      return { grade: g, n: arr.length, wr: arr.length ? w / arr.length * 100 : 0, net: arr.reduce((s, t) => s + AV.num(t.result), 0) };
     });
     const group = (key) => {
       const map = {};
@@ -1044,7 +1044,7 @@
         const k = t[key] || '—';
         map[k] = map[k] || { key: k, n: 0, net: 0, wins: 0 };
         map[k].n++;
-        map[k].net += t.result;
+        map[k].net += AV.num(t.result);
         if (t.result > 0) map[k].wins++;
       });
       return Object.values(map).sort((a, b) => b.net - a.net);
@@ -1111,8 +1111,8 @@
       planRate: n ? planTrades.length / n * 100 : 0,
       planCount: planTrades.length,
       fees,
-      full: { n: full.length, wr: full.length ? full.filter((t) => t.result > 0).length / full.length * 100 : 0, net: full.reduce((s, t) => s + t.result, 0) },
-      part: { n: part.length, wr: part.length ? part.filter((t) => t.result > 0).length / part.length * 100 : 0, net: part.reduce((s, t) => s + t.result, 0) },
+      full: { n: full.length, wr: full.length ? full.filter((t) => t.result > 0).length / full.length * 100 : 0, net: full.reduce((s, t) => s + AV.num(t.result), 0) },
+      part: { n: part.length, wr: part.length ? part.filter((t) => t.result > 0).length / part.length * 100 : 0, net: part.reduce((s, t) => s + AV.num(t.result), 0) },
       avgMaeWin: avg(measuredWins, (t) => optionalMetric(t.mae)),
       avgMfeWin: avg(measuredWins, (t) => optionalMetric(t.mfe)),
       avgExitR: avg(measuredWins, (t) => t.r), maeSampleCount: measuredWins.length,
@@ -1142,7 +1142,7 @@
   AV.todayStats = (state) => {
     const arr = AV.todayTrades(state);
     const closed = arr.filter((t) => t.result != null);
-    const pnl = closed.reduce((s, t) => s + t.result, 0);
+    const pnl = closed.reduce((s, t) => s + AV.num(t.result), 0);
     const losses = closed.filter((t) => t.result < 0).length;
     const risk = arr.reduce((s, t) => {
       if (AV.isTradeClosed(t)) return s;
@@ -1238,22 +1238,41 @@
     return y >= 2000 ? Math.trunc(y) : new Date().getFullYear();
   };
   AV.isForexTrade = (trade, state) => {
-    const acc = (state.accounts || []).find((a) => a.id === trade.account || a.name === trade.account) || {};
-    const key = [trade.source, trade.account, acc.exchange, acc.type, acc.name].filter(Boolean).join(' ');
-    return /(^|[^a-z0-9])(mt4|mt5|metatrader)/i.test(key);
+    const id = String(trade.account || '');
+    const matched = (state.accounts || []).filter((a) => a.id === id || a.name === id ||
+      (a.name && id.toLowerCase().includes(String(a.name).toLowerCase())));
+    const key = [trade.source, trade.account]
+      .concat(matched.reduce((all, a) => all.concat([a.exchange, a.type, a.name]), []))
+      .filter(Boolean).join(' ');
+    return /(^|[^a-z0-9])(mt4|mt5|metatrader|forex|cfd)/i.test(key);
+  };
+  // Zdarzenie bez daty lub bez kursu waluty obcej nie może zasilać
+  // zestawienia — poprzednio liczone było po kursie 1:1 w każdym roku.
+  AV.taxFlowIssue = (f, year) => {
+    const date = String((f && f.date) || '');
+    if (!/^\d{4}-\d{2}-\d{2}/.test(date)) return 'bez daty';
+    if (Number(date.slice(0, 4)) !== year) return null;
+    if (!(AV.pnum(f.fiat) > 0)) return 'z nieprawidłową kwotą';
+    if ((f.currency || 'PLN') !== 'PLN' && !(AV.pnum(f.fx) > 0)) return 'bez kursu NBP';
+    return null;
   };
   AV.taxEvents = (state) => {
     const year = AV.taxYear(state);
     return (state.flows || [])
-      .filter((f) => !f.date || String(f.date).slice(0, 4) === String(year))
+      .filter((f) => {
+        const date = String(f.date || '');
+        return /^\d{4}-\d{2}-\d{2}/.test(date) && Number(date.slice(0, 4)) === year && !AV.taxFlowIssue(f, year);
+      })
       .map((f) => {
-        const fx = Number(f.fx) || 1;
+        const currency = f.currency || 'PLN';
+        const fx = currency === 'PLN' ? 1 : AV.pnum(f.fx);
+        const amount = AV.pnum(f.fiat);
         const kind = f.tax === 'income' || f.tax === 'cost' ? f.tax : (f.type === 'Wpłata' ? 'cost' : 'income');
         return {
           id: f.id, date: f.date,
-          op: (f.type === 'Wpłata' ? 'Zakup USDT za ' : 'Sprzedaż USDT za ') + (f.currency || 'PLN') + (f.op && f.op.includes('P2P') ? ' (P2P)' : ''),
-          kind, currency: f.currency || 'PLN', amount: Number(f.fiat) || 0, fx,
-          pln: Math.round((Number(f.fiat) || 0) * fx * 100) / 100
+          op: (f.type === 'Wpłata' ? 'Zakup USDT za ' : 'Sprzedaż USDT za ') + currency + (f.op && f.op.includes('P2P') ? ' (P2P)' : ''),
+          kind, currency, amount, fx,
+          pln: Math.round(amount * fx * 100) / 100
         };
       })
       .filter((e) => e.kind === 'income' || e.kind === 'cost')
@@ -1265,13 +1284,14 @@
     const sum = (kind) => Math.round(ev.filter((e) => e.kind === kind).reduce((s, e) => s + e.pln, 0) * 100) / 100;
     const revenue = sum('income');
     const costs = sum('cost');
-    const carry = Math.max(0, Number(state.tax && state.tax.carryLoss) || 0);
+    const carry = Math.max(0, Math.round(AV.pnum(state.tax && state.tax.carryLoss) * 100) / 100);
     const income = Math.max(0, Math.round((revenue - costs - carry) * 100) / 100);
     const due = Math.round(income * 0.19 * 100) / 100;
     const carryForward = Math.max(0, Math.round((costs + carry - revenue) * 100) / 100);
+    const invalidFlows = (state.flows || []).filter((f) => !!AV.taxFlowIssue(f, year)).length;
     const trades = (state.trades || []).filter((t) => String(t.date || '').slice(0, 4) === String(year));
     const forex = trades.filter((t) => AV.isForexTrade(t, state)).length;
-    return { year, ev, revenue, costs, carry, income, due, carryForward, neutral: trades.length - forex, forex, trades: trades.length };
+    return { year, ev, revenue, costs, carry, income, due, carryForward, invalidFlows, neutral: trades.length - forex, forex, trades: trades.length };
   };
 
   /* ---------- mentor ---------- */
@@ -1294,7 +1314,7 @@
     const c = closed.filter((t) => t.grade === 'C');
     const a = closed.filter((t) => t.grade === 'A');
     const byPair = {};
-    closed.forEach((t) => { byPair[t.pair] = (byPair[t.pair] || 0) + t.result; });
+    closed.forEach((t) => { byPair[t.pair] = (byPair[t.pair] || 0) + AV.num(t.result); });
     const pairSorted = Object.entries(byPair).sort((x, y) => x[1] - y[1]);
     const worstPair = pairSorted[0] || ['—', 0];
     const bestPair = pairSorted[pairSorted.length - 1] || ['—', 0];
@@ -1315,20 +1335,20 @@
     const next = events.filter((e) => e.imp === 3 && new Date(e.date) > new Date()).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
     const macroDays = new Set(events.filter((e) => e.imp === 3).map((e) => AV.dateKey(new Date(e.date))));
     const macroTrades = closed.filter((t) => macroDays.has(AV.dateKey(new Date(t.date))));
-    const macroNet = macroTrades.reduce((s, t) => s + t.result, 0);
+    const macroNet = macroTrades.reduce((s, t) => s + AV.num(t.result), 0);
     const r = AV.readiness(state);
     return {
       imie: state.user.name || 'Trader',
       straty: today.losses, limit: lock.limit, wynikDzis: AV.money(today.pnl, 2, ''),
       poStracie: afterLoss.filter((t) => t.result < 0).length + ' z ' + afterLoss.length,
-      poStracieWynik: AV.money(afterLoss.reduce((s, t) => s + t.result, 0), 2, ''),
+      poStracieWynik: AV.money(afterLoss.reduce((s, t) => s + AV.num(t.result), 0), 2, ''),
       fomoWr: fomo.length ? Math.round(fomo.filter((t) => t.result > 0).length / fomo.length * 100) : 0,
-      fomoN: fomo.length, fomoWynik: AV.money(fomo.reduce((s, t) => s + t.result, 0), 2, ''),
+      fomoN: fomo.length, fomoWynik: AV.money(fomo.reduce((s, t) => s + AV.num(t.result), 0), 2, ''),
       wr: closed.length ? Math.round(closed.filter((t) => t.result > 0).length / closed.length * 100) : 0,
       para: worstPair[0], paraWynik: AV.money(worstPair[1], 2, ''),
       dobraPara: bestPair[0], dobraWynik: AV.money(bestPair[1], 2, ''),
       godz: worstHour ? worstHour[0] : 'po 21:00', godzWr: worstHour ? Math.round(worstHour[1].w / worstHour[1].n * 100) : 0,
-      cWynik: AV.money(c.reduce((s, t) => s + t.result, 0), 2, ''), cN: c.length,
+      cWynik: AV.money(c.reduce((s, t) => s + AV.num(t.result), 0), 2, ''), cN: c.length,
       aWr: a.length ? Math.round(a.filter((t) => t.result > 0).length / a.length * 100) : 0,
       planZgodne: planOK + ' z ' + todayPlanTrades.length,
       gotowosc: r.score == null ? '' : r.score,
@@ -1351,9 +1371,9 @@
   AV.setupStats = (state, name) => {
     const trades = AV.closedTrades(state).filter((t) => t.setup === name);
     const wins = trades.filter((t) => t.result > 0);
-    const net = trades.reduce((s, t) => s + t.result, 0);
+    const net = trades.reduce((s, t) => s + AV.num(t.result), 0);
     const avgR = trades.filter((t) => t.r != null).length
-      ? trades.filter((t) => t.r != null).reduce((s, t) => s + t.r, 0) / trades.filter((t) => t.r != null).length : 0;
+      ? trades.filter((t) => t.r != null).reduce((s, t) => s + AV.num(t.r), 0) / trades.filter((t) => t.r != null).length : 0;
     return { n: trades.length, wr: trades.length ? wins.length / trades.length * 100 : 0, net, avgR };
   };
 

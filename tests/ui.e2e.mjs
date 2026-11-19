@@ -263,6 +263,43 @@ try {
     return out;
   });
   log('statystyki: puste dane bez fikcji', emptyStats.pf === '—' && emptyStats.wr === '—' && emptyStats.plan === '—' && emptyStats.fees === '' && emptyStats.checklist.includes('Brak danych') && !emptyStats.checklist.includes('7/7') && !emptyStats.insight.includes('Tak trzymaj'), JSON.stringify(emptyStats));
+
+  // wyniki z API/MCP mogą przyjść jako tekst — sumy muszą być numeryczne
+  const textNumberStats = await page.evaluate(() => {
+    const s = AV.buildEmpty();
+    s.accounts = [{ id: 'a_num', name: 'WEEX', balance: '1000', start: '1000', currency: 'USDT', include: true, primary: true }];
+    const date = new Date().toISOString();
+    const trade = (id, result, r, grade) => ({
+      id, date, pair: 'BTC/USDT', dir: 'l', result, r, grade, account: 'WEEX', setup: 'Tekst'
+    });
+    s.trades = [
+      trade('n1', '120.50', '1.2', 'A'),
+      trade('n2', '-40.25', '-0.4', 'B'),
+      trade('n3', '10.75', '0.1', 'A')
+    ];
+    const st = AV.computeStats(s.trades, s);
+    const ts = AV.todayStats(s);
+    const ss = AV.setupStats(s, 'Tekst');
+    return {
+      net: st.net, gp: st.gp, gl: st.gl, pf: st.pf, expR: st.expR,
+      equity: st.curve[st.curve.length - 1].eq,
+      gradeA: st.byGrade.find((g) => g.grade === 'A').net,
+      today: ts.pnl, setup: ss.net, setupR: ss.avgR
+    };
+  });
+  log('statystyki: tekstowe wyniki sumowane numerycznie',
+    Math.abs(textNumberStats.net - 91) < 0.001 &&
+    Math.abs(textNumberStats.gp - 131.25) < 0.001 &&
+    Math.abs(textNumberStats.gl - 40.25) < 0.001 &&
+    textNumberStats.pf > 3.25 && textNumberStats.pf < 3.27 &&
+    Math.abs(textNumberStats.expR - 0.3) < 0.001 &&
+    Math.abs(textNumberStats.equity - 1091) < 0.001 &&
+    Math.abs(textNumberStats.gradeA - 131.25) < 0.001 &&
+    Math.abs(textNumberStats.today - 91) < 0.001 &&
+    Math.abs(textNumberStats.setup - 91) < 0.001 &&
+    Math.abs(textNumberStats.setupR - 0.3) < 0.001,
+    JSON.stringify(textNumberStats));
+
   const historicalChecklistLabels = await page.evaluate(() => {
     const originalChecklist = AV.state.settings.checklist;
     AV.state.settings.checklist = ['Punkt A', 'Punkt B'];

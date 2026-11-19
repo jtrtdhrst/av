@@ -1233,12 +1233,10 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
 
 <!-- ================= GIEŁDY ================= -->
 <section class="view" id="gieldy">
-  <div class="head"><div><div class="eyebrow">Giełdy, MetaTrader i API</div><h1>Podłącz giełdę <span class="serif">lub brokera.</span></h1><p>Po podłączeniu wszystkie Twoje transakcje kopiują się do dziennika same: wejście, wyjście, wielkość, wynik i opłaty.</p></div><button class="btn g" id="syncNow"><svg class="i"><use href="#i-sync"/></svg>Synchronizuj teraz</button></div>
+  <div class="head"><div><div class="eyebrow">Giełdy i API</div><h1>Podłącz <span class="serif">BingX.</span></h1><p>Po podłączeniu wszystkie Twoje transakcje kopiują się do dziennika same: wejście, wyjście, wielkość, wynik i opłaty.</p></div><button class="btn g" id="syncNow"><svg class="i"><use href="#i-sync"/></svg>Synchronizuj teraz</button></div>
   <div class="ex">
     <div class="card exl" style="padding:10px">
       <button class="on" data-ex="bingx"><span class="lg" style="background:#2a54ff;color:#fff">BX</span><span>BingX<small data-exstate="bingx">niepodłączona</small></span></button>
-      <button data-ex="mt"><span class="lg" style="background:linear-gradient(135deg,#2a7de1,#1a4f9c);color:#fff">MT</span><span>MetaTrader 4 / 5<small class="warnc" data-exstate="mt">forex · indeksy · złoto</small></span></button>
-      <button data-ex="file"><span class="lg" style="background:rgba(255,255,255,.06);color:var(--mut)">CSV</span><span>Import z pliku<small data-exstate="file">CSV · XLS</small></span></button>
     </div>
     <div class="card" id="exBody"></div>
   </div>

@@ -623,7 +623,7 @@ Routing jest po stronie przeglądarki: jeden `public/index.html`, widoki przeł�
 | `mentor` | `#/mentor-ai` | Integracje AI |
 | `kal` | `#/kalendarz` | Kalendarz makro |
 | `cialo` | `#/cialo-i-glowa` | Ciało i głowa |
-| `gieldy` | `#/gieldy` | Giełdy i API |
+| `gieldy` | `#/gieldy` | BingX i API |
 | `ust` | `#/konto` | Konto i zasady |
 
 Widok `#/mentor-ai` to strona integracji MCP: adres `https://mcp.alphavault.pl/mcp` z kopiowaniem, przepływ „jak to działa”, zakładki ChatGPT/Claude/Grok z krokami konfiguracji, karty korzyści i bezpieczeństwa oraz nota o dostępności integracji. Claude korzysta z callbacku `https://claude.ai/api/mcp/auth_callback`, który musi być dopuszczony w allowliście OAuth. Karta wyjaśnia, że zakres zapisu zależy od konfiguracji serwera, i linkuje do polityki prywatności §13.2. Połączenie wymaga ekranu zgody na domenie MCP; token unieważnia się w `/oauth/connected`. Pill odczytuje `/api/mcp` i pokazuje skonfigurowany zakres (`MCP · TYLKO ODCZYT`, `MCP · ZAPIS`); nie sprawdza dostępności `mcp.alphavault.pl`. Widok nie zawiera czatu ani analiz.
@@ -729,7 +729,7 @@ Zasady:
 
 - `#ticker` — `GET /api/quotes` co 60 s; renderuje wyłącznie symbole zwrócone przez API; błąd zachowuje ostatni dobry zestaw, brak danych zostawia pasek pusty.
 - `#envBadge` (pasek nad aplikacją) — po zalogowaniu ukryty; pokazuje się tylko przy błędzie ostatniego zapisu, a przed logowaniem lub offline informuje o logowaniu albo trybie offline. Nie zawiera technicznych nazw bazy.
-- `#syncBadge` (chip w nagłówku) — widoczny tylko przy aktywnym połączeniu giełdy albo MetaTrader: nazwa dostawcy i godzina ostatniej synchronizacji; bez połączeń ukryty.
+- `#syncBadge` (chip w nagłówku) — widoczny tylko przy aktywnym połączeniu BingX: nazwa dostawcy i godzina ostatniej synchronizacji; bez połączeń ukryty.
 
 ### 11.1. Panel MCP
 
@@ -893,7 +893,7 @@ narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptogra
 | MCP propozycje | `tests/mcp.test.php` | gotowość z brakującymi metrykami, wymagany SL, case-sensitive klucze propozycji/decyzji, kod jednorazowy, idempotencja decyzji powiązana z akcją i payloadem, zamrożony snapshot `write_op` po MySQL round-trip (także screenshot), skutki uboczne bez podwójnego prefiksu, zatwierdzenie po `confirmed` bez kodu, break-even, konflikt rewizji, TTL, ochrona giełdy, `target_missing`, izolacja, audyt | CI po zmianie |
 | MCP dashboard health | `tests/mcp-tools.e2e.mjs` | metryki aktywnego Oura widoczne wyłącznie dla tokenu z `alphavault.health`; bez scope'u brak metryk, także przy aktywnym połączeniu | CI po zmianie |
 | MCP konto/analityka | `tests/mcp-tools.test.php`, `tests/mcp-tools.e2e.mjs` | jawne `include=false` filtruje analitykę, legacy konta bez konfiguracji zachowują statystyki, listy i szczegóły pozostają pełne | CI po zmianie |
-| MCP analityka | `tests/mcp-tools.test.php` | Metrics, puste MAE/MFE jako `null`, break-even, dopasowanie rynku bez kolizji prefiksów, filtry kont, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38, odznaki, screeny | CI po zmianie |
+| MCP analityka | `tests/mcp-tools.test.php` | Metrics, puste MAE/MFE jako `null`, break-even, dopasowanie rynku bez kolizji prefiksów, filtry kont, widoczność transakcji z konta wyłączonego z obliczeń, setupy, kalkulator, PIT-38 (pomijanie zdarzeń bez daty/kursu i ujemnych, tekstowy carry), odznaki, screeny | CI po zmianie |
 | MCP zapis | `tests/mcp-write.test.php` | 30 operacji bezpośrednich, 33 schematy, klucze idempotencji 8–120 znaków także w silniku, stabilne hashe screenów bez zależności od kolejności kluczy JSON, formuły check-inu i planu, wiele planów z jedną datą, wybór `planId`, stabilne ID propozycji, round-trip poziomów, wymagany SL, legacy close bez SL, ścisła walidacja MAE/MFE, blokada `r` dla importów, integralność kosza, reguły ryzyka i redakcja screenów | CI po zmianie |
 | MCP E2E | `tests/mcp.e2e.mjs` | OAuth 2.1, PKCE, DCR, 46+33 narzędzia z jednym zakresem, create→delete→restore, `confirmed`, approve bez kodu, idempotencja decyzji, pilot | CI po zmianie |
 | MCP tools E2E | `tests/mcp-tools.e2e.mjs` | dashboard Oura ze scope’em zdrowotnym, odmowa health-only bez rozszerzenia scope’u, każde narzędzie z rejestru ma udane wywołanie (79/79), fixture DB CI z fail-closed guardem i cleanupem, wydarzenia/paginacja, granice dat i DST, include=false, lifecycle transakcji, no-op bez zmiany rewizji, walidacja MAE/MFE i zachowanie pominiętego MFE przy zamknięciu, replay propozycji wymaga zgodnej rewizji i nie wykonuje zapisu ponownie, redakcja screenów | CI po zmianie |
@@ -904,8 +904,9 @@ narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptogra
 | Notowania | `tests/quotes.test.php` | cache, TTL, fallback, cząstkowe pobranie, uszkodzony cache | 14/14 PASS |
 | Daty demo | `tests/demo-state.test.php` | przesunięcie fixture na dziś, idempotencja, plany jako punkt zaczepienia, błędne dane | 15/15 PASS |
 | API | `tests/api.e2e.mjs` | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, blokada wstrzyknięcia wpisu przez kosz, no-op revision/updatedAt, zamknięcie legacy bez SL, stan, events, macro, admin, eksport, prop i cleanup fixture | CI po zmianie |
-| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro do +3 ze stanami partial/error/stale, wiele planów i poziomy z reloadem, saldo i kalkulator, legacy checklist także po zmianie konfiguracji, wymagany SL i elastyczne R:R, awaria zapisu zamknięcia bez komunikatu sukcesu, round-trip przez API i cleanup pełnego fixture, niezależne listy dziennika/statystyk/PnL, MCP status/fallback, Akademia i odznaki | CI po zmianie |
+| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro do +3 ze stanami partial/error/stale, wiele planów i poziomy z reloadem, saldo i kalkulator, legacy checklist także po zmianie konfiguracji, wymagany SL i elastyczne R:R, awaria zapisu zamknięcia bez komunikatu sukcesu, round-trip przez API i cleanup pełnego fixture, niezależne listy dziennika/statystyk/PnL, tekstowe wyniki i R sumowane numerycznie, MCP status/fallback, Akademia i odznaki | CI po zmianie |
 | UI empty | `tests/ui-empty.e2e.mjs` | puste pola po sukcesie z `[]` | 12/12 PASS |
+| PIT-38 | `tests/tax.e2e.mjs` | rok podatkowy, nadwyżka, neutrale/forex, CSV i PDF, wpłaty z kursem NBP, pomijanie zdarzeń bez daty/kursu/ujemnych, tekstowy carry, saldo konta, ostrzeżenie w UI | CI po zmianie |
 | PWA mobile | `tests/pwa.e2e.mjs` | manifest, SW, instalacja, powiadomienie, deep link, 10 s, push, offline, brak przepełnienia 15 widoków przy 390 i 1024 px | PASS |
 | Urządzenia | `tests/wearables.e2e.mjs` | OAuth2 + PKCE Oura, rotacja tokenów i klucza, statusy, Apple, UI, bezpieczeństwo, wyłączenie Garmin/Whoop | PASS |
 | Konfiguracja urządzeń | `tests/wearables-config.test.php` | lista dostawców, brak fallbacku klucza, start OAuth 503, gotowość po ustawieniu klucza | 5/5 PASS |
@@ -1001,11 +1002,13 @@ CI sprawdza linki, sekcje i brak dryfu (`node scripts/sync-docs.mjs --check` + `
 
 ```text
 public/js/state.js          loadConnections, connectExchange, syncConnections, reloadStateFromServer
-public/js/render2.js        panel Giełdy, formularze WEEX/OKX/BingX, MetaTrader, EA
+public/js/render2.js        panel „Podłącz BingX": formularz klucza, instrukcja, link rejestracyjny
 app/Integrations/           Crypto, HttpClient, providers, ConnectionStore, ExchangeSync, MtEa
 app/routes/api.php          /api/connections*, /api/mt/ea
 bin/sync-exchange-trades.php  ręczny/CRON worker
 ```
+
+Widok `#/gieldy` udostępnia w UI wyłącznie BingX: formularz klucza API (`API Key`, `Secret Key`), instrukcję „Jak zdobyć klucz" z linkiem rejestracyjnym `https://bingx.com/en/activity/task/7425469856?themeType=2&ref=EUB5TF` i licznik zaimportowanych transakcji. Zakładki MetaTrader (hasło inwestora, EA) oraz Import CSV zostały usunięte z panelu; endpointy i testy API pozostają bez zmian.
 
 ### 20.2. Połączenie klucza
 

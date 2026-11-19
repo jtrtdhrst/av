@@ -1890,9 +1890,8 @@
   AV.bindExchanges = () => {
     $$('.exl button').forEach((b) => b.addEventListener('click', () => AV.renderEx(b.dataset.ex)));
     $('#syncNow')?.addEventListener('click', async () => {
-      const c = AV.state.settings.connections || {};
-      const connected = Object.entries(c).filter(([k, v]) => v && v.connected && k !== 'file');
-      if (!connected.length) { AV.toast('Połącz najpierw giełdę albo MetaTrader'); return; }
+      const connected = !!AV.connections().bingx.connected;
+      if (!connected) { AV.toast('Połącz najpierw BingX'); return; }
       const btn = $('#syncNow');
       const old = btn ? btn.innerHTML : '';
       if (btn) { btn.disabled = true; btn.textContent = 'Synchronizuję…'; }
@@ -1901,7 +1900,7 @@
         AV.renderExchangeList();
         if (AV.renderEx) AV.renderEx(AV.exKey);
         AV.toast(data.imported > 0
-          ? 'Pobrano ' + data.imported + ' ' + AV.plural(data.imported, 'transakcję', 'transakcje', 'transakcji') + ' z ' + connected.length + ' połączeń'
+          ? 'Pobrano ' + data.imported + ' ' + AV.plural(data.imported, 'transakcję', 'transakcje', 'transakcji') + ' z BingX'
           : 'Synchronizacja gotowa · brak nowych transakcji', 5000);
       } catch (err) {
         AV.toast(err.message || 'Synchronizacja nie powiodła się.', 7000);
@@ -2039,7 +2038,7 @@
       AV.confirm({ title: 'Usunąć wpłatę/wypłatę?', text: 'Usunięcie zmieni saldo konta i zestawienie PIT-38.', confirmLabel: 'Usuń', danger: true, onConfirm: () => {
         AV.state.flows = AV.state.flows.filter((x) => x.id !== f.id);
         const acc = AV.state.accounts.find((a) => a.name === f.account);
-        if (acc) acc.balance += f.type === 'Wpłata' ? -f.amount : f.amount;
+        if (acc) acc.balance = AV.num(acc.balance) + (f.type === 'Wpłata' ? -AV.num(f.amount) : AV.num(f.amount));
         AV.saveNow(); AV.renderFlows(); AV.renderAccounts(); AV.renderTax(); AV.renderSettings(); AV.toast('Usunięto');
       } });
     });
@@ -2094,9 +2093,10 @@
       const fiat = AV.pnum($('#flFiat', body).value);
       const currency = $('#flCur', body).value;
       const fx = currency === 'PLN' ? 1 : AV.pnum($('#flFx', body).value);
-      if (!amount || !fiat) { AV.toast('Podaj kwotę USDT i kwotę fiat'); return; }
-      if (currency !== 'PLN' && (!fx || fx <= 1)) { AV.toast('Podaj kurs NBP z dnia roboczego przed transakcją'); return; }
+      if (!(amount > 0) || !(fiat > 0)) { AV.toast('Podaj dodatnią kwotę USDT i kwotę fiat'); return; }
+      if (currency !== 'PLN' && !(fx > 1)) { AV.toast('Podaj kurs NBP z dnia roboczego przed transakcją'); return; }
       const date = $('#flDate', body).value || AV.dateKey(new Date());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { AV.toast('Podaj datę w formacie RRRR-MM-DD'); return; }
       const flow = {
         id: AV.uid('flow'), date, account: acc,
         type, op: $('#flOp', body).value + (type === 'Wpłata' ? ' · zakup USDT' : ' · sprzedaż USDT'),
@@ -2104,7 +2104,7 @@
       };
       AV.state.flows.push(flow);
       const a = AV.state.accounts.find((x) => x.name === acc);
-      if (a) a.balance += type === 'Wpłata' ? amount : -amount;
+      if (a) a.balance = AV.num(a.balance) + (type === 'Wpłata' ? amount : -amount);
       AV.saveNow(); AV.closeModal(); AV.renderFlows(); AV.renderAccounts(); AV.renderTax(); AV.renderSettings(); AV.renderDashboard();
       if (Number(String(date).slice(0, 4)) !== AV.taxYear(AV.state)) {
         AV.toast(type + ' zapisana poza rokiem ' + AV.taxYear(AV.state) + ' — nie wejdzie do zestawienia PIT-38', 5000);
@@ -2127,20 +2127,29 @@
     AV.toast('Eksport CSV gotowy');
   };
 
-  AV.exportTaxCsv = () => {
-    const t = AV.taxData(AV.state);
+  // Separatorem w CSV jest „;” — kwoty z kropką dziesiętną i spacjami
+  // tysięcy Excel interpretował jako tekst. Ujednolicam format obu eksportów.
+  AV.taxCsvMoney = (v) => AV.fmt(v, 2).replace(/[\s\u00a0]/g, '');
+  AV.taxCsvRows = (t) => {
+    const money = AV.taxCsvMoney;
     const rows = [['Data', 'Operacja', 'Rodzaj', 'Waluta', 'Kwota', 'Kurs NBP', 'W PLN']];
-    t.ev.forEach((e) => rows.push([new Date(e.date).toLocaleDateString('pl-PL'), e.op, e.kind === 'cost' ? 'koszt' : 'przychód', e.currency, e.amount, e.fx, e.pln]));
+    t.ev.forEach((e) => rows.push([new Date(e.date).toLocaleDateString('pl-PL'), e.op,
+      e.kind === 'cost' ? 'koszt' : 'przychód', e.currency, money(e.amount),
+      e.fx === 1 ? '1' : AV.fmt(e.fx, 4).replace(/[\s\u00a0]/g, ''), money(e.pln)]));
     rows.push([]);
-    rows.push(['Przychód', '', '', '', '', '', t.revenue]);
-    rows.push(['Koszty', '', '', '', '', '', t.costs]);
-    rows.push(['Nadwyżka kosztów z ' + (t.year - 1), '', '', '', '', '', t.carry]);
-    rows.push(['Dochód', '', '', '', '', '', t.income]);
-    rows.push(['Podatek 19%', '', '', '', '', '', t.due]);
-    rows.push(['Do przeniesienia na ' + (t.year + 1), '', '', '', '', '', t.carryForward]);
+    rows.push(['Przychód', '', '', '', '', '', money(t.revenue)]);
+    rows.push(['Koszty', '', '', '', '', '', money(t.costs)]);
+    rows.push(['Nadwyżka kosztów z ' + (t.year - 1), '', '', '', '', '', money(t.carry)]);
+    rows.push(['Dochód', '', '', '', '', '', money(t.income)]);
+    rows.push(['Podatek 19%', '', '', '', '', '', money(t.due)]);
+    rows.push(['Do przeniesienia na ' + (t.year + 1), '', '', '', '', '', money(t.carryForward)]);
     rows.push(['Neutralne podatkowo (transakcje)', '', '', '', '', '', t.neutral]);
     rows.push(['Forex i CFD MT4/MT5 (transakcje)', '', '', '', '', '', t.forex]);
-    AV.download('alpha-vault-PIT-38-' + t.year + '.csv', AV.toCsv(rows));
+    return rows;
+  };
+  AV.exportTaxCsv = () => {
+    const t = AV.taxData(AV.state);
+    AV.download('alpha-vault-PIT-38-' + t.year + '.csv', AV.toCsv(AV.taxCsvRows(t)));
     AV.toast('CSV podatkowy gotowy');
   };
 
@@ -2173,7 +2182,7 @@
     const files = [];
     files.push({ name: 'dane.json', data: JSON.stringify(s, null, 2) });
     files.push({ name: 'transakcje.csv', data: AV.toCsv([['Data', 'Para', 'Kierunek', 'Ocena', 'Wynik', 'R', 'Emocja', 'Setup', 'Notatka']].concat(s.trades.map((t) => [new Date(t.date).toLocaleString('pl-PL'), t.pair, AV.tradeDirection(t.dir) === 's' ? 's' : 'l', t.grade, t.result == null ? '' : t.result, t.r == null ? '' : t.r, t.emotion, t.setup, t.note]))) });
-    files.push({ name: 'podatki.csv', data: AV.toCsv([['Data', 'Operacja', 'Rodzaj', 'Kwota', 'Waluta', 'W PLN']].concat(AV.taxData(s).ev.map((e) => [new Date(e.date).toLocaleDateString('pl-PL'), e.op, e.kind, e.amount, e.currency, e.pln]))) });
+    files.push({ name: 'podatki.csv', data: AV.toCsv(AV.taxCsvRows(AV.taxData(s))) });
     files.push({ name: 'plany.json', data: JSON.stringify(s.plans, null, 2) });
     files.push({ name: 'README.txt', data: 'Alpha Vault — eksport danych\nWygenerowano: ' + AV.nowStamp() + '\n\nZawartość:\n- dane.json: pełny stan aplikacji (profil, transakcje, plany, ustawienia, połączenia)\n- transakcje.csv: dziennik transakcji\n- podatki.csv: zdarzenia podatkowe\n- plany.json: plany dnia\n- screeny/: screeny wykresów (jeśli dodane)\n\nDane są prywatne. Klucze API są zapisane w postaci zamaskowanej.\n' });
     s.trades.forEach((t) => {

@@ -1,5 +1,21 @@
 # Changelog
 
+## Nieopublikowane
+
+### Zmienione
+- Giełdy: panel „Podłącz BingX" pokazuje wyłącznie BingX — formularz klucza API, instrukcję i link rejestracyjny. Usunięto zakładki MetaTrader i Import CSV z UI; API i testy backendu pozostają bez zmian.
+
+### Naprawione
+- Dane: wyniki transakcji i R przychodzące z API/MCP jako tekst są sumowane numerycznie w statystykach, PnL dnia, mentorze i setupach; saldo konta przy wpłacie/usunięciu wpływu nie konkatenuje tekstu.
+- PIT-38: wpływy bez daty, z ujemną kwotą lub bez kursu waluty obcej są pomijane i sygnalizowane w UI; tekstowy carry („1000,50”) liczy się numerycznie; podatek ma dwa miejsca po przecinku we wszystkich eksportach.
+
+- MCP `get_tax_summary`: ta sama integralność danych co w panelu — pomijanie wpływów bez daty/kursu/ujemnych (`flows.skippedFlows`), tekstowy carry i szersze rozpoznawanie kont forex/CFD.
+
+### Testy
+- `tests/ui.e2e.mjs`: tekstowe wyniki i R w statystykach.
+- `tests/mcp-tools.test.php`: pomijanie niekompletnych wpływów i tekstowy carry w podsumowaniu podatkowym.
+- `tests/tax.e2e.mjs`: niekompletne zdarzenia, tekstowy carry, saldo konta, ostrzeżenie UI i format CSV.
+
 ## 4.2.0 - 2026-11-16
 
 ### Zmienione
