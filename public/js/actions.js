@@ -753,7 +753,7 @@
         t.partials = Array.isArray(t.partials) ? t.partials : [];
         t.partials.push({ price: exit == null ? '' : AV.fmt(exit, AV.dec(exit)), pct, result: round2(result), at: new Date(closedAtMs).toISOString() });
         t.partialResult = round2((AV.pnum(t.partialResult) || 0) + result);
-        t.size = AV.fmt(Math.max(0, fullSize * (1 - pct / 100)), 4);
+        t.size = String(Math.round(Math.max(0, fullSize * (1 - pct / 100)) * 1e8) / 1e8);
         if (moveBe) { t.sl = String(t.entry); t.be = true; }
         t.mentor = 'Zamknięto ' + pct + '% pozycji. Pozostała część nadal jest otwarta — prowadź ją według planu.';
       }
