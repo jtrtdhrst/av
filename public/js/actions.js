@@ -563,7 +563,12 @@
     });
     AV.saveNow();
     clearTimeout(AV._pushTimer);
-    const saved = await AV.pushStateImmediate();
+    if (AV.api.pushing) await AV.waitForPushIdle();
+    let saved = await AV.pushStateImmediate();
+    if (!saved && AV.api.pushing) {
+      await AV.waitForPushIdle();
+      saved = await AV.pushStateImmediate();
+    }
     if (!saved && AV.api.online && AV.api.authenticated) {
       AV.state.trades = beforeTrades;
       if (beforeTrash) AV.state.trash = beforeTrash; else delete AV.state.trash;

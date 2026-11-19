@@ -481,6 +481,8 @@ try {
 
   // dwa niezależne plany tego samego dnia i rynku pozostają osobnymi rekordami po reloadzie
   const firstPlanId = planReload.id;
+  await page.click('#planSeg button[data-day="0"]');
+  await page.waitForFunction(() => AV.planDate === AV.dateKey(new Date()), null, { timeout: 10000 });
   const sameMarketBefore = await page.evaluate(() => AV.plansForDate(AV.state, AV.planDate).filter((p) => p.market === 'ETH').length);
   const secondWhy = 'E2E: drugi plan ETH ' + Date.now();
   await page.click('#addPlan');
