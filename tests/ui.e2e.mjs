@@ -1906,6 +1906,10 @@ try {
   log('pozycja: częściowe TP zamyka 50% i zostawia resztę otwartą',
     partialState.open && Number(partialState.size) === 1 && partialState.partials?.length === 1 && Number(partialState.partialResult) === 10,
     JSON.stringify(partialState));
+  await page.evaluate(async () => {
+    await AV.waitForPushIdle(15000);
+    AV.closeModal();
+  });
   await page.evaluate((id) => AV.openTrade(id), manageId);
   await page.click('[data-trade-del="' + manageId + '"]');
   await page.click('#gConfirmOk');
