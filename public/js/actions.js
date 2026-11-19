@@ -592,7 +592,12 @@
     t.mentor = 'SL przeniesiony na wejście. Od tego momentu pozycja nie może przynieść straty.';
     AV.saveNow();
     clearTimeout(AV._pushTimer);
-    const saved = await AV.pushStateImmediate();
+    if (AV.api.pushing) await AV.waitForPushIdle();
+    let saved = await AV.pushStateImmediate();
+    if (!saved && AV.api.pushing) {
+      await AV.waitForPushIdle();
+      saved = await AV.pushStateImmediate();
+    }
     AV.openTrade(id);
     AV.renderAll();
     AV.toast(saved ? 'SL przeniesiony na BE' : 'SL przeniesiony lokalnie. Synchronizacja po powrocie połączenia.', saved ? 3000 : 5000);
@@ -754,7 +759,12 @@
       }
       AV.saveNow();
       clearTimeout(AV._pushTimer);
-      const saved = await AV.pushStateImmediate();
+      if (AV.api.pushing) await AV.waitForPushIdle();
+      let saved = await AV.pushStateImmediate();
+      if (!saved && AV.api.pushing) {
+        await AV.waitForPushIdle();
+        saved = await AV.pushStateImmediate();
+      }
       if (!saved && AV.api.online && AV.api.authenticated) {
         if (AV.state === originalState) {
           const currentIndex = AV.state.trades.findIndex((row) => row.id === id);
