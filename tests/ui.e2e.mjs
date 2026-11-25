@@ -531,7 +531,7 @@ try {
   await page.click('#planOutcomeUnrealized');
   await waitForPlanOutcome(secondPlanId, 'unrealized');
   await waitForOutcomeControls();
-  const outcomeSummary = await page.evaluate(() => {
+  const outcomeSummary = await page.evaluate(({ firstId, secondId }) => {
     const approved = AV.plansForDate(AV.state, AV.planDate).filter((plan) => !!plan.approvedAt);
     const count = (selector) => Number(document.querySelector(selector)?.textContent.trim());
     return {
@@ -541,10 +541,10 @@ try {
       expectedRealized: approved.filter((plan) => plan.completionStatus === 'realized').length,
       expectedUnrealized: approved.filter((plan) => plan.completionStatus === 'unrealized').length,
       expectedPending: approved.filter((plan) => !['realized', 'unrealized'].includes(plan.completionStatus)).length,
-      firstStatus: AV.planById(AV.state, firstPlanId)?.completionStatus,
-      secondStatus: AV.planById(AV.state, secondPlanId)?.completionStatus
+      firstStatus: AV.planById(AV.state, firstId)?.completionStatus,
+      secondStatus: AV.planById(AV.state, secondId)?.completionStatus
     };
-  });
+  }, { firstId: firstPlanId, secondId: secondPlanId });
   log('plan dnia: podsumowanie zatwierdzonych planów', outcomeSummary.realized === outcomeSummary.expectedRealized &&
     outcomeSummary.unrealized === outcomeSummary.expectedUnrealized && outcomeSummary.pending === outcomeSummary.expectedPending &&
     outcomeSummary.firstStatus === 'realized' && outcomeSummary.secondStatus === 'unrealized', JSON.stringify(outcomeSummary));
