@@ -114,19 +114,21 @@
         e.textContent = [h, m, x].map((v) => String(v).padStart(2, '0')).join(':');
       } else e.textContent = '--:--:--';
     });
+    const editing = !!AV.ui.editId && !!AV.state.trades.find((t) => t.id === AV.ui.editId);
+    const blocked = L.active && !editing;
     const wrap = $('#lockWrap');
     if (wrap) {
-      wrap.classList.toggle('locked', L.active);
+      wrap.classList.toggle('locked', blocked);
       const card = $('#lockCard');
-      if (card) card.style.display = L.active ? '' : 'none';
+      if (card) card.style.display = blocked ? '' : 'none';
       const form = wrap.querySelector('.formwrap');
-      if (form) form.style.display = L.active ? 'none' : '';
+      if (form) form.style.display = blocked ? 'none' : '';
     }
     const navBadge = $('.navg button[data-v="nowa"] .badge');
     if (navBadge) navBadge.style.display = L.active ? '' : 'none';
     const chip = $('.chipst.lk');
     if (chip) chip.style.display = L.active ? '' : 'none';
-    if (L.active) {
+    if (blocked) {
       const card = $('#lockCard');
       if (card) {
         const p = card.querySelector('p');

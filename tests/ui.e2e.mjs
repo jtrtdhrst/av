@@ -1657,7 +1657,21 @@ try {
           count: document.querySelector('#clN')?.textContent.trim(),
           selected: Array.from(document.querySelectorAll('#clList .cl.on')).map((row) => row.dataset.cl)
         };
+        const saveProbe = {
+          checks: JSON.parse(JSON.stringify(AV.ui.ntChecks || {})),
+          touched: AV.ui.ntChecklistTouched,
+          editId: AV.ui.editId,
+          points: AV.checklistPoints(AV.state, AV.ui.ntChecklistHistory || []),
+          toasts: []
+        };
+        const probeToast = AV.toast;
+        const probeConfirm = AV.confirm;
+        AV.toast = (message, delay) => { saveProbe.toasts.push(String(message)); probeToast(message, delay); };
+        AV.confirm = (options) => { saveProbe.toasts.push('confirm:' + String(options?.title || '')); probeConfirm(options); };
         AV.saveTrade();
+        AV.toast = probeToast;
+        AV.confirm = probeConfirm;
+        result.saveProbe = saveProbe;
         const afterManualSave = AV.state.trades.find((row) => row.id === id);
         result.savedSelection = {
           checklist: afterManualSave?.checklist,
