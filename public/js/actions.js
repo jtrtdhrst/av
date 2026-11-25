@@ -719,6 +719,11 @@
       : AV.isTradeClosed(t)
         ? 'Możesz poprawić wykonanie; wynik przeliczy się automatycznie. Wpisz wynik ręczny tylko jako override.'
       : 'Edytujesz transakcję z ' + AV.dateTimeShort(t.date));
+    // Późna odpowiedź pushu (np. 409 i przeładowanie stanu) może przełączyć widok.
+    // Formularz edycji ma pozostać widoczny bez ponownego nadpisywania pól.
+    AV.currentView = 'nowa';
+    $$('.view').forEach((section) => section.classList.toggle('on', section.id === 'nowa'));
+    $$('.navg button').forEach((button) => button.classList.toggle('on', button.dataset.v === 'nowa'));
   };
 
   AV.closeTradeModal = (id) => {
@@ -1126,9 +1131,14 @@
         : null;
     }
     if (AV.ui.editId && !AV.ui.ntChecklistTouched) {
-      delete payload.checklist;
-      delete payload.checklistItems;
-      delete payload.checkTotal;
+      const priorItems = Array.isArray(AV.ui.ntChecklistHistory) ? AV.ui.ntChecklistHistory : [];
+      const checklistChanged = checklistItems.length !== priorItems.length
+        || checklistItems.some((p) => !priorItems.includes(p));
+      if (!checklistChanged) {
+        delete payload.checklist;
+        delete payload.checklistItems;
+        delete payload.checkTotal;
+      }
     }
     const persist = () => {
       if (AV.ui.editId) {
@@ -1383,7 +1393,7 @@
     if (AV.calc.mode === 'crypto') {
       const quantity = ml / Math.abs(en - sl), no = quantity * en, mg = no / lev, pf = quantity * Math.abs(tp - en);
       const instrument = AV.INST.crypto[+$('#cInst').value || 0]?.[0] || 'BTCUSDT';
-      const baseUnit = String(instrument).replace(/(?:USDT|USDC|BUSD|USD)$/i, '') || 'units';
+      const baseUnit = String(instrument).split('/')[0].replace(/(?:USDT|USDC|BUSD|USD)$/i, '') || 'units';
       AV.setText('#rMainL', 'Wielkość pozycji (' + baseUnit + ')');
       AV.setText('#rMainH', 'Notional ' + AV.fmt(no, 2) + ' $ · depozyt ' + AV.fmt(mg, 2) + ' $ przy dźwigni ' + lev + '× · ryzyko ' + AV.fmt(ml, 2) + ' $');
       AV.setText('#rNotL', 'Wartość pozycji (notional)');
@@ -1485,7 +1495,7 @@
       const quantity = ml / Math.abs(en - sl);
       const notional = quantity * en, margin = notional / lev;
       const instrument = AV.INST.crypto[+$('#cInst').value || 0]?.[0] || 'BTCUSDT';
-      const baseUnit = String(instrument).replace(/(?:USDT|USDC|BUSD|USD)$/i, '') || 'units';
+      const baseUnit = String(instrument).split('/')[0].replace(/(?:USDT|USDC|BUSD|USD)$/i, '') || 'units';
       AV.setText('#rMainL', 'Proponowana wielkość pozycji (' + baseUnit + ')');
       AV.setText('#rMain', AV.fmt(quantity, 6) + ' ' + baseUnit);
       AV.setText('#rMainH', 'Notional ' + AV.fmt(notional, 2) + ' $ · depozyt ' + AV.fmt(margin, 2) + ' $ przy dźwigni ' + lev + '× · ryzyko ' + AV.fmt(ml, 2) + ' $');

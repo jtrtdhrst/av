@@ -974,9 +974,15 @@
   const REALIZED_EVENTS = Symbol('realizedEvents');
   const finiteStateNumber = (value) => {
     if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
     try {
       const number = Number(value);
-      return Number.isFinite(number) ? number : null;
+      if (Number.isFinite(number)) return number;
+      if (typeof value === 'string' && /^-?[\d\s.,]+$/.test(value.trim())) {
+        const localized = AV.pnum(value);
+        return Number.isFinite(localized) ? localized : null;
+      }
+      return null;
     } catch {
       return null;
     }

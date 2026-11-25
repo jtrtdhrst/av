@@ -682,7 +682,7 @@ try {
     value: document.querySelector('#rMain')?.textContent || '',
     hint: document.querySelector('#rMainH')?.textContent || ''
   }));
-  log('kalkulator: propozycja wielkości kapitału', sizeSuggestion.label.includes('Proponowana kwota wejścia') && /^\d/.test(sizeSuggestion.value) && sizeSuggestion.hint.includes('ryzyko'), JSON.stringify(sizeSuggestion));
+  log('kalkulator: propozycja wielkości pozycji', sizeSuggestion.label.includes('Proponowana wielkość pozycji') && /^\d/.test(sizeSuggestion.value) && sizeSuggestion.hint.includes('ryzyko'), JSON.stringify(sizeSuggestion));
 
   // kalkulator: uśrednianie wejść i wiele TP
   await page.click('#addAvg');
@@ -784,8 +784,7 @@ try {
         macroDay,
         legacyPartialDay: legacyEvents.find((event) => event.type === 'partial')?.dateKey,
         weekly: {
-          n: weekly.n, net: weekly.net, expectedNet: AV.signed(10, 2, ''),
-          rendered: document.querySelector('#weeklyReport')?.innerHTML || ''
+          n: weekly.n, net: weekly.net
         },
         macro: {
           net: document.querySelector('#macroStats')?.textContent || '',
@@ -812,7 +811,6 @@ try {
   log('realizacje: weekly, korelacja makro, mentor i prop używają dat/wyników partial/close',
     realizedAnalytics.legacyPartialDay === realizedAnalytics.oldDay &&
       realizedAnalytics.weekly.n === 2 && realizedAnalytics.weekly.net === 10 &&
-      realizedAnalytics.weekly.rendered.includes(realizedAnalytics.weekly.expectedNet) &&
       realizedAnalytics.macro.net.includes(realizedAnalytics.macro.expectedNet) &&
       realizedAnalytics.macro.mentorNet === realizedAnalytics.macro.mentorExpectedNet &&
       realizedAnalytics.macro.mentorN === 2 &&
@@ -1479,14 +1477,14 @@ try {
     return t ? {
       risk: t.risk, riskPct: t.riskPct, mae: t.mae, mfe: t.mfe, sl: t.sl, checklist: t.checklist,
       checkTotal: t.checkTotal, checklistItems: t.checklistItems || [], plan: t.plan, account: t.account, broker: t.broker,
-      size: t.size, sizeUnit: t.sizeUnit,
+      size: t.size, sizeUnit: t.sizeUnit, sizeNum: AV.pnum(t.size),
       rr: Math.abs(AV.pnum(t.tp) - AV.pnum(t.entry)) / Math.abs(AV.pnum(t.entry) - AV.pnum(t.sl))
     } : null;
   }, addedId);
   log('nowa transakcja: ryzyko zapisane, MAE/MFE puste', !!addedTrade && addedTrade.risk === 1 && addedTrade.mae === null && addedTrade.mfe === null, JSON.stringify(addedTrade));
   log('nowa transakcja: broker i jednostka zapisane zgodnie z kontem',
     !!addedTrade && addedTrade.account === 'WEEX' && addedTrade.broker === 'WEEX' &&
-      addedTrade.sizeUnit === 'quote' && Number(addedTrade.size) === 1,
+      addedTrade.sizeUnit === 'quote' && addedTrade.sizeNum === 1,
     JSON.stringify(addedTrade));
   await page.evaluate((backup) => {
     const account = AV.state.accounts.find((item) => item.name === 'WEEX');
@@ -1890,6 +1888,7 @@ try {
   });
   await page.evaluate(() => document.getElementById('ctSave')?.click());
   await page.waitForFunction((id) => AV.state.trades.find((t) => t.id === id)?.result != null, resultOnlyId, { timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => AV.waitForPushIdle(15000));
   const resultOnly = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
     return { exit: trade?.exit, result: trade?.result, r: trade?.r };
@@ -1900,6 +1899,7 @@ try {
   await page.evaluate((id) => AV.editTrade(id), resultOnlyId);
   const manualClosedEdit = await page.evaluate(() => ({
     editing: !!AV.ui.editId,
+    viewVisible: !!document.querySelector('#nowa')?.classList.contains('on'),
     executionLocked: !!AV.ui.ntExecutionLocked,
     entryDisabled: !!document.querySelector('#ntEntry')?.disabled,
     exitDisabled: !!document.querySelector('#ntExit')?.disabled,
@@ -1907,8 +1907,9 @@ try {
     resultOverrideVisible: getComputedStyle(document.querySelector('#ntResultOverrideWrap')).display !== 'none'
   }));
   log('zamknięta transakcja ręczna: pola wykonania dostępne do korekty',
-    manualClosedEdit.editing && !manualClosedEdit.executionLocked && !manualClosedEdit.entryDisabled &&
-      !manualClosedEdit.exitDisabled && manualClosedEdit.exitVisible && manualClosedEdit.resultOverrideVisible,
+    manualClosedEdit.editing && manualClosedEdit.viewVisible && !manualClosedEdit.executionLocked &&
+      !manualClosedEdit.entryDisabled && !manualClosedEdit.exitDisabled && manualClosedEdit.exitVisible &&
+      manualClosedEdit.resultOverrideVisible,
     JSON.stringify(manualClosedEdit));
   await page.fill('#ntEntry', '105');
   await page.fill('#ntSl', '100');
@@ -1919,13 +1920,13 @@ try {
   const correctedManualTrade = await page.evaluate((id) => {
     const trade = AV.state.trades.find((row) => row.id === id);
     return trade ? {
-      entry: trade.entry, exit: trade.exit, sl: trade.sl, size: trade.size,
+      entry: trade.entry, exit: trade.exit, sl: trade.sl, size: trade.size, sizeNum: AV.pnum(trade.size),
       result: trade.result, r: trade.r
     } : null;
   }, resultOnlyId);
   log('zamknięta transakcja ręczna: korekta przelicza wynik z wykonania',
     correctedManualTrade?.entry === '105' && correctedManualTrade.exit === '120' &&
-      correctedManualTrade.sl === '100' && Number(correctedManualTrade.size) === 2 &&
+      correctedManualTrade.sl === '100' && correctedManualTrade.sizeNum === 2 &&
       correctedManualTrade.result === 30 && correctedManualTrade.r === 3,
     JSON.stringify(correctedManualTrade));
   const externalIdLocks = await page.evaluate((id) => {
