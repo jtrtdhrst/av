@@ -576,6 +576,7 @@ try {
     const priorDay = { ...base, id: AV.uid('plan'), date: yesterday, market, approvedAt: Date.now(), completionStatus: 'realized' };
     AV.storePlan(AV.state, target);
     AV.storePlan(AV.state, priorDay);
+    AV.renderPlan();
     let saved = await AV.pushStateImmediate();
     if (!saved && AV.api.pushing) {
       await AV.waitForPushIdle(15000);
