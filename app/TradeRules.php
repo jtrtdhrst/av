@@ -841,7 +841,7 @@ final class TradeRules
             }
 
             $recalculated = self::recalculateClosedManualTrade($before, $trade, $afterState);
-            if (isset($recalculated['error'])) {
+            if (isset($recalculated['error'], $recalculated['status'], $recalculated['message'])) {
                 return $recalculated;
             }
             $afterState['trades'][$index] = $recalculated;
@@ -1054,7 +1054,12 @@ final class TradeRules
             }
         }
 
-        $updated['initialSize'] = self::tradeNumberText($initialSize);
+        if ($hasPartials
+            || array_key_exists('initialSize', $before)
+            || array_key_exists('initialSize', $requested)
+            || $sizeChanged) {
+            $updated['initialSize'] = self::tradeNumberText($initialSize);
+        }
         $updated['size'] = self::tradeNumberText($hasPartials ? $remaining : $initialSize);
         $updated['partials'] = $hasPartials ? $updatedPartials : $partials;
         $updated['partialResult'] = $hasPartials ? self::roundTradeMetric($partialResult) : null;
@@ -1081,10 +1086,8 @@ final class TradeRules
                 return self::closedTradeMetricsUnsupported('wynik przekracza zakres liczbowy', $before);
             }
             $result = self::roundTradeMetric($calculatedResult);
-        } elseif (!$pnlInputsChanged) {
-            $result = self::number($before['result'] ?? null);
         } else {
-            return self::closedTradeMetricsUnsupported('brak ceny wyjścia po zmianie wykonania', $before);
+            $result = self::number($before['result'] ?? null);
         }
         $updated['result'] = $result;
 

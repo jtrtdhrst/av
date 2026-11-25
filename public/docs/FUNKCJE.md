@@ -78,7 +78,7 @@ Legenda:
 | Filtry: wszystkie/zyskowne/stratne/otwarte | ✅ | |
 | Filtr oceny A/B/C | ✅ | |
 | Szukanie po parze/emocji/setupie | ✅ | |
-| Szczegóły transakcji | ✅ | MAE/MFE, checklist, notatka, mentor; bez syntetycznego wykresu i kontrolek interwału |
+| Szczegóły transakcji | ✅ | MAE/MFE, checklist, notatka, mentor; bez syntetycznego wykresu i kontrolek interwału (wykres playbooka pozostaje) |
 | Screeny przed/po | ✅ | upload, drag&drop, Ctrl+V; JPEG w stanie |
 | Dodanie transakcji | ✅ | formularz startuje pusty; wybór konta określa brokera; SL jest obowiązkowy, TP opcjonalny; R:R jest elastyczne i dobierane do setupu; ręczna checklista nie ma minimalnego progu zapisu; ryzyko = \|entry − SL\| × size |
 | Jednostka wielkości pozycji | ✅ | konto ustala jednostki bazowe, kwotę w walucie kwotowanej albo loty/kontrakty; wartości są normalizowane do kanonicznego `size` w jednostkach bazowych przy zapisie i ryzyku; loty wymagają jawnego mnożnika kontraktu |
@@ -87,7 +87,7 @@ Legenda:
 | Widoczność wpisów | ✅ | dziennik pokazuje wszystkie transakcje; „W statystykach” na koncie nadal filtruje statystyki, nie listę dziennika |
 | Pusty dziennik | ✅ | CTA „Dodaj transakcję” i „Giełdy i API” bez tekstu zastępczego; „Brak transakcji spełniających filtry” tylko przy aktywnym filtrze |
 | Edycja transakcji | ✅ | formularz wypełniony danymi, zachowuje dokładny ręczny wybór punktów checklisty; zamknięte ręczne wykonania można korygować i przeliczać |
-| Integralność zapisu transakcji | ✅ | wspólne `TradeRules`: API/MCP walidują przejście stanu, importer waliduje mapowany rekord; nowe transakcje ręczne wymagają SL, każdy znany wynik liczbowy (w tym 0) lub poprawny `closedAt` oznacza zamknięcie, nieznany czas pozostaje pusty; ID i pola wykonania importowanych wpisów są chronione, a ręczne zamknięte wpisy można poprawiać; jawny `resultOverride` zastępuje przeliczony wynik łączny |
+| Integralność zapisu transakcji | ✅ | wspólne `TradeRules`: API/MCP walidują przejście stanu, importer waliduje mapowany rekord; nowe transakcje ręczne wymagają SL, każdy znany wynik liczbowy (w tym 0) lub poprawny `closedAt` oznacza zamknięcie, nieznany czas pozostaje pusty; zewnętrzne ID i pola wykonania importowanych wpisów są chronione, a ręczne zamknięte wpisy można poprawiać; jawny `resultOverride` zastępuje przeliczony wynik łączny |
 | Rewizja i no-op | ✅ | zapis bez semantycznej zmiany zachowuje `revision` i `updatedAt`; nie tworzy audytu mutacji |
 | Weryfikacja źródła danych | ✅ | `source` przesłane przez klienta nie omija wymogu SL; import waliduje każdy zmapowany rekord i może zachować brak SL tylko wtedy, gdy giełda go nie dostarczyła |
 | Atomowość i czas importu | ✅ | rollback obejmuje batch połączenia, stan, rewizję i markery; CI pokrywa 501 rekordów, źródłowe `closedAt` i UTC `importedAt`; limit stron lub brak kursora OKX nie kończą się częściowym sukcesem |

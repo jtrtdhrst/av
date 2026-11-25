@@ -180,6 +180,8 @@ $realizedJan2 = Metrics::window($realizationState, '2026-01-02', '2026-01-02');
 $realizedJan3 = Metrics::window($realizationState, '2026-01-03', '2026-01-03');
 $realizedJan4 = Metrics::window($realizationState, '2026-01-04', '2026-01-04');
 $realizedAll = Metrics::window($realizationState, '2026-01-02', '2026-01-04');
+$realizationRows = Metrics::range($realizationState['trades'], '2026-01-02', '2026-01-04');
+$realizationSummary = Metrics::summarize($realizationRows);
 check(
     'Metrics: częściowy PnL open przypada na dni realizacji, nie wejścia',
     $realizedJan1['trades'] === []
@@ -193,6 +195,9 @@ check(
     && Metrics::summarize($realizedJan4['trades'])['net'] === 20.0
     && Metrics::summarize($realizedAll['trades'])['net'] === 18.0
     && Metrics::summarize($realizedAll['trades'])['sampleSize'] === 2
+    && count($realizationRows) === 5
+    && $realizationSummary['net'] === 18.0
+    && $realizationSummary['sampleSize'] === 2
     && $realizedAll['range'] === ['from' => '2026-01-02', 'to' => '2026-01-04']
 );
 $dstRange = Metrics::range([
@@ -442,6 +447,23 @@ check(
     && $partialTodayProtection['dailyPnl'] === -40.0
     && $partialTodayProtection['losses'] === 0
     && $partialTodayProtection['openPositions'] === 0
+);
+$closedPartialTodayState = $partialTodayState;
+$closedPartialTodayState['trades'] = [
+    $trade([
+        'id' => 'closed-partial-today',
+        'date' => $at(-1, 10),
+        'closedAt' => $at(0, 12),
+        'result' => -15.0,
+        'partials' => [['at' => $at(0, 11), 'result' => -10.0]],
+        'partialResult' => -10.0,
+    ]),
+];
+$closedPartialTodayProtection = $risk->protection($closedPartialTodayState);
+check(
+    'Ryzyko: cumulative trade.result nie dubluje częściowego PnL',
+    $closedPartialTodayProtection['dailyPnl'] === -15.0
+    && $closedPartialTodayProtection['losses'] === 1
 );
 $partialTodayState['trades'][] = $trade([
     'id' => 'opened-after-partial-loss',

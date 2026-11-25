@@ -166,7 +166,7 @@ final class Metrics
      */
     public static function range(array $trades, ?string $from, ?string $to, string $fromField = 'from', string $toField = 'to'): array
     {
-        return self::projectRange($trades, $from, $to, $fromField, $toField, true);
+        return self::projectRange($trades, $from, $to, $fromField, $toField, true, false);
     }
 
     /**
@@ -179,7 +179,8 @@ final class Metrics
         ?string $to,
         string $fromField,
         string $toField,
-        bool $preserveUnrealized
+        bool $preserveUnrealized,
+        bool $aggregateEvents
     ): array {
         $fromTs = null;
         $toTs = null;
@@ -218,10 +219,26 @@ final class Metrics
                 usort($matched, static fn (array $a, array $b): int =>
                     (Dates::timestamp($a['date']) ?? 0) <=> (Dates::timestamp($b['date']) ?? 0)
                 );
+                $tradeKey = (string) $index . '#' . (string) ($trade['id'] ?? '');
+                if (!$aggregateEvents) {
+                    foreach ($matched as $event) {
+                        $projected = $trade;
+                        $projected['result'] = $event['result'];
+                        $projected['date'] = $event['date'];
+                        $projected['__metricTradeKey'] = $tradeKey;
+                        $projected['__metricEvent'] = true;
+                        $projected['__metricRealized'] = true;
+                        $window[] = $projected;
+                    }
+                    continue;
+                }
+
                 $projected = $trade;
                 $projected['result'] = array_sum(array_column($matched, 'result'));
-                $projected['date'] = $matched[0]['date'];
-                $projected['__metricTradeKey'] = (string) $index . '#' . (string) ($trade['id'] ?? '');
+                // Keep entry-time semantics for trade attributes; date-range
+                // metadata and PnL grouping use the attached realization dates.
+                $projected['date'] = (string) ($trade['date'] ?? $matched[0]['date']);
+                $projected['__metricTradeKey'] = $tradeKey;
                 $projected['__metricDates'] = array_values(array_map(
                     static fn (array $event): string => $event['date'],
                     $matched
@@ -396,7 +413,7 @@ final class Metrics
             static fn (mixed $trade): bool => is_array($trade)
                 && self::accountIncluded($state, (string) ($trade['account'] ?? ''))
         ));
-        $window = self::projectRange($included, $from, $to, 'from', 'to', false);
+        $window = self::projectRange($included, $from, $to, 'from', 'to', false, true);
         $range = self::dateRange($window);
 
         return [
