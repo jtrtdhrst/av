@@ -271,6 +271,117 @@ try {
         && \AlphaVault\TradeRules::hasValidClosedAt($closed)
         && str_contains((string) $closed['mentor'], 'z zyskiem'), json_encode($closed));
 
+    $partialClosedRow = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $partialClosedState = json_decode((string) ($partialClosedRow['state'] ?? ''), true);
+    $partialClosedIndex = null;
+    foreach ((array) ($partialClosedState['trades'] ?? []) as $index => $trade) {
+        if ((string) ($trade['id'] ?? '') === 'man1') {
+            $partialClosedIndex = $index;
+            break;
+        }
+    }
+    if ($partialClosedIndex !== null) {
+        $partialClosedState['trades'][$partialClosedIndex] = array_replace(
+            $partialClosedState['trades'][$partialClosedIndex],
+            [
+                'initialSize' => '0.2',
+                'partials' => [[
+                    'price' => '2050',
+                    'pct' => 50,
+                    'result' => 5.0,
+                    'resultOverride' => false,
+                    'at' => '2026-01-02T12:10:00Z',
+                ]],
+                'partialResult' => 5.0,
+                'resultOverride' => null,
+                'sizeUnit' => 'contracts',
+                'sizeContractSize' => 1.0,
+                'size' => '0.1',
+                'result' => 15.0,
+                'risk' => 20.0,
+                'riskPct' => 2.0,
+                'r' => 0.75,
+            ]
+        );
+        $partialClosedJson = json_encode($partialClosedState, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $db->execute(
+            'UPDATE user_states SET state = ?, bytes = ?, revision = revision + 1 WHERE user_id = ?',
+            [$partialClosedJson, strlen((string) $partialClosedJson), $userA]
+        );
+    }
+
+    $closedExecutionProposalCode = '';
+    $closedExecutionProposalMessage = '';
+    try {
+        $builder->updateTrade($userA, [
+            'tradeId' => 'man1',
+            'changes' => ['entry' => 2001],
+            'idempotencyKey' => 'idem-closed-trade-update',
+        ], 'test-client');
+    } catch (ProposalException $err) {
+        $closedExecutionProposalCode = $err->errorCode;
+        $closedExecutionProposalMessage = $err->getMessage();
+    }
+    check(
+        '6a. propozycja korekty wykonania zamkniętej transakcji kieruje do update_trade',
+        $closedExecutionProposalCode === 'closed_trade_proposal_unsupported'
+        && str_contains($closedExecutionProposalMessage, 'update_trade'),
+        $closedExecutionProposalCode . '/' . $closedExecutionProposalMessage
+    );
+
+    $partialReviewProposal = $builder->updateTrade($userA, [
+        'tradeId' => 'man1',
+        'changes' => ['note' => 'Recenzja zamkniętej transakcji częściowej'],
+        'idempotencyKey' => 'idem-closed-partial-review',
+    ], 'test-client');
+    $partialReviewFields = array_column((array) ($partialReviewProposal['diff'] ?? []), 'field');
+    check(
+        '6a1. propozycja recenzji nie deklaruje przeliczonego wyniku ani R',
+        !in_array('result', $partialReviewFields, true) && !in_array('r', $partialReviewFields, true)
+    );
+    $service->approve($userA, $partialReviewProposal['proposalId'], $userA);
+    $partialReviewSavedRow = $db->queryOne('SELECT state FROM user_states WHERE user_id = ?', [$userA]);
+    $partialReviewSaved = json_decode((string) ($partialReviewSavedRow['state'] ?? ''), true);
+    $partialReviewTrade = null;
+    foreach ((array) ($partialReviewSaved['trades'] ?? []) as $trade) {
+        if ((string) ($trade['id'] ?? '') === 'man1') {
+            $partialReviewTrade = $trade;
+            break;
+        }
+    }
+    check(
+        '6a2. recenzja zamkniętej transakcji częściowej nie zmienia jej wykonania',
+        ($partialReviewTrade['note'] ?? '') === 'Recenzja zamkniętej transakcji częściowej'
+        && (float) ($partialReviewTrade['result'] ?? 0) === 15.0
+        && ($partialReviewTrade['r'] ?? null) === 0.75
+        && (float) ($partialReviewTrade['partialResult'] ?? 0) === 5.0
+        && ($partialReviewTrade['size'] ?? null) === '0.1'
+        && (float) ($partialReviewTrade['sizeContractSize'] ?? 0) === 1.0
+    );
+
+    $importedForMetadata = null;
+    foreach ((array) ($partialReviewSaved['trades'] ?? []) as $trade) {
+        if ((string) ($trade['id'] ?? '') === 'ex1') {
+            $importedForMetadata = $trade;
+            break;
+        }
+    }
+    $importedMetadataAfter = array_replace((array) $importedForMetadata, ['sizeContractSize' => 0.01]);
+    $importedMetadataError = expectError(fn () => $service->create(
+        $userA,
+        'test-client',
+        'trade_update',
+        'trade:ex1',
+        $importedForMetadata,
+        $importedMetadataAfter,
+        'idem-imported-contract-change'
+    ));
+    check(
+        '6a3. propozycja nie zmienia snapshotu jednostki transakcji importowanej',
+        $importedMetadataError === 'exchange_data_readonly',
+        $importedMetadataError
+    );
+
     $breakEvenProposal = $builder->closeTrade($userA, [
         'tradeId' => 'man2', 'exitPrice' => 2000, 'idempotencyKey' => 'idem-close-be-1',
     ], 'test-client');

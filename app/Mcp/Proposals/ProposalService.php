@@ -62,6 +62,12 @@ final class ProposalService
         if (!in_array($kind, self::KINDS, true)) {
             throw new ProposalException('bad_request', 'Nieznany typ propozycji.', 400);
         }
+        if ($kind === 'trade_update') {
+            if ($before === null) {
+                throw new ProposalException('bad_proposal', 'Zmiana transakcji wymaga stanu bazowego.', 400);
+            }
+            $this->assertTradeUpdate($userId, $before, $after);
+        }
         $diffTarget = $diffAfter ?? $after;
         $payloadHash = hash('sha256', $this->canonicalJson([
             'kind' => $kind,
@@ -1410,12 +1416,20 @@ final class ProposalService
     }
 
     /**
-     * Zmiana transakcji: dane finansowe transakcji importowanej są nietykalne,
-     * a wynik musi zgadzać się z ceną wyjścia i wielkością pozycji.
+     * Propozycje mogą zmieniać wykonanie tylko otwartej transakcji. Dla
+     * zamkniętej walidujemy osobno dozwolone pola recenzji i zachowujemy
+     * zapisany wynik/R, bez odtwarzania częściowych zamknięć.
      */
-    private function assertTradeUpdate(int $userId, array $before, array $after): void
+    private function assertTradeUpdate(int $userId, array $before, array &$after): void
     {
-        $allowed = ['id', 'date', 'pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size', 'result', 'r', 'grade', 'checklist', 'checkTotal', 'errors', 'emotion', 'note', 'mentor', 'setup', 'session', 'mae', 'mfe', 'durationMin', 'fee', 'plan', 'source', 'account', 'screens'];
+        $allowed = [
+            'id', 'date', 'pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size',
+            'initialSize', 'partials', 'partialResult', 'resultOverride', 'sizeUnit', 'sizeContractSize',
+            'result', 'r', 'risk', 'riskPct', 'closedAt', 'grade', 'checklist', 'checkTotal',
+            'errors', 'emotion', 'note', 'mentor', 'setup', 'session', 'mae', 'mfe',
+            'durationMin', 'fee', 'plan', 'source', 'account', 'screens', 'importedAt',
+            'exchangeId', 'externalId', 'extId',
+        ];
         foreach ($after as $field => $_) {
             if (!in_array($field, $allowed, true)) {
                 throw new ProposalException('bad_proposal', 'Pole ' . $field . ' nie należy do transakcji.', 400);
@@ -1424,13 +1438,40 @@ final class ProposalService
         if ((string) ($before['id'] ?? '') !== (string) ($after['id'] ?? '') || (string) ($before['id'] ?? '') === '') {
             throw new ProposalException('bad_proposal', 'Identyfikator transakcji nie może się zmienić.', 400);
         }
-        $exchange = $this->isExchangeTrade($userId, $before);
-        if ($exchange) {
-            foreach (['entry', 'exit', 'size', 'sl', 'tp', 'result', 'r', 'fee', 'source', 'date'] as $field) {
-                if ($this->canonicalField($before[$field] ?? null) !== $this->canonicalField($after[$field] ?? null)) {
-                    throw new ProposalException('exchange_data_readonly', 'Pole ' . $field . ' należy do danych giełdowych.', 403);
-                }
+        $exchange = $this->isExchangeTrade($userId, $before) || TradeRules::isExecutionReadonly($before);
+        $executionAfter = $after;
+        foreach (['result', 'r'] as $field) {
+            if (array_key_exists($field, $before)) {
+                $executionAfter[$field] = $before[$field];
+            } else {
+                unset($executionAfter[$field]);
             }
+        }
+        if ($exchange && TradeRules::executionChanged($before, $executionAfter)) {
+            throw new ProposalException(
+                'exchange_data_readonly',
+                'Wykonanie transakcji importowanej lub z zewnętrznym ID jest tylko do odczytu.',
+                403
+            );
+        }
+        if (TradeRules::isClosed($before)) {
+            if (TradeRules::executionChanged($before, $executionAfter)) {
+                throw new ProposalException(
+                    'closed_trade_proposal_unsupported',
+                    'Propozycje nie obsługują korekty wykonania zamkniętej transakcji. Użyj update_trade, które bezpiecznie przelicza wynik i R z uwzględnieniem częściowych zamknięć.',
+                    409
+                );
+            }
+            $after = $executionAfter;
+            $this->assertOptionalMetric($after, 'mae');
+            $this->assertOptionalMetric($after, 'mfe');
+            return;
+        }
+        if ($this->canonicalField($before['closedAt'] ?? null) !== $this->canonicalField($after['closedAt'] ?? null)) {
+            throw new ProposalException('bad_proposal', 'closedAt nie jest edytowalne przez propozycję update_trade.', 400);
+        }
+        if ($exchange) {
+            $after = $executionAfter;
         }
         $beforeSl = (string) ($before['sl'] ?? 'brak');
         $afterSl = (string) ($after['sl'] ?? 'brak');

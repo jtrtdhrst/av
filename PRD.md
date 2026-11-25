@@ -114,13 +114,17 @@ Zachowane: pulpit, plan dnia, dziennik, playbook, nowa transakcja, kalkulator, p
 Każdy widok ma czytelny adres w hashu (`#/dziennik`, `#/akademia`, `#/podatki`, `#/konto`, …); stare krótkie adresy (`#/trans`, `#/akad`, `#/ust`) pozostają aliasami i są przepisywane na slug. Kontrakt: `DOCUMENTATION.md §11.1a`, test: `tests/router.unit.mjs`.
 
 - Karta salda na pulpicie rozwija listę kont. Plan dnia pozwala utrzymywać wiele niezależnych planów dla tej samej daty, każdy z własnym rynkiem i poziomami płynności/POI oraz własnym poziomem użytkownika; dopasowanie transakcji nie wybiera arbitralnie, gdy kilka planów pasuje do tego samego rynku. Zakładka „Globalnie” przechowuje scenariusze bez daty i pokazuje je jako kafelki.
-- Dziennik pozwala wybrać portfel i brokera przy dodawaniu transakcji, pokazuje live P&L otwartych pozycji, przełącza interwał wykresu oraz obsługuje częściowe TP, BE i wcześniejsze zamknięcie. Usunięcie trafia do kosza stanu, dzięki czemu przechodzi walidację integralności.
+- Dziennik pozwala wybrać konto przy dodawaniu transakcji; broker i jednostka wielkości wynikają z tego konta. Pokazuje live P&L otwartych pozycji oraz obsługuje częściowe TP, BE i wcześniejsze zamknięcie. Szczegóły transakcji nie mają syntetycznego wykresu ani kontrolek interwału; wykres playbooka pozostaje. Usunięcie trafia do kosza stanu, dzięki czemu przechodzi walidację integralności.
 - Kalkulator zachowuje ręcznie wpisaną cenę wejścia, oferuje tryb odwrotny „Zakładam SL → jaka kwota”, uśrednianie wielu wejść i wiele TP z łącznym zyskiem.
-- Ręczna checklista ocenia transakcję, ale nie narzuca minimalnej liczby zaznaczeń; wybór punktów jest ręczny. Edycja zachowuje historyczny wynik, a gdy starszy wpis nie zapisał nazw zaznaczonych punktów, UI nie dopisuje zmyślonego wyboru. Transakcja wymaga SL; R:R dobiera się do setupu, bez stałego minimum. Po zapisie formularz otwiera dziennik i resetuje jego filtry. Dziennik pokazuje wszystkie wpisy niezależnie od tego, czy ich konto jest włączone do statystyk.
+- Ręczna checklista ocenia transakcję, ale nie narzuca minimalnej liczby zaznaczeń; wybór punktów jest ręczny. Edycja zachowuje historyczny wynik checklisty, a gdy starszy wpis nie zapisał nazw zaznaczonych punktów, UI nie dopisuje zmyślonego wyboru. Transakcja wymaga SL; R:R dobiera się do setupu, bez stałego minimum. Po zapisie formularz otwiera dziennik i resetuje jego filtry. Dziennik pokazuje wszystkie wpisy niezależnie od tego, czy ich konto jest włączone do statystyk.
 - Etykieta kapitału początkowego konta jest jawna („Kapitał startowy”). Zakres statystyk ogólnych pozostaje niezależny od zakresu kalendarza PnL.
 - MAE/MFE, opłaty, czas trwania i checklista z importu pozostają nieznane (`null`), jeśli źródło ich nie dostarcza; puste pomiary nie są liczone jak zero. CSV nie tworzy wpisu bez PnL i bez danych do jego wyliczenia, ale zachowuje jawny PnL równy 0.
 - Koszt błędu „Za wczesne wyjście” jest pomijany, gdy brakuje pomiaru MFE albo niezerowego R; zamknięcie transakcji przez MCP zachowuje wcześniejsze MFE, jeśli pole pominięto, a jawne `null` je czyści.
 - Eksport dziennika zachowuje MAE/MFE i nie zamienia nieznanej opłaty ani pustej checklisty na zero lub wartość domyślną. Pusty wynik jest traktowany jako transakcja otwarta; zamknięcie tylko wynikiem nie fabrykuje ceny wyjścia.
+- Pulpit rozdziela saldo bieżące wpisane dla kont od kapitału obliczonego. Kapitał obliczony to kapitał startowy kont włączonych do statystyk, powiększony o zrealizowane wyniki (w tym częściowe zamknięcia) i wpłaty, pomniejszony o wypłaty; brakujące saldo ręczne pozostaje puste.
+- Jednostka wielkości pozycji w dzienniku wynika z konta: jednostki bazowe, kwota w walucie kwotowanej albo loty/kontrakty. Kwoty kwotowane i loty są przeliczane na jednostki bazowe do zapisu i obliczania ryzyka, a `trade.size` pozostaje kanoniczną wielkością w jednostkach bazowych; lot wymaga jawnego mnożnika kontraktu. Broker jest dziedziczony z wybranego konta.
+- Kalendarz PnL i zakresy statystyk przypisują wynik do dat realizacji: częściowe zamknięcie używa `partials[].at`, a końcowa część `closedAt`; gdy brakuje czasu zdarzenia, używana jest data transakcji. Otwarte pozycje mogą więc wnosić do PnL wyłącznie zrealizowane części.
+- Zamknięte ręczne wykonania można korygować i przeliczać. Jawny ręczny `resultOverride` zastępuje automatycznie przeliczony wynik łączny; ID wpisu i zewnętrzne identyfikatory importu pozostają niezmienne, a wykonania wpisów importowanych są tylko do odczytu.
 
 ### FR-05 — Harmonogram live'ów z Discorda
 
@@ -367,7 +371,7 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | --- | --- |
 | FR-01, FR-02 | [DOCUMENTATION.md §4](DOCUMENTATION.md#4-uwierzytelnianie-sesje-i-csrf), [docs/API.md](docs/API.md) |
 | FR-03 | [DOCUMENTATION.md §5](DOCUMENTATION.md#5-stan-aplikacji), [docs/BAZA-DANYCH.md](docs/BAZA-DANYCH.md) |
-| FR-04 | [docs/FUNKCJE.md](docs/FUNKCJE.md) |
+| FR-04 | [DOCUMENTATION.md §11.3a](DOCUMENTATION.md#113a-pulpit-plan-dnia-kalkulator-statystyki-i-makro), [docs/FUNKCJE.md](docs/FUNKCJE.md) |
 | FR-05, FR-06, FR-07, FR-08 | [DOCUMENTATION.md §7](DOCUMENTATION.md#7-discord-scheduled-events--pełny-przepływ), [docs/DISCORD.md](docs/DISCORD.md) |
 | FR-09, FR-10 | [DOCUMENTATION.md §8](DOCUMENTATION.md#8-czas-dst-i-recurrence) |
 | FR-11, FR-12, FR-13 | [DOCUMENTATION.md §9](DOCUMENTATION.md#9-cron-i-niezawodność), [docs/DEPLOY.md](docs/DEPLOY.md) |

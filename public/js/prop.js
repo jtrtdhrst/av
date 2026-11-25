@@ -3,10 +3,10 @@
    Działa w przeglądarce (window.AV.prop) i w Node (module.exports) — testy jednostkowe. */
 (function (root, factory) {
   'use strict';
-  const api = factory();
+  const api = factory(root);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root && root.AV) root.AV.prop = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (root) {
   'use strict';
 
   const MS_DAY = 86400000;
@@ -47,6 +47,31 @@
       return Number.isNaN(parsed.getTime()) ? fallback : startOfDay(parsed);
     }
     return fallback;
+  };
+  const finiteValue = (value) => {
+    if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const tradeRealizedEvents = (trade) => {
+    const resolver = root && root.AV && root.AV.tradeRealizedEvents;
+    if (typeof resolver === 'function') return resolver(trade);
+    const events = [];
+    const partials = Array.isArray(trade && trade.partials) ? trade.partials : [];
+    let partialTotal = 0;
+    partials.forEach((partial) => {
+      const result = finiteValue(partial && partial.result);
+      if (result == null) return;
+      partialTotal += result;
+      const at = parseDay(partial.at) || parseDay(trade.date);
+      events.push({ dateKey: at ? dateKey(at) : null, result });
+    });
+    const total = finiteValue(trade && trade.result);
+    if (total != null) {
+      const at = parseDay(trade.closedAt) || parseDay(trade.date);
+      events.push({ dateKey: at ? dateKey(at) : null, result: total - partialTotal });
+    }
+    return events;
   };
 
   const uid = () => 'prop_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -253,19 +278,13 @@
     const accountKey = String(c.account || '').trim().toLowerCase();
 
     const list = (Array.isArray(trades) ? trades : [])
-      .filter((t) => {
-        if (!t || t.result == null) return false;
-        const value = Number(t.result);
-        if (!Number.isFinite(value)) return false;
-        if (accountKey && String(t.account || '').trim().toLowerCase() !== accountKey) return false;
-        const raw = new Date(t.date);
-        if (Number.isNaN(raw.getTime())) return false;
-        const day = startOfDay(raw);
-        if (start && day < start) return false;
-        if (end && day > end) return false;
-        return true;
-      })
-      .map((t) => ({ ...t, _day: startOfDay(t.date), _value: Number(t.result) }))
+      .filter((trade) => trade && (!accountKey || String(trade.account || '').trim().toLowerCase() === accountKey))
+      .flatMap((trade) => tradeRealizedEvents(trade).flatMap((event) => {
+        const value = finiteValue(event && event.result);
+        const day = parseDay(event && (event.dateKey || event.date || event.at));
+        if (value == null || !day || (start && day < start) || (end && day > end)) return [];
+        return [{ ...trade, _day: day, _value: value }];
+      }))
       .sort((a, b) => a._day - b._day);
 
     let equity = startBalance;

@@ -147,6 +147,54 @@ $breakEvenSummary = Metrics::summarize([$trade(['result' => 0.0, 'r' => 0.0])]);
 check('Metrics: break-even osobno od zysku i straty', $breakEvenSummary['sampleSize'] === 1
     && $breakEvenSummary['wins'] === 0 && $breakEvenSummary['losses'] === 0
     && $breakEvenSummary['breakeven'] === 1 && $breakEvenSummary['net'] === 0.0);
+$realizationState = [
+    'accounts' => $accounts,
+    'trades' => [
+        $trade([
+            'id' => 'open-partial',
+            'date' => '2026-01-01T10:00:00Z',
+            'result' => null,
+            'r' => null,
+            'partials' => [
+                ['at' => '2026-01-02T10:00:00Z', 'result' => -12.0],
+                ['at' => '2026-01-02T12:00:00Z', 'result' => 5.0],
+            ],
+            'partialResult' => -7.0,
+            'closedAt' => null,
+        ]),
+        $trade([
+            'id' => 'closed-partial',
+            'date' => '2026-01-01T11:00:00Z',
+            'result' => 25.0,
+            'closedAt' => '2026-01-04T10:00:00Z',
+            'partials' => [
+                ['at' => '2026-01-02T13:00:00Z', 'result' => -5.0],
+                ['at' => '2026-01-03T14:00:00Z', 'result' => 10.0],
+            ],
+            'partialResult' => 5.0,
+        ]),
+    ],
+];
+$realizedJan1 = Metrics::window($realizationState, '2026-01-01', '2026-01-01');
+$realizedJan2 = Metrics::window($realizationState, '2026-01-02', '2026-01-02');
+$realizedJan3 = Metrics::window($realizationState, '2026-01-03', '2026-01-03');
+$realizedJan4 = Metrics::window($realizationState, '2026-01-04', '2026-01-04');
+$realizedAll = Metrics::window($realizationState, '2026-01-02', '2026-01-04');
+check(
+    'Metrics: częściowy PnL open przypada na dni realizacji, nie wejścia',
+    $realizedJan1['trades'] === []
+    && count($realizedJan2['trades']) === 2
+    && Metrics::summarize($realizedJan2['trades'])['net'] === -12.0
+    && Metrics::summarize($realizedJan2['trades'])['sampleSize'] === 2
+);
+check(
+    'Metrics: zamknięcie dopisuje wyłącznie pozostały wynik i liczy jedną próbę',
+    Metrics::summarize($realizedJan3['trades'])['net'] === 10.0
+    && Metrics::summarize($realizedJan4['trades'])['net'] === 20.0
+    && Metrics::summarize($realizedAll['trades'])['net'] === 18.0
+    && Metrics::summarize($realizedAll['trades'])['sampleSize'] === 2
+    && $realizedAll['range'] === ['from' => '2026-01-02', 'to' => '2026-01-04']
+);
 $dstRange = Metrics::range([
     ['date' => '2026-10-25T21:59:59Z', 'result' => 1],
     ['date' => '2026-10-25T23:00:00Z', 'result' => 1],
@@ -359,6 +407,59 @@ $rules = $risk->rules($state);
 check('Ryzyko: zasady z ustawień', $rules['maxRiskPercentPerTrade'] === 1.0 && $rules['maxConsecutiveLossesPerDay'] === 2);
 $protection = $risk->protection($state);
 check('Ryzyko: tryb ochronny po stratach', $protection['triggered'] === false || $protection['losses'] >= 2, json_encode($protection));
+$partialTodayState = [
+    'accounts' => [[
+        'id' => 'risk-account',
+        'name' => 'Konto A',
+        'currency' => 'USDT',
+        'balance' => 1000,
+        'include' => true,
+    ]],
+    'settings' => [
+        'maxRisk' => 1,
+        'maxLosses' => 2,
+        'maxDailyLoss' => 3,
+        'block' => 'midnight',
+        'safetyEnabled' => true,
+    ],
+    'trades' => [
+        $trade([
+            'id' => 'partial-loss-today',
+            'date' => $at(-1, 10),
+            'result' => null,
+            'r' => null,
+            'partials' => [['at' => $at(0, 11), 'result' => -40.0]],
+            'partialResult' => -40.0,
+            'closedAt' => null,
+        ]),
+    ],
+    'overrides' => [],
+];
+$partialTodayProtection = $risk->protection($partialTodayState);
+check(
+    'Ryzyko: otwarta pozycja wnosi częściowy wynik do dnia realizacji',
+    $partialTodayProtection['triggered'] === true
+    && $partialTodayProtection['dailyPnl'] === -40.0
+    && $partialTodayProtection['losses'] === 0
+    && $partialTodayProtection['openPositions'] === 0
+);
+$partialTodayState['trades'][] = $trade([
+    'id' => 'opened-after-partial-loss',
+    'date' => $at(0, 12),
+    'closedAt' => $at(0, 13),
+    'result' => 1.0,
+]);
+$partialTodayViolations = $risk->violations($partialTodayState, $dayKey(0), $dayKey(0), 100, 0);
+check(
+    'Ryzyko: częściowa strata uruchamia blokadę przed późniejszym wejściem',
+    in_array('opened-after-partial-loss', array_column(
+        array_values(array_filter(
+            $partialTodayViolations['items'],
+            static fn (array $item): bool => $item['rule'] === 'traded_after_lock'
+        )),
+        'tradeId'
+    ), true)
+);
 $violations = $risk->violations($state, null, null, 100, 0);
 $ruleNames = array_column($violations['byRule'], 'rule');
 check('Ryzyko: wykryty brak SL', in_array('missing_stop_loss', $ruleNames, true), json_encode($ruleNames));

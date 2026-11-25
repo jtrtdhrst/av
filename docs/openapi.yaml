@@ -66,7 +66,7 @@ paths:
     put:
       tags: [API]
       summary: Zapisz cały stan po walidacji przejścia transakcji (optymistyczna rewizja)
-      description: TradeRules waliduje przejście stanu. Nowe transakcje ręczne wymagają SL; source podany przez klienta ani nowy wpis kosza nie omijają tego wymogu. Nowy wpis transakcji w koszu musi być dokładnym soft delete'em wcześniejszej aktywnej transakcji. Zaufany importer waliduje mapowany rekord i może zachować brak SL niedostarczanego przez źródło. Pusty wynik normalizuje się do null; każdy znany wynik liczbowy (w tym 0) lub poprawny closedAt oznacza zamknięcie, a brak closedAt pozostaje nieznany. ID istniejącej transakcji jest niezmienne, a pola wykonania transakcji zamkniętych/importowanych są chronione. Historyczny ręczny rekord bez SL można zamknąć bez zmian bazowych pól wykonania. Odrzucony zapis nie zmienia stanu ani rewizji, a semantyczny no-op zachowuje revision i updatedAt.
+      description: TradeRules waliduje przejście stanu. Nowe transakcje ręczne wymagają SL; source podany przez klienta ani nowy wpis kosza nie omijają tego wymogu. Nowy wpis transakcji w koszu musi być dokładnym soft delete'em wcześniejszej aktywnej transakcji. Zaufany importer waliduje mapowany rekord i może zachować brak SL niedostarczanego przez źródło. Broker i jednostka formularza (units, quote, lots) wynikają z konta; loty wymagają jawnego mnożnika kontraktu, a trade.size pozostaje kanoniczną wielkością w jednostkach bazowych. Pusty wynik normalizuje się do null; każdy znany wynik liczbowy (w tym 0) lub poprawny closedAt oznacza zamknięcie, a brak closedAt pozostaje nieznany. ID istniejącej transakcji i zewnętrzne identyfikatory importu są niezmienne; wykonania importowane są chronione, ale zamknięte ręczne wykonania można korygować i przeliczać, a jawny resultOverride zastępuje przeliczony wynik łączny. Kalendarz i statystyki PnL grupują partiale według partials[].at, końcową część według closedAt, a przy braku czasu realizacji używają trade.date. Historyczny ręczny rekord bez SL można zamknąć bez zmian bazowych pól wykonania. Odrzucony zapis nie zmienia stanu ani rewizji, a semantyczny no-op zachowuje revision i updatedAt.
       security: [{ cookieAuth: [] }]
       requestBody:
         required: true
@@ -86,13 +86,13 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Złe Origin (CSRF) lub próba zmiany pól wykonania importowanej transakcji
+          description: Złe Origin (CSRF) lub próba zmiany wykonania/identyfikatora zewnętrznego transakcji importowanej
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: Konflikt rewizji, session_changed, state_corrupt albo próba zmiany ID/pól wykonania zamkniętej transakcji
+          description: Konflikt rewizji, session_changed, state_corrupt albo próba zmiany ID istniejącej transakcji
           content:
             application/json:
               schema:

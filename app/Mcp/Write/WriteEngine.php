@@ -71,7 +71,7 @@ final class WriteEngine
     private const EXCHANGE_LOCKED = [
         'entry', 'exit', 'exitPrice', 'price', 'fill', 'fillPrice', 'result', 'pnl', 'r',
         'size', 'volume', 'sl', 'tp', 'fee', 'mae', 'mfe', 'date', 'pair', 'symbol', 'dir', 'side',
-        'account', 'source', 'exchangeId', 'durationMin',
+        'account', 'session', 'plan', 'source', 'exchangeId', 'durationMin',
     ];
 
     private const TRADE_EDITABLE = [
@@ -79,11 +79,6 @@ final class WriteEngine
         'mae', 'mfe', 'grade', 'emotion', 'checklist', 'checkTotal', 'errors',
         'note', 'mentor', 'setup', 'session', 'plan', 'date', 'account',
     ];
-    private const CLOSED_TRADE_EXECUTION_FIELDS = [
-        'pair', 'dir', 'entry', 'sl', 'tp', 'size', 'fee', 'mae', 'mfe',
-        'date', 'account', 'session', 'plan',
-    ];
-
     private const REVIEW_FIELDS = ['grade', 'setup', 'emotion', 'errors', 'note', 'checklist', 'recommendations'];
 
     private const SETUP_FIELDS = [
@@ -485,6 +480,24 @@ final class WriteEngine
         $allowed = [];
         foreach ($changes as $field => $value) {
             $field = (string) $field;
+            if ($field === 'resultOverride') {
+                if ($exchange) {
+                    throw new WriteException(
+                        'exchange_data_readonly',
+                        'Transakcja importowana z giełdy jest tylko do odczytu w polach wykonania.',
+                        403
+                    );
+                }
+                if ($value !== null || !TradeRules::isClosed($trade)) {
+                    throw new WriteException(
+                        'field_not_editable',
+                        'Przez MCP można wyłącznie wyczyścić resultOverride zamkniętej transakcji ręcznej.',
+                        400
+                    );
+                }
+                $allowed[$field] = null;
+                continue;
+            }
             if (!in_array($field, self::TRADE_EDITABLE, true)) {
                 throw new WriteException('field_not_editable', 'Pole "' . $field . '" nie jest edytowalne przez MCP.');
             }
@@ -500,16 +513,10 @@ final class WriteEngine
         if ($allowed === []) {
             throw new WriteException('bad_request', 'changes nie może być puste.');
         }
-        if (TradeRules::isClosed($trade)
-            && array_intersect(array_keys($allowed), self::CLOSED_TRADE_EXECUTION_FIELDS) !== []) {
-            throw new WriteException(
-                'closed_trade_execution_readonly',
-                'Pola wykonania zamkniętej transakcji są niezmienne; poprawiaj wyłącznie ocenę i recenzję.',
-                409
-            );
-        }
-
         $updated = $trade;
+        if (array_key_exists('resultOverride', $allowed)) {
+            $updated['resultOverride'] = null;
+        }
         if (isset($allowed['pair'])) {
             $pair = strtoupper(trim((string) $allowed['pair']));
             if (preg_match('#^[A-Z0-9._/-]{2,20}$#', $pair) !== 1) {
@@ -632,15 +639,219 @@ final class WriteEngine
             }
         }
 
-        if (!$exchange && $executionFieldsChanged) {
-            $risk = $this->tradeRisk($state, $updated);
-            $updated['risk'] = $risk['risk'];
-            $updated['riskPct'] = $risk['riskPct'];
+        $aggregateOverrideCleared = array_key_exists('resultOverride', $allowed);
+        if (!$exchange && ($executionFieldsChanged || $aggregateOverrideCleared)) {
+            if (TradeRules::isClosed($trade)) {
+                $updated = $this->recalculateClosedTradeMetrics($state, $trade, $updated, $allowed);
+            } else {
+                $risk = $this->tradeRisk($state, $updated);
+                $updated['risk'] = $risk['risk'];
+                $updated['riskPct'] = $risk['riskPct'];
+            }
         }
 
         $state['trades'][$index] = $updated;
 
         return $this->done($state, $trade, $updated, 'trade:' . $id, $updated);
+    }
+
+    /**
+     * Rebuilds a closed manual trade from its original size and ordered partial legs.
+     * Aggregate and per-leg manual overrides remain authoritative.
+     *
+     * @param array<string,mixed> $state
+     * @param array<string,mixed> $before
+     * @param array<string,mixed> $updated
+     * @param array<string,mixed> $allowed
+     * @return array<string,mixed>
+     */
+    private function recalculateClosedTradeMetrics(array $state, array $before, array $updated, array $allowed): array
+    {
+        $partials = $before['partials'] ?? [];
+        if (!is_array($partials) || !array_is_list($partials)) {
+            $this->closedTradeMetricsUnsupported('partials nie są poprawną listą');
+        }
+        $hasPartials = $partials !== [];
+        if (!$hasPartials) {
+            $storedInitialSize = TradeRules::number($before['initialSize'] ?? null);
+            $storedSize = TradeRules::number($before['size'] ?? null);
+            if ($storedInitialSize !== null && $storedInitialSize > 0
+                && $storedSize !== null && $storedSize > 0
+                && abs($storedInitialSize - $storedSize) > max(1.0, $storedInitialSize) * 1.0e-8) {
+                $this->closedTradeMetricsUnsupported('initialSize różni się od size, ale brak danych partials');
+            }
+        }
+        $hasAggregateOverride = !array_key_exists('resultOverride', $allowed)
+            && array_key_exists('resultOverride', $before)
+            && $before['resultOverride'] !== null
+            && !(is_string($before['resultOverride']) && trim($before['resultOverride']) === '');
+        $aggregateOverride = null;
+        if ($hasAggregateOverride) {
+            $aggregateOverride = TradeRules::number($before['resultOverride']);
+            if ($aggregateOverride === null) {
+                $this->closedTradeMetricsUnsupported('resultOverride nie jest liczbą');
+            }
+        }
+
+        $partialPercentages = [];
+        $remainingFraction = 1.0;
+        if ($hasPartials) {
+            foreach ($partials as $partial) {
+                if (!is_array($partial)) {
+                    $this->closedTradeMetricsUnsupported('częściowe zamknięcie nie jest obiektem');
+                }
+                $pct = TradeRules::number($partial['pct'] ?? null);
+                if ($pct === null || $pct < 0 || $pct > 100) {
+                    $this->closedTradeMetricsUnsupported('procent częściowego zamknięcia jest nieprawidłowy');
+                }
+                $partialPercentages[] = $pct;
+                $remainingFraction *= 1 - ($pct / 100);
+            }
+            if (!is_finite($remainingFraction) || $remainingFraction <= 0) {
+                $this->closedTradeMetricsUnsupported('częściowe zamknięcia nie pozostawiają dodatniej wielkości');
+            }
+        }
+
+        if (array_key_exists('size', $allowed)) {
+            $requestedSize = TradeRules::number($updated['size'] ?? null);
+            // MCP's trade view exposes remaining size; translate a corrected
+            // remaining size back to the original size before replaying legs.
+            $initialSize = $hasPartials && $requestedSize !== null
+                ? $requestedSize / $remainingFraction
+                : $requestedSize;
+        } elseif ($hasPartials) {
+            $initialSize = TradeRules::number($before['initialSize'] ?? null);
+        } else {
+            $initialSize = TradeRules::number($before['initialSize'] ?? $updated['size'] ?? null);
+        }
+        if ($initialSize === null || !is_finite($initialSize) || $initialSize <= 0) {
+            $this->closedTradeMetricsUnsupported(
+                $hasPartials ? 'brak poprawnego initialSize dla transakcji z częściowymi zamknięciami' : 'brak poprawnej wielkości'
+            );
+        }
+
+        $entry = TradeRules::number($updated['entry'] ?? null);
+        $directionSign = TradeRules::directionSign($updated['dir'] ?? null);
+        if ($entry === null || $entry <= 0 || $directionSign === null) {
+            $this->closedTradeMetricsUnsupported('brak poprawnej ceny wejścia lub kierunku');
+        }
+
+        if ($hasPartials) {
+            $remaining = $initialSize;
+            $partialResult = 0.0;
+            $updatedPartials = [];
+            foreach ($partials as $index => $partial) {
+                $pct = $partialPercentages[$index];
+                $legSize = $remaining * $pct / 100;
+                if (!is_finite($legSize)) {
+                    $this->closedTradeMetricsUnsupported('wielkość częściowej nogi przekracza zakres liczbowy');
+                }
+                $priorResult = TradeRules::number($partial['result'] ?? null);
+                $manualOverride = $partial['resultOverride'] ?? false;
+                if (!is_bool($manualOverride)) {
+                    $this->closedTradeMetricsUnsupported('znacznik override częściowego zamknięcia jest nieprawidłowy');
+                }
+                if ($manualOverride) {
+                    if ($priorResult === null) {
+                        $this->closedTradeMetricsUnsupported('wynik override częściowego zamknięcia jest nieprawidłowy');
+                    }
+                    $legResult = $priorResult;
+                } else {
+                    $partialExit = TradeRules::number($partial['price'] ?? null);
+                    if ($partialExit === null || $partialExit <= 0) {
+                        $this->closedTradeMetricsUnsupported('brak ceny dla częściowego zamknięcia bez override');
+                    }
+                    $legResult = ($partialExit - $entry) * $legSize * $directionSign;
+                }
+                if (!is_finite($legResult)) {
+                    $this->closedTradeMetricsUnsupported('wynik częściowej nogi przekracza zakres liczbowy');
+                }
+
+                $partial['result'] = Numbers::round($legResult);
+                $partialResult += $partial['result'];
+                if (!is_finite($partialResult)) {
+                    $this->closedTradeMetricsUnsupported('suma częściowych wyników przekracza zakres liczbowy');
+                }
+                $updatedPartials[] = $partial;
+                $remaining = max(0.0, $remaining - $legSize);
+                if (!is_finite($remaining)) {
+                    $this->closedTradeMetricsUnsupported('pozostała wielkość przekracza zakres liczbowy');
+                }
+            }
+            if ($remaining <= 0) {
+                $this->closedTradeMetricsUnsupported('częściowe zamknięcia nie pozostawiają dodatniej wielkości');
+            }
+
+            $exit = TradeRules::number($updated['exit'] ?? null);
+            if (($exit === null || $exit <= 0) && !$hasAggregateOverride) {
+                $this->closedTradeMetricsUnsupported('brak ceny wyjścia dla pozostałej części transakcji');
+            }
+            $finalLegResult = $exit !== null && $exit > 0
+                ? ($exit - $entry) * $remaining * $directionSign
+                : 0.0;
+            if (!is_finite($finalLegResult)) {
+                $this->closedTradeMetricsUnsupported('wynik końcowej nogi przekracza zakres liczbowy');
+            }
+
+            $updated['partials'] = $updatedPartials;
+            $updated['partialResult'] = Numbers::round($partialResult);
+            $updated['initialSize'] = $this->numText($initialSize);
+            $updated['size'] = $this->numText($remaining);
+            $totalResult = $hasAggregateOverride
+                ? Numbers::round((float) $aggregateOverride)
+                : $partialResult + $finalLegResult;
+            if (!is_finite($totalResult)) {
+                $this->closedTradeMetricsUnsupported('łączny wynik przekracza zakres liczbowy');
+            }
+            $updated['result'] = Numbers::round($totalResult);
+        } else {
+            $updated['size'] = $this->numText($initialSize);
+            if (array_key_exists('initialSize', $before) || array_key_exists('size', $allowed)) {
+                $updated['initialSize'] = $this->numText($initialSize);
+            }
+            if ($hasAggregateOverride) {
+                $updated['result'] = Numbers::round((float) $aggregateOverride);
+            } elseif (array_intersect(array_keys($allowed), ['entry', 'size', 'dir']) !== []
+                || array_key_exists('resultOverride', $allowed)) {
+                $exit = TradeRules::number($updated['exit'] ?? null);
+                $size = $initialSize;
+                if ($exit !== null && $exit > 0 && $size !== null && $size > 0) {
+                    $result = ($exit - $entry) * $size * $directionSign;
+                    if (!is_finite($result)) {
+                        $this->closedTradeMetricsUnsupported('wynik przekracza zakres liczbowy');
+                    }
+                    $updated['result'] = Numbers::round($result);
+                } elseif (array_key_exists('resultOverride', $allowed)) {
+                    $this->closedTradeMetricsUnsupported('brak ceny wyjścia po wyczyszczeniu resultOverride');
+                }
+            }
+        }
+
+        $riskTrade = $updated;
+        $riskTrade['size'] = $this->numText($initialSize);
+        $risk = $this->tradeRisk($state, $riskTrade);
+        $updated['risk'] = $risk['risk'];
+        $updated['riskPct'] = $risk['riskPct'];
+        $result = TradeRules::number($updated['result'] ?? null);
+        $riskRaw = $risk['riskRaw'];
+        $r = $result !== null && $riskRaw !== null && $riskRaw > 0
+            ? $result / $riskRaw
+            : null;
+        if ($r !== null && !is_finite($r)) {
+            $this->closedTradeMetricsUnsupported('wielkość R przekracza zakres liczbowy');
+        }
+        $updated['r'] = $r === null ? null : Numbers::round($r);
+
+        return $updated;
+    }
+
+    private function closedTradeMetricsUnsupported(string $reason): never
+    {
+        throw new WriteException(
+            'closed_trade_metrics_unsupported',
+            'Nie można bezpiecznie przeliczyć metryk zamkniętej transakcji: ' . $reason . '.',
+            409
+        );
     }
 
     private function tradeClose(int $userId, array $state, array $args): array
@@ -2597,6 +2808,13 @@ final class WriteEngine
      */
     private function isExchangeTrade(int $userId, array $trade): bool
     {
+        foreach (['extId', 'externalId', 'exchangeId'] as $field) {
+            $externalId = $trade[$field] ?? null;
+            if (is_scalar($externalId) && trim((string) $externalId) !== '') {
+                return true;
+            }
+        }
+
         $id = (string) ($trade['id'] ?? '');
         if ($id !== '') {
             try {

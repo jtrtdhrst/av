@@ -79,12 +79,31 @@ final class RiskService
         $pnl = 0.0;
         $losses = 0;
         $lastLossAt = null;
-        foreach ($closed as $trade) {
-            $result = (float) $trade['result'];
-            $pnl += $result;
-            if ($result < 0) {
-                $losses++;
-                $lastLossAt = (string) ($trade['date'] ?? '');
+        $lastLossTs = null;
+        foreach ((array) ($state['trades'] ?? []) as $trade) {
+            if (!is_array($trade) || !$this->accountIncluded($state, (string) ($trade['account'] ?? ''))) {
+                continue;
+            }
+            foreach (Metrics::realizedEvents($trade) as $event) {
+                if (Dates::dateKey($event['date']) !== $today) {
+                    continue;
+                }
+                $pnl += $event['result'];
+                $eventTs = Dates::timestamp($event['date']);
+                if ($event['result'] < 0
+                    || ($event['kind'] === 'close'
+                        && is_numeric($trade['result'] ?? null)
+                        && (float) $trade['result'] < 0)) {
+                    if ($eventTs !== null && ($lastLossTs === null || $eventTs >= $lastLossTs)) {
+                        $lastLossTs = $eventTs;
+                        $lastLossAt = $event['date'];
+                    }
+                }
+                if ($event['kind'] === 'close'
+                    && is_numeric($trade['result'] ?? null)
+                    && (float) $trade['result'] < 0) {
+                    $losses++;
+                }
             }
         }
         $capital = $this->plans->capital($state);
@@ -195,18 +214,10 @@ final class RiskService
         foreach ($window['trades'] as $trade) {
             $allowed[(string) ($trade['id'] ?? '')] = true;
         }
+        $afterDailyLock = $this->tradesAfterDailyLock($state, $dailyLimit, $lossLimit, $capital);
         ksort($byDate);
         foreach ($byDate as $date => $trades) {
-            if ($window['range']['from'] !== null && $date < $window['range']['from']) {
-                continue;
-            }
-            if ($window['range']['to'] !== null && $date > $window['range']['to']) {
-                continue;
-            }
             usort($trades, static fn (array $a, array $b): int => (strtotime((string) ($a['date'] ?? '')) ?: 0) <=> (strtotime((string) ($b['date'] ?? '')) ?: 0));
-            $dayPnl = 0.0;
-            $dayLosses = 0;
-            $locked = false;
             $sequences = [];
             foreach ($trades as $trade) {
                 $plan = $this->plans->planForTrade($state, $trade);
@@ -277,7 +288,7 @@ final class RiskService
                         );
                     }
                 }
-                if ($locked) {
+                if (isset($afterDailyLock[$id])) {
                     $items[] = $this->violation(
                         $date,
                         $id,
@@ -289,17 +300,6 @@ final class RiskService
                         'Transakcja otwarta po osiągnięciu dziennego limitu strat.',
                         []
                     );
-                }
-                if (($trade['result'] ?? null) !== null) {
-                    $result = (float) $trade['result'];
-                    $dayPnl += $result;
-                    if ($result < 0) {
-                        $dayLosses++;
-                    }
-                    $lossPct = max(0.0, -min(0.0, $dayPnl)) / ($capital > 0 ? $capital : 1.0) * 100;
-                    if (!$locked && ($dayLosses >= $lossLimit || $lossPct >= $dailyLimit)) {
-                        $locked = true;
-                    }
                 }
             }
         }
@@ -335,6 +335,80 @@ final class RiskService
             'currency' => Metrics::CURRENCY,
             'note' => 'Naruszenia liczone z reguł użytkownika i planu dnia. Limit dzienny jest liczony od aktualnego kapitału, więc dla historii jest przybliżeniem.',
         ];
+    }
+
+    /**
+     * Track the safety lock against realized event times, while violations remain
+     * attached to the entry date of the trade opened after the lock.
+     *
+     * @return array<string,true>
+     */
+    private function tradesAfterDailyLock(array $state, float $dailyLimit, int $lossLimit, float $capital): array
+    {
+        $timeline = [];
+        foreach ((array) ($state['trades'] ?? []) as $trade) {
+            if (!is_array($trade) || !$this->accountIncluded($state, (string) ($trade['account'] ?? ''))) {
+                continue;
+            }
+            $id = (string) ($trade['id'] ?? '');
+            $entry = (string) ($trade['date'] ?? '');
+            $entryTs = Dates::timestamp($entry);
+            $entryDay = Dates::dateKey($entry);
+            if ($entryTs !== null && $entryDay !== null) {
+                $timeline[$entryDay][] = [
+                    'at' => $entryTs,
+                    'type' => 'entry',
+                    'tradeId' => $id,
+                ];
+            }
+            foreach (Metrics::realizedEvents($trade) as $event) {
+                $eventTs = Dates::timestamp($event['date']);
+                $eventDay = Dates::dateKey($event['date']);
+                if ($eventTs === null || $eventDay === null) {
+                    continue;
+                }
+                $timeline[$eventDay][] = [
+                    'at' => $eventTs,
+                    'type' => 'realized',
+                    'tradeId' => $id,
+                    'event' => $event,
+                    'tradeResult' => $trade['result'] ?? null,
+                ];
+            }
+        }
+
+        $afterLock = [];
+        foreach ($timeline as $events) {
+            usort($events, static function (array $a, array $b): int {
+                return $a['at'] <=> $b['at']
+                    ?: (($a['type'] === 'entry' ? 0 : 1) <=> ($b['type'] === 'entry' ? 0 : 1));
+            });
+            $dayPnl = 0.0;
+            $dayLosses = 0;
+            $locked = false;
+            foreach ($events as $event) {
+                if ($event['type'] === 'entry') {
+                    if ($locked) {
+                        $afterLock[(string) $event['tradeId']] = true;
+                    }
+                    continue;
+                }
+
+                $realized = $event['event'];
+                $dayPnl += (float) $realized['result'];
+                if ($realized['kind'] === 'close'
+                    && is_numeric($event['tradeResult'])
+                    && (float) $event['tradeResult'] < 0) {
+                    $dayLosses++;
+                }
+                $lossPct = max(0.0, -min(0.0, $dayPnl)) / ($capital > 0 ? $capital : 1.0) * 100;
+                if (!$locked && ($dayLosses >= $lossLimit || $lossPct >= $dailyLimit)) {
+                    $locked = true;
+                }
+            }
+        }
+
+        return $afterLock;
     }
 
     private function violation(string $date, ?string $tradeId, string $rule, string $label, string $expected, string $actual, string $severity, string $message, array $evidence): array

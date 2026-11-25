@@ -26,8 +26,8 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Quotes tests | cache, TTL, fallback, E2E notowań |
 | Demo state tests | przesunięcie dat fixture demo, idempotencja, plany jako punkt zaczepienia |
 | Wearables E2E | OAuth2/PKCE, rotacja tokenów, UI, bezpieczeństwo |
-| API E2E | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, no-op zachowuje `revision` i ISO `updatedAt`, legacy close bez SL, stan, events, macro, admin, eksport i cleanup fixture |
-| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia i poziomy, historyczna checklista przy zmianie konfiguracji, wymagany SL, brak sukcesu przy błędzie zapisu zamknięcia i round-trip przez API, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup stanu fixture |
+| API E2E | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, korekta ręcznego zamkniętego wykonania i łączny `resultOverride`, niezmienność zewnętrznych ID/importowanych wykonań, no-op zachowuje `revision` i ISO `updatedAt`, legacy close bez SL, stan, events, macro, admin, eksport i cleanup fixture |
+| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia i poziomy, historyczna checklista przy zmianie konfiguracji, wymagany SL, PnL po dacie realizacji, brak sukcesu przy błędzie zapisu zamknięcia, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup fixture |
 | Integracje E2E | mocki OKX/BingX/WEEX/MetaApi/EA, batch 501, rollback, czas źródłowy/UTC, limit stron i brak kursora bez częściowego importu |
 | Tax E2E | PIT-38, CSV/PDF, wpłaty/wypłaty |
 | PWA E2E | manifest, SW, instalacja, push, offline |
@@ -215,14 +215,14 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - nawigacja 15 widoków (w tym prop),
 - plan dnia: wiele niezależnych planów dla daty, wybór planu/rynku, poziomy wsparcia, oporu, płynności, POI i własny, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie, zakładka „Globalnie” z kafelkami i trwałością planu bez daty,
 - pulpit: rozwijana lista kont, podgląd salda tylko przy kompletnych danych, brak arbitralnych limitów przy wielu planach, skrót do „Konto i zasady”, edycja salda i etykieta „Kapitał startowy”,
-- ręczna transakcja: SL wymagany, R:R elastyczne bez stałego minimum, checklista bez minimalnego progu zapisu; ręczny wybór punktów zachowuje się przy edycji,
+- ręczna transakcja: konto określa brokera i jednostkę wejściową; `size` jest normalizowane do jednostek bazowych, a loty wymagają jawnego mnożnika kontraktu; SL wymagany, R:R elastyczne bez stałego minimum, checklista bez minimalnego progu zapisu; ręczny wybór punktów zachowuje się przy edycji,
 - CSV: brak PnL bez danych do wyliczenia pomija wiersz; jawny PnL 0 zostaje break-even; brakujące MAE/MFE, opłaty, czas i checklista nie są zamieniane na zera ani wartości domyślne; eksport dziennika zachowuje MAE/MFE i nie zapisuje nieznanej opłaty jako zero,
 - metryki: puste MAE/MFE nie tworzą punktu na wykresie ani średniej; koszt „Za wczesne wyjście” pomija niezmierzone MFE/R,
 - zamknięcie tylko wynikiem: cena wyjścia pozostaje pusta, a R liczone jest z SL; pusty wynik jest traktowany jako transakcja otwarta, nie break-even,
-- dziennik: nowy wpis widoczny od razu i niezależnie od konta wyłączonego ze statystyk; filtry po zapisie są czyszczone; wybór portfela i brokera, live P&L, interwał wykresu, BE, częściowe TP, usunięcie z wpisem do kosza,
+- dziennik: nowy wpis widoczny od razu i niezależnie od konta wyłączonego ze statystyk; filtry po zapisie są czyszczone; broker pochodzi z wybranego konta; brak syntetycznego wykresu i kontrolek interwału w szczegółach (wykres playbooka pozostaje); live P&L, BE, częściowe TP, korekta i przeliczenie ręcznego zamkniętego wykonania z opcjonalnym łącznym `resultOverride`, read-only dla zewnętrznych ID/importowanych wykonań, usunięcie z wpisem do kosza,
 - pulpit: puste saldo nie pokazuje fałszywej zmiany −100%,
 - kalkulator: wybór portfela ustawia saldo/MM, gotowe R:R 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własne; SL/TP zgodne z wybranym stosunkiem; ręczna cena wejścia nie jest nadpisywana przez live ani przez auto SL/TP; tryb odwrotny „Zaproponuj wielkość kapitału”, uśrednianie wejść i wiele TP,
-- statystyki: zakres ogólny pozostaje niezależny od kalendarza PnL przy zmianie obu zakresów; kalendarz PnL ma własny zakres 7/30 dni lub miesiąc i nawigację okresu,
+- statystyki: zakres ogólny pozostaje niezależny od kalendarza PnL przy zmianie obu zakresów; kalendarz PnL ma własny zakres 7/30 dni lub miesiąc i nawigację okresu; partiale są grupowane wg `partials[].at`, końcowa część wg `closedAt`, z fallbackiem do `trade.date`,
 - statystyki: wyniki transakcji i R zapisane jako tekst (np. z API/MCP) są sumowane numerycznie — net, GP/GL, profit factor, expectation, equity, PnL dnia i statystyki setupu,
 - akademia: „Dołącz” dopiero 15 min przed startem, własny czas przypomnienia, harmonogram tydzień/miesiąc z odświeżaniem i rozwinięciem wydarzeń cyklicznych, kategorie nagrań, fallback biblioteki i odtwarzanie z linku, postęp kursu (12 lekcji) i bootcampu (6 modułów), słownik z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady,
 - filtry dziennika, szczegóły transakcji,

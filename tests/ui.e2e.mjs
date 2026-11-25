@@ -71,7 +71,6 @@ await context.route('**/api/quotes**', (route) => {
     body: JSON.stringify(QUOTE_STUB)
   });
 });
-
 try {
   await page.goto('/', { waitUntil: 'load' });
   await page.waitForFunction(() => window.AV && AV.ready);
@@ -740,6 +739,91 @@ try {
     statsRangeAfterPnlChange || '');
   await page.evaluate(() => document.querySelector('#stat [data-pcnav="today"]').click());
 
+  // Analytics follow each realized close/partial event, not the trade's entry date.
+  const realizedAnalytics = await page.evaluate(() => {
+    const day = (offset) => {
+      const date = new Date();
+      date.setHours(12, 0, 0, 0);
+      date.setDate(date.getDate() + offset);
+      return AV.dateKey(date);
+    };
+    const at = (key) => key + 'T12:00:00';
+    const oldDay = day(-20), macroDay = day(-1), today = day(0);
+    const previous = { state: AV.state, buildEvents: AV.buildEvents };
+    const fixture = {
+      ...AV.state,
+      accounts: [{ name: 'Analytics fixture', include: true, start: 10000, balance: 10000 }],
+      trades: [
+        {
+          id: 'ui-realized-open', date: at(oldDay), account: 'Analytics fixture', result: null,
+          partials: [{ at: at(macroDay), result: 20 }], grade: 'A', emotion: 'FOMO',
+          pair: 'BTC/USDT', checklist: 7, checkTotal: 7, errors: [], r: 1
+        },
+        {
+          id: 'ui-realized-legacy', date: at(oldDay), account: 'Analytics fixture', result: -5,
+          closedAt: at(macroDay), partials: [{ result: 5 }], grade: 'B', emotion: 'Spokój',
+          pair: 'ETH/USDT', checklist: 7, checkTotal: 7, errors: [], r: -1
+        }
+      ]
+    };
+    try {
+      AV.state = fixture;
+      AV.buildEvents = () => [{ date: at(macroDay), imp: 3, name: 'Fixture macro' }];
+      const legacyEvents = AV.tradeRealizedEvents(fixture.trades[1]);
+      const weekly = AV.rangeStats(fixture, 8);
+      AV.renderWeekly();
+      AV.renderMacroStats();
+      const mentor = AV.mentorData(fixture);
+      const challenge = AV.prop.compute({
+        id: 'ui-realized-prop', name: 'Realized events', account: 'Analytics fixture',
+        accountSize: 10000, startBalance: 10000, startDate: day(-2), endDate: day(1),
+        targetPct: 1000, dailyLossPct: 5, maxLossPct: 10, minDays: 1
+      }, fixture.trades, new Date(at(today)), ['Analytics fixture']);
+      return {
+        oldDay,
+        macroDay,
+        legacyPartialDay: legacyEvents.find((event) => event.type === 'partial')?.dateKey,
+        weekly: {
+          n: weekly.n, net: weekly.net, expectedNet: AV.signed(10, 2, ''),
+          rendered: document.querySelector('#weeklyReport')?.innerHTML || ''
+        },
+        macro: {
+          net: document.querySelector('#macroStats')?.textContent || '',
+          expectedNet: AV.signed(10, 2, ''),
+          hint: document.querySelector('#macroStatsHint')?.textContent || '',
+          mentorNet: mentor.macroWynik,
+          mentorExpectedNet: AV.money(10, 2, ''),
+          mentorN: mentor.macroN
+        },
+        prop: {
+          balance: challenge.balance,
+          tradingDays: challenge.tradingDays,
+          dailyRows: challenge.dailyRows,
+          curveDays: challenge.curve.slice(1).map((point) => AV.prop.dateKey(point.date))
+        }
+      };
+    } finally {
+      AV.state = previous.state;
+      AV.buildEvents = previous.buildEvents;
+      AV.renderWeekly();
+      AV.renderMacroStats();
+    }
+  });
+  log('realizacje: weekly, korelacja makro, mentor i prop używają dat/wyników partial/close',
+    realizedAnalytics.legacyPartialDay === realizedAnalytics.oldDay &&
+      realizedAnalytics.weekly.n === 2 && realizedAnalytics.weekly.net === 10 &&
+      realizedAnalytics.weekly.rendered.includes(realizedAnalytics.weekly.expectedNet) &&
+      realizedAnalytics.macro.net.includes(realizedAnalytics.macro.expectedNet) &&
+      realizedAnalytics.macro.mentorNet === realizedAnalytics.macro.mentorExpectedNet &&
+      realizedAnalytics.macro.mentorN === 2 &&
+      realizedAnalytics.prop.balance === 10010 && realizedAnalytics.prop.tradingDays === 1 &&
+      realizedAnalytics.prop.dailyRows.length === 1 &&
+      realizedAnalytics.prop.dailyRows[0].date === realizedAnalytics.macroDay &&
+      realizedAnalytics.prop.dailyRows[0].pnl === 10 &&
+      realizedAnalytics.prop.dailyRows[0].n === 2 &&
+      realizedAnalytics.prop.curveDays.every((key) => key === realizedAnalytics.macroDay),
+    JSON.stringify(realizedAnalytics));
+
   // prop challenge: szablony, create, walidacja, XSS, alert, archiwum, reload, delete
   const dayKeyLocal = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   const dStart = new Date(); dStart.setDate(dStart.getDate() - 20);
@@ -1266,14 +1350,38 @@ try {
   log('nowa transakcja: formularz pusty', !emptyForm.pair && !emptyForm.entry && !emptyForm.size && !emptyForm.sl && !emptyForm.tp && !emptyForm.note, JSON.stringify(emptyForm));
   log('nowa transakcja: checklista 0 i brak oceny', emptyForm.checklist === '0/7' && emptyForm.grades === 0, emptyForm.checklist + ' / ' + emptyForm.grades);
   log('nowa transakcja: limit i ryzyko osobno', emptyForm.risk.includes('Limit') && emptyForm.risk.includes('Ryzyko'), emptyForm.risk.slice(0, 100));
-  const tradeSelectors = await page.evaluate(() => ({
-    accounts: Array.from(document.querySelectorAll('#ntAccount option')).map((o) => o.value),
-    brokers: Array.from(document.querySelectorAll('#ntBroker option')).map((o) => o.value),
-    account: document.querySelector('#ntAccount')?.value || '',
-    broker: document.querySelector('#ntBroker')?.value || ''
-  }));
-  log('nowa transakcja: wybór portfela i brokera', tradeSelectors.accounts.length >= 1 && tradeSelectors.brokers.includes('BingX') && tradeSelectors.brokers.includes('VTMarkets') && tradeSelectors.account === 'WEEX' && tradeSelectors.broker === 'WEEX', JSON.stringify(tradeSelectors));
-  await page.selectOption('#ntBroker', 'BingX');
+  const accountSizeUnitBackup = await page.evaluate(() => {
+    const account = AV.state.accounts.find((item) => item.name === 'WEEX');
+    if (!account) return null;
+    const backup = {
+      hasSizeUnit: Object.prototype.hasOwnProperty.call(account, 'sizeUnit'),
+      sizeUnit: account.sizeUnit,
+      hasContractSize: Object.prototype.hasOwnProperty.call(account, 'contractSize'),
+      contractSize: account.contractSize
+    };
+    account.sizeUnit = 'quote';
+    delete account.contractSize;
+    AV.renderNewTradeForm();
+    return backup;
+  });
+  const tradeSelectors = await page.evaluate(() => {
+    const accountName = document.querySelector('#ntAccount')?.value || '';
+    const account = AV.state.accounts.find((item) => item.name === accountName);
+    return {
+      accounts: Array.from(document.querySelectorAll('#ntAccount option')).map((option) => option.value),
+      account: accountName,
+      exchange: account?.exchange || '',
+      sizeUnit: account?.sizeUnit || '',
+      sizeLabel: document.querySelector('#ntSizeLabel')?.textContent || '',
+      sizeHint: document.querySelector('#ntSizeHint')?.textContent || '',
+      hasBrokerSelector: !!document.querySelector('#ntBroker')
+    };
+  });
+  log('nowa transakcja: broker i jednostka pozycji wynikają z konta',
+    tradeSelectors.accounts.length >= 1 && tradeSelectors.account === 'WEEX' && tradeSelectors.exchange === 'WEEX' &&
+      tradeSelectors.sizeUnit === 'quote' && tradeSelectors.sizeLabel.includes('kwota kwotowana') &&
+      tradeSelectors.sizeHint.includes('dzielona przez cenę wejścia') && !tradeSelectors.hasBrokerSelector,
+    JSON.stringify(tradeSelectors));
 
   await page.evaluate(() => document.querySelector('#clList [data-cl="SL przed wejściem"]')?.click());
   const manualSlChecklist = await page.evaluate(() => {
@@ -1334,7 +1442,7 @@ try {
   const beforeTrades = await page.evaluate(() => AV.state.trades.length);
   await page.fill('#ntEntry', '100');
   await page.fill('#ntTp', '100.5');
-  await page.fill('#ntSize', '1');
+  await page.fill('#ntSize', '100');
   await page.click('#saveTrade');
   const missingSl = await page.evaluate((before) => ({
     unchanged: AV.state.trades.length === before,
@@ -1371,11 +1479,23 @@ try {
     return t ? {
       risk: t.risk, riskPct: t.riskPct, mae: t.mae, mfe: t.mfe, sl: t.sl, checklist: t.checklist,
       checkTotal: t.checkTotal, checklistItems: t.checklistItems || [], plan: t.plan, account: t.account, broker: t.broker,
+      size: t.size, sizeUnit: t.sizeUnit,
       rr: Math.abs(AV.pnum(t.tp) - AV.pnum(t.entry)) / Math.abs(AV.pnum(t.entry) - AV.pnum(t.sl))
     } : null;
   }, addedId);
   log('nowa transakcja: ryzyko zapisane, MAE/MFE puste', !!addedTrade && addedTrade.risk === 1 && addedTrade.mae === null && addedTrade.mfe === null, JSON.stringify(addedTrade));
-  log('nowa transakcja: portfel i broker zapisane', !!addedTrade && addedTrade.account === 'WEEX' && addedTrade.broker === 'BingX', JSON.stringify(addedTrade));
+  log('nowa transakcja: broker i jednostka zapisane zgodnie z kontem',
+    !!addedTrade && addedTrade.account === 'WEEX' && addedTrade.broker === 'WEEX' &&
+      addedTrade.sizeUnit === 'quote' && Number(addedTrade.size) === 1,
+    JSON.stringify(addedTrade));
+  await page.evaluate((backup) => {
+    const account = AV.state.accounts.find((item) => item.name === 'WEEX');
+    if (!account || !backup) return;
+    if (backup.hasSizeUnit) account.sizeUnit = backup.sizeUnit;
+    else delete account.sizeUnit;
+    if (backup.hasContractSize) account.contractSize = backup.contractSize;
+    else delete account.contractSize;
+  }, accountSizeUnitBackup);
   const missingMetricDisplay = await page.evaluate((id) => {
     AV.openTrade(id);
     const metric = (label) => {
@@ -1777,6 +1897,71 @@ try {
   log('zamknięcie tylko wynikiem: exit pozostaje pusty, R liczone z SL',
     resultOnly.exit === '' && resultOnly.result === 20 && resultOnly.r === 2,
     JSON.stringify(resultOnly));
+  await page.evaluate((id) => AV.editTrade(id), resultOnlyId);
+  const manualClosedEdit = await page.evaluate(() => ({
+    editing: !!AV.ui.editId,
+    executionLocked: !!AV.ui.ntExecutionLocked,
+    entryDisabled: !!document.querySelector('#ntEntry')?.disabled,
+    exitDisabled: !!document.querySelector('#ntExit')?.disabled,
+    exitVisible: getComputedStyle(document.querySelector('#ntExitWrap')).display !== 'none',
+    resultOverrideVisible: getComputedStyle(document.querySelector('#ntResultOverrideWrap')).display !== 'none'
+  }));
+  log('zamknięta transakcja ręczna: pola wykonania dostępne do korekty',
+    manualClosedEdit.editing && !manualClosedEdit.executionLocked && !manualClosedEdit.entryDisabled &&
+      !manualClosedEdit.exitDisabled && manualClosedEdit.exitVisible && manualClosedEdit.resultOverrideVisible,
+    JSON.stringify(manualClosedEdit));
+  await page.fill('#ntEntry', '105');
+  await page.fill('#ntSl', '100');
+  await page.fill('#ntTp', '125');
+  await page.fill('#ntSize', '2');
+  await page.fill('#ntExit', '120');
+  await page.click('#saveTrade');
+  const correctedManualTrade = await page.evaluate((id) => {
+    const trade = AV.state.trades.find((row) => row.id === id);
+    return trade ? {
+      entry: trade.entry, exit: trade.exit, sl: trade.sl, size: trade.size,
+      result: trade.result, r: trade.r
+    } : null;
+  }, resultOnlyId);
+  log('zamknięta transakcja ręczna: korekta przelicza wynik z wykonania',
+    correctedManualTrade?.entry === '105' && correctedManualTrade.exit === '120' &&
+      correctedManualTrade.sl === '100' && Number(correctedManualTrade.size) === 2 &&
+      correctedManualTrade.result === 30 && correctedManualTrade.r === 3,
+    JSON.stringify(correctedManualTrade));
+  const externalIdLocks = await page.evaluate((id) => {
+    const base = AV.state.trades.find((trade) => trade.id === id);
+    if (!base) return [];
+    const fields = ['externalId', 'exchangeId', 'extId'];
+    const fixtures = fields.map((field) => {
+      const trade = { ...base, id: 'ui-external-' + field, source: 'manual' };
+      fields.forEach((key) => delete trade[key]);
+      trade[field] = 'provider:' + field;
+      return { field, trade };
+    });
+    const blank = { ...base, id: 'ui-external-blank', source: 'manual' };
+    fields.forEach((key) => delete blank[key]);
+    blank.extId = '   ';
+    AV.state.trades.push(...fixtures.map((fixture) => fixture.trade), blank);
+    const result = [...fixtures, { field: 'blank extId', trade: blank }].map(({ field, trade }) => {
+      AV.editTrade(trade.id);
+      return {
+        field,
+        locked: !!AV.ui.ntExecutionLocked,
+        pairDisabled: !!document.querySelector('#ntPair')?.disabled
+      };
+    });
+    AV.state.trades = AV.state.trades.filter((trade) =>
+      !fixtures.some((fixture) => fixture.trade.id === trade.id) && trade.id !== blank.id);
+    AV.ui.editId = null;
+    AV.ui.ntExecutionLocked = false;
+    AV.renderNewTradeForm();
+    return result;
+  }, resultOnlyId);
+  log('transakcje z externalId/exchangeId/extId są tylko do odczytu',
+    externalIdLocks.length === 4 &&
+      externalIdLocks.slice(0, 3).every((row) => row.locked && row.pairDisabled) &&
+      !externalIdLocks[3].locked && !externalIdLocks[3].pairDisabled,
+    JSON.stringify(externalIdLocks));
   const emptyResultState = await page.evaluate(() => {
     const state = {
       ...AV.state,
@@ -1849,7 +2034,7 @@ try {
     && !breakEvenUi.mentor.includes('zyskiem')
     && breakEvenUi.dashTitle.includes('Wynik na zero'), JSON.stringify(breakEvenUi));
 
-  // zarządzanie otwartą pozycją: live P&L, interwał, BE, częściowe TP i usuwanie
+  // zarządzanie otwartą pozycją: live P&L, SL, BE, częściowe TP i usuwanie
   const manageId = await page.evaluate(async () => {
     await AV.waitForPushIdle();
     const id = 'ui-manage-' + Date.now();
@@ -1878,12 +2063,28 @@ try {
   }, manageId);
   log('dziennik: otwarta pozycja pokazuje live P&L', livePnlRow.includes('+20,00') && livePnlRow.includes('+10,00%'), livePnlRow);
   await page.evaluate((id) => AV.openTrade(id), manageId);
-  await page.click('#tmBody .tfs [data-tf="1h"]');
-  const tfState = await page.evaluate(() => ({
-    tf: AV.ui.chartTf,
-    header: document.querySelector('#tmBody .chartbox .hd')?.innerText || ''
+  const tradeDetailActions = await page.evaluate(() => ({
+    fakeChart: !!document.querySelector('#tmBody .chartbox'),
+    timeframeControls: document.querySelectorAll('#tmBody .tfs, #tmBody [data-tf]').length,
+    setSl: document.querySelector('#tmBody [data-trade-sl]')?.textContent.trim() || ''
   }));
-  log('wykres: zmiana interwału działa', tfState.tf === '1h' && tfState.header.includes('1h'), JSON.stringify(tfState));
+  log('szczegóły transakcji: bez wykresu/interwałów, z akcją ustawienia SL',
+    !tradeDetailActions.fakeChart && tradeDetailActions.timeframeControls === 0 &&
+      tradeDetailActions.setSl === 'Ustaw / zmień SL',
+    JSON.stringify(tradeDetailActions));
+  await page.click(`#tmBody [data-trade-sl="${manageId}"]`);
+  await page.waitForSelector('#tradeSlValue', { timeout: 10000 });
+  await page.fill('#tradeSlValue', '97');
+  await page.click('#tradeSlSave');
+  await page.waitForFunction((id) =>
+    AV.state.trades.find((trade) => trade.id === id)?.sl === '97' &&
+      !document.querySelector('#tradeSlValue'), manageId, { timeout: 15000 });
+  const setSlState = await page.evaluate((id) => {
+    const trade = AV.state.trades.find((row) => row.id === id);
+    return { sl: trade?.sl, risk: trade?.risk };
+  }, manageId);
+  log('pozycja: akcja Ustaw / zmień SL zapisuje cenę i ryzyko',
+    setSlState.sl === '97' && setSlState.risk === 6, JSON.stringify(setSlState));
   await page.evaluate((id) => AV.breakevenTrade(id), manageId);
   const beState = await page.evaluate((id) => {
     const t = AV.state.trades.find((x) => x.id === id);

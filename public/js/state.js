@@ -956,18 +956,79 @@
   /* ---------- kapitał / konta ---------- */
   AV.fxToUsdt = (cur) => cur === 'EUR' ? 1.08 : cur === 'PLN' ? 0.25 : 1;
   AV.totalCapital = (state, includeAll = false) => {
-    return state.accounts
-      .filter((a) => includeAll || a.include)
+    return (Array.isArray(state?.accounts) ? state.accounts : [])
+      .filter((a) => a && (includeAll || a.include))
       .reduce((sum, a) => sum + (Number(a.balance) || 0) * AV.fxToUsdt(a.currency), 0);
   };
-  AV.startCapital = (state) => state.accounts
-    .filter((a) => a.include)
+  AV.startCapital = (state) => (Array.isArray(state?.accounts) ? state.accounts : [])
+    .filter((a) => a && a.include)
     .reduce((sum, a) => sum + (Number(a.start) || 0) * AV.fxToUsdt(a.currency), 0);
 
-  AV.includedAccounts = (state) => state.accounts.filter((a) => a.include).map((a) => a.name);
+  AV.includedAccounts = (state) => (Array.isArray(state?.accounts) ? state.accounts : [])
+    .filter((a) => a && a.include).map((a) => a.name);
   AV.includedTrades = (state) => {
     const names = AV.includedAccounts(state);
-    return state.trades.filter((t) => !t.account || names.includes(t.account));
+    return (Array.isArray(state?.trades) ? state.trades : [])
+      .filter((t) => t && (!t.account || names.includes(t.account)));
+  };
+  const REALIZED_EVENTS = Symbol('realizedEvents');
+  const finiteStateNumber = (value) => {
+    if (value == null || (typeof value === 'string' && value.trim() === '')) return null;
+    try {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    } catch {
+      return null;
+    }
+  };
+  const realizedDate = (value) => {
+    if (value == null || value === '') return null;
+    if (value instanceof Date) {
+      return Number.isFinite(value.getTime())
+        ? { key: AV.dateKey(value), at: value.toISOString(), timestamp: value.getTime() }
+        : null;
+    }
+    const raw = String(value).trim();
+    const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (day) {
+      const year = Number(day[1]), month = Number(day[2]), date = Number(day[3]);
+      const check = new Date(Date.UTC(year, month - 1, date));
+      if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== date) return null;
+      return { key: raw, at: raw, timestamp: Date.parse(raw) };
+    }
+    const parsed = new Date(raw);
+    if (!Number.isFinite(parsed.getTime())) return null;
+    return { key: AV.dateKey(parsed), at: raw, timestamp: parsed.getTime() };
+  };
+  const eventDate = (values) => {
+    for (const value of values) {
+      const date = realizedDate(value);
+      if (date) return date;
+    }
+    return null;
+  };
+  const sumRealizedEvents = (events) => events.reduce((sum, event) => sum + event.result, 0);
+  const eventsForTrade = (trade) => {
+    if (trade && Array.isArray(trade[REALIZED_EVENTS])) return trade[REALIZED_EVENTS];
+    return AV.tradeRealizedEvents(trade);
+  };
+  const realizedTradeProjection = (trade, events) => {
+    const projection = { ...trade, result: sumRealizedEvents(events) };
+    Object.defineProperty(projection, REALIZED_EVENTS, { value: events });
+    return projection;
+  };
+  const realizedEventProjection = (trade, event) => {
+    const dayOnly = /^\d{4}-\d{2}-\d{2}$/;
+    const date = dayOnly.test(event.at || '')
+      ? event.at + 'T12:00:00'
+      : event.at || (event.dateKey ? event.dateKey + 'T12:00:00' : trade.date);
+    const projection = {
+      ...trade,
+      result: event.result,
+      date
+    };
+    Object.defineProperty(projection, REALIZED_EVENTS, { value: [event] });
+    return projection;
   };
   const hasKnownTradeResult = (trade) => {
     if (trade?.result == null) return false;
@@ -975,7 +1036,6 @@
     return Number.isFinite(Number(trade.result));
   };
   AV.hasKnownTradeResult = hasKnownTradeResult;
-  AV.closedTrades = (state) => AV.includedTrades(state).filter(hasKnownTradeResult);
   AV.tradeDirection = (direction) => {
     const value = String(direction ?? '').trim().toLowerCase();
     if (value === 'l' || value === 'long') return 'l';
@@ -1000,18 +1060,78 @@
     if (day < 1 || day > daysInMonth[month - 1]) return false;
     return Number.isFinite(Date.parse(trade.closedAt));
   };
+  AV.tradeRealizedEvents = (trade) => {
+    if (!trade || typeof trade !== 'object') return [];
+    const events = [];
+    const partials = Array.isArray(trade.partials) ? trade.partials : [];
+    let partialTotal = 0;
+    partials.forEach((partial) => {
+      const result = finiteStateNumber(partial && partial.result);
+      if (result == null) return;
+      partialTotal += result;
+      const date = eventDate([partial.at, trade.date]);
+      events.push({
+        date: date ? date.key : null, dateKey: date ? date.key : null,
+        at: date ? date.at : null, timestamp: date ? date.timestamp : null,
+        result, type: 'partial'
+      });
+    });
+    if (AV.isTradeClosed(trade)) {
+      const result = finiteStateNumber(trade.result);
+      if (result != null) {
+        const date = eventDate([trade.closedAt, trade.date]);
+        events.push({
+          date: date ? date.key : null, dateKey: date ? date.key : null,
+          at: date ? date.at : null, timestamp: date ? date.timestamp : null,
+          result: result - partialTotal, type: 'close'
+        });
+      }
+    }
+    return events.sort((a, b) => {
+      const aTime = Number.isFinite(a.timestamp) ? a.timestamp : 0;
+      const bTime = Number.isFinite(b.timestamp) ? b.timestamp : 0;
+      return aTime - bTime;
+    });
+  };
+  AV.realizedTrades = (state) => AV.includedTrades(state)
+    .map((trade) => ({ trade, events: AV.tradeRealizedEvents(trade) }))
+    .filter((item) => item.events.length > 0)
+    .map((item) => realizedTradeProjection(item.trade, item.events));
+  // Zachowuje historyczną nazwę API; obejmuje teraz także otwarte pozycje z częściowo zrealizowanym P&L.
+  AV.closedTrades = (state) => AV.realizedTrades(state);
   AV.lifecycleClosedTrades = (state) => AV.includedTrades(state).filter((trade) => AV.isTradeClosed(trade));
   AV.openTrades = (state) => AV.includedTrades(state).filter((t) => !AV.isTradeClosed(t));
+  AV.calculatedEquity = (state) => {
+    const names = new Set(AV.includedAccounts(state));
+    const tradePnl = AV.includedTrades(state).reduce((sum, trade) =>
+      sum + sumRealizedEvents(AV.tradeRealizedEvents(trade)), 0);
+    const flowNet = (Array.isArray(state?.flows) ? state.flows : []).reduce((sum, flow) => {
+      if (!flow || flow.account == null || flow.account === '' || !names.has(flow.account)) return sum;
+      const amount = finiteStateNumber(flow.amount);
+      if (amount == null) return sum;
+      if (flow.type === 'Wpłata') return sum + Math.abs(amount);
+      if (flow.type === 'Wypłata') return sum - Math.abs(amount);
+      return sum;
+    }, 0);
+    return AV.startCapital(state) + tradePnl + flowNet;
+  };
 
   AV.rangeTrades = (state, days) => {
-    const all = AV.includedTrades(state).filter(hasKnownTradeResult);
-    if (!days || days === 'all') return all;
-    const from = AV.startOfDay(AV.addDays(new Date(), -days + 1));
-    return all.filter((t) => new Date(t.date) >= from);
+    if (!days || days === 'all') return AV.realizedTrades(state);
+    const count = Number(days);
+    if (!Number.isFinite(count) || count <= 0) return AV.realizedTrades(state);
+    const from = AV.dateKey(AV.startOfDay(AV.addDays(new Date(), -count + 1)));
+    return AV.includedTrades(state).flatMap((trade) => {
+      const events = AV.tradeRealizedEvents(trade)
+        .filter((event) => event.dateKey && event.dateKey >= from);
+      return events.length ? [realizedTradeProjection(trade, events)] : [];
+    });
   };
 
   /* ---------- statystyki ---------- */
-  AV.computeStats = (trades, state) => {
+  AV.computeStats = (inputTrades, state) => {
+    const trades = (Array.isArray(inputTrades) ? inputTrades : [])
+      .map((trade) => realizedTradeProjection(trade, eventsForTrade(trade)));
     const n = trades.length;
     const wins = trades.filter((t) => t.result > 0);
     const losses = trades.filter((t) => t.result < 0);
@@ -1025,13 +1145,20 @@
     const start = AV.startCapital(state) || 0;
     let eq = start, peak = start, maxDD = 0, maxDDpct = 0;
     const curve = [{ x: 0, eq: start, date: null }];
-    trades.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((t, i) => {
-      eq += AV.num(t.result);
+    const curveEvents = trades.flatMap((trade, tradeIndex) =>
+      eventsForTrade(trade).map((event, eventIndex) => ({ event, tradeIndex, eventIndex })))
+      .sort((a, b) => {
+        const aTime = Number.isFinite(a.event.timestamp) ? a.event.timestamp : 0;
+        const bTime = Number.isFinite(b.event.timestamp) ? b.event.timestamp : 0;
+        return aTime - bTime || a.tradeIndex - b.tradeIndex || a.eventIndex - b.eventIndex;
+      });
+    curveEvents.forEach(({ event }, i) => {
+      eq += event.result;
       peak = Math.max(peak, eq);
       const dd = eq - peak;
       if (dd < maxDD) maxDD = dd;
       if (peak > 0) maxDDpct = Math.min(maxDDpct, dd / peak * 100);
-      curve.push({ x: i + 1, eq, date: t.date });
+      curve.push({ x: i + 1, eq, date: event.date });
     });
     const byGrade = AV.GRADES.map((g) => {
       const arr = trades.filter((t) => t.grade === g);
@@ -1121,12 +1248,15 @@
       daily: AV.dailyMap(trades)
     };
   };
+  AV.rangeStats = (state, days) => AV.computeStats(AV.rangeTrades(state, days), state);
 
   AV.dailyMap = (trades) => {
     const map = {};
-    trades.forEach((t) => {
-      const k = AV.dateKey(new Date(t.date));
-      map[k] = (map[k] || 0) + (Number(t.result) || 0);
+    (Array.isArray(trades) ? trades : []).forEach((trade) => {
+      eventsForTrade(trade).forEach((event) => {
+        if (!event.dateKey) return;
+        map[event.dateKey] = (map[event.dateKey] || 0) + event.result;
+      });
     });
     return map;
   };
@@ -1138,13 +1268,24 @@
     return n;
   };
 
-  AV.todayTrades = (state) => AV.includedTrades(state).filter((t) => AV.dateKey(new Date(t.date)) === AV.dateKey(new Date()));
+  AV.todayTrades = (state) => {
+    const todayKey = AV.dateKey(new Date());
+    return AV.includedTrades(state).filter((trade) => {
+      const date = realizedDate(trade.date);
+      return date && date.key === todayKey;
+    });
+  };
   AV.todayStats = (state) => {
     const arr = AV.todayTrades(state);
-    const closed = arr.filter((t) => t.result != null);
-    const pnl = closed.reduce((s, t) => s + AV.num(t.result), 0);
+    const todayKey = AV.dateKey(new Date());
+    const closed = AV.includedTrades(state).flatMap((trade) => {
+      return AV.tradeRealizedEvents(trade)
+        .filter((event) => event.dateKey === todayKey)
+        .map((event) => realizedEventProjection(trade, event));
+    });
+    const pnl = closed.reduce((sum, trade) => sum + AV.num(trade.result), 0);
     const losses = closed.filter((t) => t.result < 0).length;
-    const risk = arr.reduce((s, t) => {
+    const risk = AV.openTrades(state).reduce((s, t) => {
       if (AV.isTradeClosed(t)) return s;
       if (t.result != null && t.r) return s + Math.abs(t.result / t.r);
       const entry = AV.pnum(t.entry), sl = AV.pnum(t.sl);
@@ -1296,7 +1437,8 @@
 
   /* ---------- mentor ---------- */
   AV.mentorData = (state) => {
-    const closed = AV.closedTrades(state);
+    const closed = AV.includedTrades(state).flatMap((trade) =>
+      AV.tradeRealizedEvents(trade).map((event) => realizedEventProjection(trade, event)));
     const today = AV.todayStats(state);
     const lock = AV.lockInfo(state);
     const todayKey = AV.dateKey(new Date());
@@ -1334,7 +1476,11 @@
     const events = AV.buildEvents();
     const next = events.filter((e) => e.imp === 3 && new Date(e.date) > new Date()).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
     const macroDays = new Set(events.filter((e) => e.imp === 3).map((e) => AV.dateKey(new Date(e.date))));
-    const macroTrades = closed.filter((t) => macroDays.has(AV.dateKey(new Date(t.date))));
+    const macroTrades = AV.includedTrades(state).flatMap((trade) => {
+      const realized = AV.tradeRealizedEvents(trade)
+        .filter((event) => event.dateKey && macroDays.has(event.dateKey));
+      return realized.length ? [realizedTradeProjection(trade, realized)] : [];
+    });
     const macroNet = macroTrades.reduce((s, t) => s + AV.num(t.result), 0);
     const r = AV.readiness(state);
     return {
