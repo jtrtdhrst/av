@@ -614,32 +614,59 @@
     $('#tradeSlValue', body)?.focus();
     $('#tradeSlSave', body).onclick = async () => {
       const sl = AV.pnum($('#tradeSlValue', body).value);
-      const entry = AV.pnum(trade.entry);
-      const long = AV.tradeDirection(trade.dir) !== 's';
-      if (!(sl > 0) || !(entry > 0)) { AV.toast('Podaj dodatnią cenę SL'); return; }
-      if (long ? sl > entry : sl < entry) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
-      if (sl === AV.pnum(trade.sl)) { AV.closeModal(); return; }
+      if (!(sl > 0)) { AV.toast('Podaj dodatnią cenę SL'); return; }
       if (!(await AV.waitForPushIdle())) { AV.toast('Trwa inny zapis. Spróbuj ponownie za chwilę.'); return; }
-      const old = JSON.parse(JSON.stringify(trade));
-      trade.sl = AV.fmt(sl, AV.dec(entry));
-      trade.be = sl === entry;
-      const size = AV.pnum(trade.size);
-      const risk = size > 0 ? Math.abs(entry - sl) * size : null;
-      trade.risk = risk == null ? null : Math.round(risk * 100) / 100;
+      const currentTrade = AV.state.trades.find((row) => row.id === id);
+      if (!currentTrade || AV.isTradeClosed(currentTrade)) {
+        AV.closeModal();
+        AV.toast('Pozycja zmieniła się w innej karcie. Otwórz ją ponownie przed korektą SL.');
+        return;
+      }
+      const currentEntry = AV.pnum(currentTrade.entry);
+      const currentLong = AV.tradeDirection(currentTrade.dir) !== 's';
+      if (!(currentEntry > 0)) { AV.toast('Podaj dodatnią cenę wejścia przed ustawieniem SL'); return; }
+      if (currentLong ? sl > currentEntry : sl < currentEntry) {
+        AV.toast('Stop loss jest po złej stronie wejścia');
+        return;
+      }
+      if (sl === AV.pnum(currentTrade.sl)) { AV.closeModal(); AV.openTrade(id); return; }
+      const old = JSON.parse(JSON.stringify(currentTrade));
+      const nextSl = AV.fmt(sl, AV.dec(currentEntry));
+      currentTrade.sl = nextSl;
+      currentTrade.be = sl === currentEntry;
+      const size = AV.pnum(currentTrade.size);
+      const risk = size > 0 ? Math.abs(currentEntry - sl) * size : null;
+      currentTrade.risk = risk == null ? null : Math.round(risk * 100) / 100;
       const capital = AV.totalCapital(AV.state);
-      trade.riskPct = risk != null && capital > 0 ? Math.round(risk / capital * 10000) / 100 : null;
+      currentTrade.riskPct = risk != null && capital > 0 ? Math.round(risk / capital * 10000) / 100 : null;
       AV.saveNow();
       clearTimeout(AV._pushTimer);
+      AV.api.dirty = false;
       let saved = await AV.pushStateImmediate();
       if (!saved && AV.api.pushing) {
         await AV.waitForPushIdle();
         saved = await AV.pushStateImmediate();
       }
       if (!saved && AV.api.online && AV.api.authenticated) {
-        Object.assign(trade, old);
-        AV.saveNow();
+        const latestTrade = AV.state.trades.find((row) => row.id === id);
+        const sameExecution = latestTrade
+          && String(latestTrade.pair ?? '') === String(old.pair ?? '')
+          && String(latestTrade.account ?? '') === String(old.account ?? '')
+          && AV.pnum(latestTrade.entry) === AV.pnum(old.entry)
+          && AV.pnum(latestTrade.size) === AV.pnum(old.size)
+          && AV.tradeDirection(latestTrade.dir) === AV.tradeDirection(old.dir)
+          && String(latestTrade.sizeUnit ?? '') === String(old.sizeUnit ?? '')
+          && String(latestTrade.sizeContractSize ?? '') === String(old.sizeContractSize ?? '');
+        const rolledBack = !!(sameExecution && AV.pnum(latestTrade.sl) === AV.pnum(nextSl));
+        if (rolledBack) {
+          Object.assign(latestTrade, { sl: old.sl, be: old.be, risk: old.risk, riskPct: old.riskPct });
+          AV.saveNow();
+        }
         AV.renderAll();
-        AV.toast('Nie udało się zapisać SL — poprzednia wartość została przywrócona.', 5000);
+        AV.toast(rolledBack
+          ? 'Nie udało się zapisać SL — poprzednia wartość została przywrócona.'
+          : 'Pozycja zmieniła się w innej karcie. Otwórz ją ponownie i spróbuj ponownie.',
+        5000);
         return;
       }
       AV.closeModal();

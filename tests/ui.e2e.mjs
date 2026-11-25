@@ -34,6 +34,9 @@ if (!executablePath) {
 const results = [];
 const consoleErrors = [];
 const pageErrors = [];
+let apiFixtureBackup = null;
+let fixtureUserId = null;
+let fixtureRestored = false;
 function log(name, ok, info = '') {
   results.push({ name, ok, info });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  · ' + info : ''}`);
@@ -369,8 +372,8 @@ try {
   log('Mentor AI: integracje MCP + zakładki + kopiowanie', true);
 
   // backup stanu po stronie klienta (do przywrócenia po testach zapisu)
-  const backup = await page.evaluate(() => JSON.stringify(AV.state));
-  const fixtureUserId = await page.evaluate(async () => (await (await AV.apiFetch('/api/state')).json()).userId);
+  apiFixtureBackup = await page.evaluate(() => JSON.stringify(AV.state));
+  fixtureUserId = await page.evaluate(async () => (await (await AV.apiFetch('/api/state')).json()).userId);
 
   // plan: chipy rynku/biasu, poziomy, zatwierdzenie i trwały zapis w MySQL
   await page.click('.navg button[data-v="plan"]');
@@ -1657,21 +1660,7 @@ try {
           count: document.querySelector('#clN')?.textContent.trim(),
           selected: Array.from(document.querySelectorAll('#clList .cl.on')).map((row) => row.dataset.cl)
         };
-        const saveProbe = {
-          checks: JSON.parse(JSON.stringify(AV.ui.ntChecks || {})),
-          touched: AV.ui.ntChecklistTouched,
-          editId: AV.ui.editId,
-          points: AV.checklistPoints(AV.state, AV.ui.ntChecklistHistory || []),
-          toasts: []
-        };
-        const probeToast = AV.toast;
-        const probeConfirm = AV.confirm;
-        AV.toast = (message, delay) => { saveProbe.toasts.push(String(message)); probeToast(message, delay); };
-        AV.confirm = (options) => { saveProbe.toasts.push('confirm:' + String(options?.title || '')); probeConfirm(options); };
         AV.saveTrade();
-        AV.toast = probeToast;
-        AV.confirm = probeConfirm;
-        result.saveProbe = saveProbe;
         const afterManualSave = AV.state.trades.find((row) => row.id === id);
         result.savedSelection = {
           checklist: afterManualSave?.checklist,
@@ -1851,11 +1840,9 @@ try {
     AV.state.trades.find((t) => t.note === note && !AV.isTradeClosed(t))?.id || '', tradeNote);
   if (closeId) {
     await page.evaluate(async () => {
-      clearTimeout(AV._pushTimer);
-      await AV.waitForPushIdle(15000);
-      clearTimeout(AV._pushTimer);
-      AV.api.pushing = false;
-      AV.api.dirty = false;
+      if (!(await AV.waitForPushIdle(15000))) {
+        throw new Error('Poprzedni zapis stanu nie zakończył się przed zamknięciem testowej transakcji.');
+      }
     });
     await page.evaluate((id) => AV.closeTradeModal(id), closeId);
     await page.waitForSelector('#ctExit', { timeout: 10000 });
@@ -1905,10 +1892,10 @@ try {
   await page.evaluate(() => AV.waitForPushIdle(15000));
   const resultOnly = await page.evaluate((id) => {
     const trade = AV.state.trades.find((t) => t.id === id);
-    return { exit: trade?.exit, result: trade?.result, r: trade?.r };
+    return { exit: trade?.exit, result: trade?.result, resultOverride: AV.pnum(trade?.resultOverride), r: trade?.r };
   }, resultOnlyId);
   log('zamknięcie tylko wynikiem: exit pozostaje pusty, R liczone z SL',
-    resultOnly.exit === '' && resultOnly.result === 20 && resultOnly.r === 2,
+    resultOnly.exit === '' && resultOnly.result === 20 && resultOnly.resultOverride === 20 && resultOnly.r === 2,
     JSON.stringify(resultOnly));
   await page.evaluate((id) => AV.editTrade(id), resultOnlyId);
   const manualClosedEdit = await page.evaluate(() => ({
@@ -1925,6 +1912,7 @@ try {
       !manualClosedEdit.entryDisabled && !manualClosedEdit.exitDisabled && manualClosedEdit.exitVisible &&
       manualClosedEdit.resultOverrideVisible,
     JSON.stringify(manualClosedEdit));
+  await page.fill('#ntResultOverride', '');
   await page.fill('#ntEntry', '105');
   await page.fill('#ntSl', '100');
   await page.fill('#ntTp', '125');
@@ -1935,12 +1923,13 @@ try {
     const trade = AV.state.trades.find((row) => row.id === id);
     return trade ? {
       entry: trade.entry, exit: trade.exit, sl: trade.sl, size: trade.size, sizeNum: AV.pnum(trade.size),
+      entryNum: AV.pnum(trade.entry), exitNum: AV.pnum(trade.exit), slNum: AV.pnum(trade.sl),
       result: trade.result, r: trade.r
     } : null;
   }, resultOnlyId);
   log('zamknięta transakcja ręczna: korekta przelicza wynik z wykonania',
-    correctedManualTrade?.entry === '105' && correctedManualTrade.exit === '120' &&
-      correctedManualTrade.sl === '100' && correctedManualTrade.sizeNum === 2 &&
+    correctedManualTrade?.entryNum === 105 && correctedManualTrade.exitNum === 120 &&
+      correctedManualTrade.slNum === 100 && correctedManualTrade.sizeNum === 2 &&
       correctedManualTrade.result === 30 && correctedManualTrade.r === 3,
     JSON.stringify(correctedManualTrade));
   const externalIdLocks = await page.evaluate((id) => {
@@ -2008,15 +1997,20 @@ try {
   await page.waitForTimeout(500);
   const breakEvenId = await page.evaluate(() => AV.state.trades.find((t) => t.pair === 'E2E-BE/USDT' && !AV.isTradeClosed(t))?.id);
   if (breakEvenId) {
-    await page.evaluate(async () => {
+    await page.evaluate(async (id) => {
       clearTimeout(AV._pushTimer);
-      await AV.waitForPushIdle(15000);
+      if (AV.api.pushing && !(await AV.waitForPushIdle(15000))) throw new Error('Poprzedni zapis stanu nie zakończył się przed zamknięciem break-even.');
       clearTimeout(AV._pushTimer);
-      AV.api.pushing = false;
       AV.api.dirty = false;
+      if (!(await AV.pushStateImmediate())) throw new Error('Nie udało się zapisać wpisu testowego break-even.');
       const response = await AV.apiFetch('/api/state');
-      if (response.ok) AV.api.revision = (await response.json()).revision;
-    });
+      if (!response.ok) throw new Error('Nie udało się zweryfikować wpisu testowego break-even.');
+      const payload = await response.json();
+      if (typeof payload.revision === 'number') AV.api.revision = payload.revision;
+      if (!(payload.state?.trades || []).some((trade) => trade.id === id)) {
+        throw new Error('Wpis testowy break-even nie dotarł do serwera.');
+      }
+    }, breakEvenId);
     await page.evaluate((id) => AV.closeTradeModal(id), breakEvenId);
     await page.evaluate(() => {
       const exit = document.getElementById('ctExit');
@@ -2051,7 +2045,10 @@ try {
 
   // zarządzanie otwartą pozycją: live P&L, SL, BE, częściowe TP i usuwanie
   const manageId = await page.evaluate(async () => {
-    await AV.waitForPushIdle();
+    clearTimeout(AV._pushTimer);
+    if (AV.api.pushing && !(await AV.waitForPushIdle(15000))) throw new Error('Poprzedni zapis stanu nie zakończył się przed testem zarządzania pozycją.');
+    clearTimeout(AV._pushTimer);
+    AV.api.dirty = false;
     const id = 'ui-manage-' + Date.now();
     AV.state.trades.push({
       id, date: new Date().toISOString(), pair: 'E2E-MANAGE/USDT', dir: 'l', entry: '100', exit: 'otwarta',
@@ -2062,7 +2059,21 @@ try {
     });
     AV.saveNow();
     clearTimeout(AV._pushTimer);
-    await AV.pushStateImmediate();
+    let saved = await AV.pushStateImmediate();
+    if (!saved && AV.api.pushing) {
+      await AV.waitForPushIdle(15000);
+      clearTimeout(AV._pushTimer);
+      AV.api.dirty = false;
+      saved = await AV.pushStateImmediate();
+    }
+    if (!saved) throw new Error('Nie udało się zapisać wpisu testowego zarządzania pozycją.');
+    const response = await AV.apiFetch('/api/state');
+    if (!response.ok) throw new Error('Nie udało się zweryfikować wpisu testowego zarządzania pozycją.');
+    const payload = await response.json();
+    if (typeof payload.revision === 'number') AV.api.revision = payload.revision;
+    if (!(payload.state?.trades || []).some((trade) => trade.id === id)) {
+      throw new Error('Wpis testowy zarządzania pozycją nie dotarł do serwera.');
+    }
     AV.renderAll();
     return id;
   });
@@ -2223,9 +2234,10 @@ try {
   // usuwanie transakcji przez validateTransition przy zwykłym PUT /api/state.
   execFileSync('php', [path.join(ROOT, 'restore-api-fixture.php'), String(fixtureUserId)], {
     env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
-    input: JSON.stringify({ state: JSON.parse(backup) }),
+    input: JSON.stringify({ state: JSON.parse(apiFixtureBackup) }),
     stdio: ['pipe', 'pipe', 'pipe']
   });
+  fixtureRestored = true;
   const restoredCount = await page.evaluate(async () => {
     const response = await AV.apiFetch('/api/state');
     const payload = await response.json();
@@ -2261,6 +2273,20 @@ try {
   results.push({ name: 'test przerwany', ok: false, info: err.message });
   process.exitCode = 1;
 } finally {
+  if (apiFixtureBackup && fixtureUserId && !fixtureRestored) {
+    try {
+      execFileSync('php', [path.join(ROOT, 'restore-api-fixture.php'), String(fixtureUserId)], {
+        env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+        input: JSON.stringify({ state: JSON.parse(apiFixtureBackup) }),
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      fixtureRestored = true;
+      console.log('Cleanup: stan fixture przywrócony po przerwaniu UI E2E.');
+    } catch (restoreError) {
+      console.error('FAIL cleanup: nie udało się przywrócić stanu fixture:', restoreError.message);
+      process.exitCode = 1;
+    }
+  }
   await browser.close();
 }
 

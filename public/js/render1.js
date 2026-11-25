@@ -511,20 +511,20 @@
     const unit = allowed.includes(trade?.sizeUnit) ? trade.sizeUnit
       : trade ? 'units'
         : (allowed.includes(account?.sizeUnit) ? account.sizeUnit : 'units');
-    const tradeContract = Number(trade?.sizeContractSize);
-    const accountContract = Number(account?.contractSize);
+    const tradeContract = AV.pnum(trade?.sizeContractSize);
+    const accountContract = AV.pnum(account?.contractSize);
     const contractSize = tradeContract > 0 ? tradeContract : accountContract > 0 ? accountContract : null;
     return { unit, contractSize };
   };
   AV.baseTradeSize = (amount, entry, config) => {
-    const size = Number(amount), price = Number(entry);
+    const size = AV.pnum(amount), price = AV.pnum(entry);
     if (!(size > 0) || !Number.isFinite(size)) return null;
     if (config?.unit === 'quote') return price > 0 ? size / price : null;
     if (config?.unit === 'lots') return config.contractSize > 0 ? size * config.contractSize : null;
     return size;
   };
   AV.displayTradeSize = (size, entry, config) => {
-    const base = Number(size), price = Number(entry);
+    const base = AV.pnum(size), price = AV.pnum(entry);
     if (!(base > 0) || !Number.isFinite(base)) return '';
     if (config?.unit === 'quote') return price > 0 ? base * price : '';
     if (config?.unit === 'lots') return config.contractSize > 0 ? base / config.contractSize : '';

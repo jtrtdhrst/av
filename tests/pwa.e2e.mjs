@@ -218,14 +218,14 @@ try {
     && Number(AV.pnum(t.entry)) > 0 && Number(AV.pnum(t.size)) > 0
     && String(t.sl || '').trim() !== '' && String(t.sl || '').trim() !== 'brak')?.id);
   assert.ok(openTrade, 'brak otwartej transakcji z poprawnym SL w stanie demo');
-  // Ustabilizuj zapisy: początkowy push stanu demo może utknąć w pętli 409,
-  // przez co closeTradeModal przerwałby się na waitForPushIdle. Wyczyść
-  // harmonogram i zsynchronizuj rewizję przed zamknięciem.
+  // Poczekaj na faktyczne zakończenie zapisu; test nie może maskować
+  // aktywnego żądania przez ręczną zmianę flagi AV.api.pushing.
   await page.evaluate(async () => {
     clearTimeout(AV._pushTimer);
-    await AV.waitForPushIdle(15000);
+    if (!(await AV.waitForPushIdle(15000))) {
+      throw new Error('Poprzedni zapis stanu nie zakończył się przed zamknięciem transakcji PWA.');
+    }
     clearTimeout(AV._pushTimer);
-    AV.api.pushing = false;
     AV.api.dirty = false;
     const response = await AV.apiFetch('/api/state');
     if (response.ok) AV.api.revision = (await response.json()).revision;
