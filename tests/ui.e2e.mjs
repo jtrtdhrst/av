@@ -2102,15 +2102,16 @@ try {
   await page.waitForSelector('#tradeSlValue', { timeout: 10000 });
   await page.fill('#tradeSlValue', '97');
   await page.click('#tradeSlSave');
-  await page.waitForFunction((id) =>
-    AV.state.trades.find((trade) => trade.id === id)?.sl === '97' &&
-      !document.querySelector('#tradeSlValue'), manageId, { timeout: 15000 });
+  await page.waitForFunction((id) => {
+    const trade = AV.state.trades.find((row) => row.id === id);
+    return AV.pnum(trade?.sl) === 97 && !document.querySelector('#tradeSlValue');
+  }, manageId, { timeout: 15000 });
   const setSlState = await page.evaluate((id) => {
     const trade = AV.state.trades.find((row) => row.id === id);
-    return { sl: trade?.sl, risk: trade?.risk };
+    return { sl: trade?.sl, slNum: AV.pnum(trade?.sl), risk: trade?.risk };
   }, manageId);
   log('pozycja: akcja Ustaw / zmień SL zapisuje cenę i ryzyko',
-    setSlState.sl === '97' && setSlState.risk === 6, JSON.stringify(setSlState));
+    setSlState.slNum === 97 && setSlState.risk === 6, JSON.stringify(setSlState));
   await page.evaluate((id) => AV.breakevenTrade(id), manageId);
   const beState = await page.evaluate((id) => {
     const t = AV.state.trades.find((x) => x.id === id);
