@@ -114,19 +114,21 @@
         e.textContent = [h, m, x].map((v) => String(v).padStart(2, '0')).join(':');
       } else e.textContent = '--:--:--';
     });
+    const editing = !!AV.ui.editId && !!AV.state.trades.find((t) => t.id === AV.ui.editId);
+    const blocked = L.active && !editing;
     const wrap = $('#lockWrap');
     if (wrap) {
-      wrap.classList.toggle('locked', L.active);
+      wrap.classList.toggle('locked', blocked);
       const card = $('#lockCard');
-      if (card) card.style.display = L.active ? '' : 'none';
+      if (card) card.style.display = blocked ? '' : 'none';
       const form = wrap.querySelector('.formwrap');
-      if (form) form.style.display = L.active ? 'none' : '';
+      if (form) form.style.display = blocked ? 'none' : '';
     }
     const navBadge = $('.navg button[data-v="nowa"] .badge');
     if (navBadge) navBadge.style.display = L.active ? '' : 'none';
     const chip = $('.chipst.lk');
     if (chip) chip.style.display = L.active ? '' : 'none';
-    if (L.active) {
+    if (blocked) {
       const card = $('#lockCard');
       if (card) {
         const p = card.querySelector('p');
@@ -137,7 +139,7 @@
 
   /* ---------- pulpit ---------- */
   AV.renderDashboard = () => {
-    const s = AV.state, today = AV.todayStats(s), stats = AV.computeStats(AV.rangeTrades(s, 30), s);
+    const s = AV.state, today = AV.todayStats(s), stats = AV.computeStats(AV.rangeTrades(s, 90), s);
     AV.setText('#dayPnl', AV.dispMoney(today.pnl, 2).replace(/^[+−]/, (m) => m) + ' ');
     const pnlEl = $('#dayPnl');
     if (pnlEl) {
@@ -210,12 +212,16 @@
     AV.setHTML('#dashBalVal', balancesComplete
       ? AV.fmt(total, 2) + ' <span class="mut" style="font-size:12px;font-weight:600">' + AV.esc(cur) + '</span>'
       : '');
+    const equity = typeof AV.calculatedEquity === 'function' ? AV.calculatedEquity(s) : null;
+    AV.setHTML('#dashEquityVal', equity != null && startsComplete && Number.isFinite(Number(equity))
+      ? AV.fmt(Number(equity), 2) + ' <span class="mut" style="font-size:12px;font-weight:600">USDT</span>'
+      : '');
     const pct = balancesComplete && startsComplete && startTotal > 0 ? (total - startTotal) / startTotal * 100 : null;
     let sub = '';
     if (accounts.length) {
       sub = accounts.length + ' ' + AV.plural(accounts.length, 'konto', 'konta', 'kont') +
         (primary ? ' · główne: ' + primary.name : '') +
-        (pct === null ? '' : ' · ' + AV.signed(pct, 1, '%') + ' od startu');
+        (pct === null ? '' : ' · saldo ręczne ' + AV.signed(pct, 1, '%') + ' od startu');
     }
     AV.setText('#dashBalSub', sub);
     AV.setHTML('#dashAccountList', accounts.map((account) => {
@@ -498,6 +504,45 @@
     return { price, value: (price - entry) * size * sign, pct: (price - entry) / entry * 100 * sign };
   };
 
+  AV.tradeAccount = (state, trade) => (state.accounts || []).find((account) => account.name === trade?.account) || null;
+  AV.sizeUnitLabel = (unit) => unit === 'quote' ? 'Kwota kwotowana' : unit === 'lots' ? 'Loty / kontrakty' : 'Jednostki bazowe';
+  AV.tradeSizeConfig = (trade, account) => {
+    const allowed = ['units', 'quote', 'lots'];
+    const unit = allowed.includes(trade?.sizeUnit) ? trade.sizeUnit
+      : trade ? 'units'
+        : (allowed.includes(account?.sizeUnit) ? account.sizeUnit : 'units');
+    const tradeContract = AV.pnum(trade?.sizeContractSize);
+    const accountContract = AV.pnum(account?.contractSize);
+    const contractSize = tradeContract > 0 ? tradeContract : accountContract > 0 ? accountContract : null;
+    return { unit, contractSize };
+  };
+  AV.baseTradeSize = (amount, entry, config) => {
+    const size = AV.pnum(amount), price = AV.pnum(entry);
+    if (!(size > 0) || !Number.isFinite(size)) return null;
+    if (config?.unit === 'quote') return price > 0 ? size / price : null;
+    if (config?.unit === 'lots') return config.contractSize > 0 ? size * config.contractSize : null;
+    return size;
+  };
+  AV.displayTradeSize = (size, entry, config) => {
+    const base = AV.pnum(size), price = AV.pnum(entry);
+    if (!(base > 0) || !Number.isFinite(base)) return '';
+    if (config?.unit === 'quote') return price > 0 ? base * price : '';
+    if (config?.unit === 'lots') return config.contractSize > 0 ? base / config.contractSize : '';
+    return base;
+  };
+  AV.renderTradeSizeUnit = () => {
+    const editTrade = AV.state.trades.find((trade) => trade.id === AV.ui.editId) || null;
+    const account = AV.state.accounts.find((item) => item.name === ($('#ntAccount')?.value || '')) || null;
+    const config = AV.tradeSizeConfig(editTrade, account);
+    AV.setText('#ntSizeLabel', 'Wielkość · ' + AV.sizeUnitLabel(config.unit).toLowerCase());
+    AV.setText('#ntSizeHint', config.unit === 'lots'
+      ? (config.contractSize > 0 ? '1 lot/kontrakt = ' + AV.fmt(config.contractSize, 4) + ' jednostek bazowych.' : 'Ustaw mnożnik kontraktu w konfiguracji konta przed zapisem.')
+      : config.unit === 'quote' ? 'Podana kwota jest dzielona przez cenę wejścia; transakcja zapisuje jednostki bazowe.' : 'Wartość pozycji w jednostkach instrumentu bazowego.');
+    const input = $('#ntSize');
+    if (input) input.placeholder = config.unit === 'quote' ? 'kwota w walucie kwotowanej' : config.unit === 'lots' ? 'liczba lotów / kontraktów' : 'liczba jednostek bazowych';
+    return { account, config, editTrade };
+  };
+
   AV.renderJournal = () => {
     const arr = AV.filteredTrades();
     AV.setHTML('#tbody', arr.map((t) => {
@@ -562,62 +607,6 @@
     return '<div class="shot"><span class="cap">' + AV.esc(label) + '</span><svg viewBox="0 0 600 230" width="100%" height="230" style="display:block">' + h + '</svg></div>';
   };
 
-  AV.proChart = (t, tf) => {
-    const tfValue = ['5m', '15m', '1h', '4h'].includes(tf) ? tf : (AV.ui.chartTf || '15m');
-    const tfMin = { '5m': 5, '15m': 15, '1h': 60, '4h': 240 }[tfValue] || 15;
-    const broker = t.broker || t.source || 'WEEX';
-    let s = t.pair.length * 13 + (t.date.charCodeAt(1) || 65) * 7;
-    const r = () => (s = (s * 9301 + 49297) % 233280) / 233280;
-    const long = AV.tradeDirection(t.dir) !== 's', en = AV.pnum(t.entry), open = !AV.isTradeClosed(t);
-    let sl = t.sl === 'brak' ? en * (long ? 0.985 : 1.015) : AV.pnum(t.sl);
-    const tp = AV.pnum(t.tp);
-    const exitValue = AV.pnum(t.exit);
-    const hasExit = Number.isFinite(exitValue) && exitValue > 0 && t.exit !== 'otwarta';
-    const ex = open ? en * (long ? 1.004 : 0.996) : (hasExit ? exitValue : en);
-    const N = 64, E = 22, X = open ? N - 1 : Math.min(N - 6, E + 14), vol = Math.abs(en - sl) * 0.22;
-    const P = [];
-    let p = en - (long ? 1 : -1) * vol * 5;
-    for (let i = 0; i < N; i++) {
-      const tgt = i < E ? en + (p - en) * 0.86 + (r() - 0.5) * vol * 2.2
-        : i <= X ? en + (ex - en) * ((i - E) / (X - E)) + (r() - 0.5) * vol * 1.6
-          : ex + (r() - 0.5) * vol * 3;
-      const o = p, c = tgt, hi = Math.max(o, c) + r() * vol, lo = Math.min(o, c) - r() * vol;
-      P.push([o, c, hi, lo]); p = c;
-    }
-    P[E][1] = en;
-    if (!open) P[X][1] = ex;
-    const all = P.flat().concat([sl, tp]), mx = Math.max(...all), mn = Math.min(...all);
-    const pad = (mx - mn) * 0.08, W = 760, H = 320, PW = 680, y = (v) => 14 + (mx + pad - v) / (mx - mn + 2 * pad) * (H - 44);
-    const cw = PW / N, x = (i) => i * cw + cw / 2;
-    const d = AV.dec(en);
-    let g = '';
-    for (let k = 0; k < 5; k++) {
-      const v = mn - pad + (mx - mn + 2 * pad) * k / 4, yy = y(v);
-      g += '<line x1="0" x2="' + PW + '" y1="' + yy + '" y2="' + yy + '" stroke="rgba(255,255,255,.045)"/><text x="' + (PW + 8) + '" y="' + (yy + 4) + '" fill="#7f786f" font-size="10.5" font-family="JetBrains Mono">' + AV.fmt(v, d) + '</text>';
-    }
-    const [hh, mm] = t.date ? new Date(t.date).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' }).split(':').map(Number) : [9, 0];
-    for (let i = 2; i < N; i += 12) {
-      const m = hh * 60 + mm + (i - E) * tfMin, tt = ((m % 1440) + 1440) % 1440;
-      g += '<text x="' + x(i) + '" y="' + (H - 10) + '" fill="#7f786f" font-size="10.5" text-anchor="middle" font-family="JetBrains Mono">' + String(tt / 60 | 0).padStart(2, '0') + ':' + String(tt % 60).padStart(2, '0') + '</text>';
-    }
-    const x0 = x(E), x1 = x(X) + cw / 2;
-    g += '<rect x="' + x0 + '" y="' + Math.min(y(tp), y(en)) + '" width="' + (x1 - x0) + '" height="' + Math.abs(y(tp) - y(en)) + '" fill="rgba(79,207,138,.13)"/><rect x="' + x0 + '" y="' + Math.min(y(sl), y(en)) + '" width="' + (x1 - x0) + '" height="' + Math.abs(y(sl) - y(en)) + '" fill="rgba(255,93,98,.13)"/>';
-    g += '<line x1="' + x0 + '" x2="' + x1 + '" y1="' + y(en) + '" y2="' + y(en) + '" stroke="#d9b25f" stroke-width="1.4"/><line x1="' + x0 + '" x2="' + x1 + '" y1="' + y(tp) + '" y2="' + y(tp) + '" stroke="#4fcf8a" stroke-dasharray="4 4"/><line x1="' + x0 + '" x2="' + x1 + '" y1="' + y(sl) + '" y2="' + y(sl) + '" stroke="#ff5d62" stroke-dasharray="4 4"/>';
-    P.forEach(([o, c, hi, lo], i) => {
-      const col = c >= o ? '#4fcf8a' : '#ff5d62';
-      g += '<line x1="' + x(i) + '" x2="' + x(i) + '" y1="' + y(hi) + '" y2="' + y(lo) + '" stroke="' + col + '" stroke-width="1.2"/><rect x="' + (x(i) - cw * 0.33) + '" y="' + Math.min(y(o), y(c)) + '" width="' + (cw * 0.66) + '" height="' + Math.max(1.5, Math.abs(y(o) - y(c))) + '" fill="' + col + '"/>';
-    });
-    const tag = (v, c, l) => '<rect x="' + (PW + 2) + '" y="' + (y(v) - 9) + '" width="76" height="18" rx="4" fill="' + c + '"/><text x="' + (PW + 8) + '" y="' + (y(v) + 4) + '" fill="#0b0a09" font-size="10.5" font-weight="700" font-family="JetBrains Mono">' + (l || AV.fmt(v, d)) + '</text>';
-    g += tag(tp, '#4fcf8a') + tag(sl, '#ff5d62', t.sl === 'brak' ? 'BEZ SL' : null) + tag(en, '#d9b25f');
-    const ay = long ? y(P[E][3]) + 16 : y(P[E][2]) - 16;
-    g += '<path d="M' + (x0 - 6) + ',' + (ay + (long ? 8 : -8)) + ' L' + x0 + ',' + ay + ' L' + (x0 + 6) + ',' + (ay + (long ? 8 : -8)) + 'Z" fill="#d9b25f"/><text x="' + x0 + '" y="' + (ay + (long ? 22 : -14)) + '" fill="#d9b25f" font-size="10.5" text-anchor="middle" font-family="JetBrains Mono" font-weight="700">' + (long ? 'LONG' : 'SHORT') + '</text>';
-    if (!open && t.result != null) {
-      const xe = x(X), win = t.result > 0;
-      g += '<circle cx="' + xe + '" cy="' + y(ex) + '" r="5" fill="' + (win ? '#4fcf8a' : '#ff5d62') + '" stroke="#0b0a09" stroke-width="2"/><rect x="' + (xe + 8) + '" y="' + (y(ex) - 11) + '" width="70" height="20" rx="5" fill="rgba(11,10,9,.9)" stroke="' + (win ? '#4fcf8a' : '#ff5d62') + '"/><text x="' + (xe + 43) + '" y="' + (y(ex) + 3) + '" fill="' + (win ? '#4fcf8a' : '#ff5d62') + '" font-size="10.5" text-anchor="middle" font-family="JetBrains Mono" font-weight="700">' + AV.signed(t.result, 2, '') + '</text>';
-    }
-    return '<div class="chartbox"><div class="hd"><b>' + AV.esc(t.pair) + '</b><span>' + tfValue + ' · ' + AV.esc(broker) + '</span><span>wejście ' + AV.esc(t.entry) + ' · SL ' + AV.esc(t.sl) + ' · TP ' + AV.esc(t.tp) + '</span><span class="tag al" style="margin-left:6px">wykres automatyczny</span><div class="tfs">' + ['5m', '15m', '1h', '4h'].map((x) => '<span data-tf="' + x + '" class="' + (x === tfValue ? 'on' : '') + '">' + x + '</span>').join('') + '</div></div><svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block">' + g + '</svg></div>';
-  };
-
   /* ---------- szczegóły transakcji ---------- */
   AV.openTrade = (id) => {
     const t = AV.state.trades.find((x) => x.id === id);
@@ -629,6 +618,10 @@
     };
     const open = !AV.isTradeClosed(t);
     const live = open ? AV.tradeLivePnl(t) : null;
+    const tradeAccount = AV.tradeAccount(AV.state, t);
+    const sizeConfig = AV.tradeSizeConfig(t, tradeAccount);
+    const displayedSize = AV.displayTradeSize(open ? t.size : (t.initialSize || t.size), t.entry, sizeConfig);
+    const sizeUnit = AV.sizeUnitLabel(sizeConfig.unit).toLowerCase();
     const liveHead = open
       ? (live
         ? '<span class="mono ' + (live.value >= 0 ? 'win' : 'loss') + '" style="margin-left:auto;text-align:right;font-weight:800"><span style="font-size:28px">' + AV.signed(live.value, 2, ' USDT') + '</span><span style="display:block;font-size:12px;opacity:.8">' + AV.signed(live.pct, 2, '%') + ' · live</span></span>'
@@ -642,8 +635,7 @@
     const metricValue = (value) => value == null || (typeof value === 'string' && value.trim() === '') ? '' : AV.fmt(value, 1) + 'R';
     AV.setHTML('#tmBody', '<span class="mclose" id="mc">' + AV.ic('x', 'width:16px;height:16px') + '</span><div class="eyebrow">Transakcja · ' + AV.dateTimeShort(t.date) + ' · ' + AV.esc(t.source || 'WEEX') + '</div>' +
       '<div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap"><h1 style="font-size:32px;margin:0">' + AV.esc(t.pair) + '</h1><span class="pill ' + (AV.tradeDirection(t.dir) || 'l') + '">' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</span>' + AV.grade(t.grade) + (t.sl === 'brak' ? '<span class="nosl" style="margin:0">BEZ SL</span>' : '') + liveHead + '</div>' +
-      '<div class="grid" style="grid-template-columns:repeat(6,1fr);margin-top:20px;gap:10px">' + box('Wejście', AV.esc(t.entry)) + box('Wyjście', AV.esc(t.exit)) + box('Stop loss', AV.esc(t.sl), t.sl === 'brak' ? 'loss' : '') + box('Take profit', AV.esc(t.tp)) + box('MAE', metricValue(t.mae), 'loss') + box('MFE', metricValue(t.mfe), 'win') + '</div>' +
-      '<div style="margin-top:16px">' + AV.proChart(t) + '</div>' +
+      '<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-top:20px;gap:10px">' + box('Wejście', AV.esc(t.entry)) + box('Wyjście', AV.esc(t.exit)) + box('Wielkość · ' + sizeUnit, displayedSize === '' ? '' : AV.fmt(displayedSize, 4)) + box('Stop loss', AV.esc(t.sl), t.sl === 'brak' ? 'loss' : '') + box('Take profit', AV.esc(t.tp)) + box('MAE', metricValue(t.mae), 'loss') + box('MFE', metricValue(t.mfe), 'win') + '</div>' +
       ((t.partials || []).length ? '<div class="card flat" style="margin-top:12px;padding:14px"><div class="lbl">Zrealizowane części pozycji</div>' + t.partials.map((p) => '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:13px"><span class="mono">' + AV.esc(p.price) + ' · ' + AV.fmt(p.pct, 0) + '%</span><b class="mono ' + (p.result >= 0 ? 'win' : 'loss') + '">' + AV.signed(p.result, 2, ' USDT') + '</b></div>').join('') + (t.be ? '<div class="hint" style="margin-top:10px">SL przeniesiony na wejście (BE).</div>' : '') + '</div>' : '') +
       '<div class="sech" style="margin:18px 0 10px"><h3>Twoje screeny</h3><span class="dim" style="font-size:12.5px">opcjonalnie, jeśli chcesz zapisać swój własny widok</span></div>' +
       '<div class="grid g2">' + (t.screens && t.screens.before ? '<label class="drop has" data-drop data-shot="before"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span><img src="' + t.screens.before + '" alt="Screen przed wejściem"></label>' : drop('Dodaj screen PRZED wejściem', 'img', 'before')) + (t.screens && t.screens.after ? '<label class="drop has" data-drop data-shot="after"><input type="file" accept="image/*" hidden><span class="x">Usuń ✕</span><img src="' + t.screens.after + '" alt="Screen po wyjściu"></label>' : drop('Dodaj screen PO wyjściu', 'flag', 'after')) + '</div>' +
@@ -651,7 +643,7 @@
        '<div class="grid" style="grid-template-columns:1fr 1fr 1.2fr;margin-top:16px"><div class="card flat"><div class="lbl">Twoja notatka</div><p style="margin-top:8px;line-height:1.55;font-size:14px">' + AV.esc(t.note) + '</p><div class="chips" style="margin-top:12px">' + (t.emotion ? '<span class="chip on">' + AV.esc(t.emotion) + '</span>' : '') + (t.setup ? '<span class="chip">' + AV.esc(t.setup) + '</span>' : '') + '</div></div>' +
        '<div class="card flat"><div class="lbl">Checklista</div>' + (checklist == null ? '<div class="val"></div>' : '<div class="val ' + checklistClass + '">' + checklist + ' / ' + checkTotal + '</div><div class="bar"><i style="width:' + checklist / checkTotal * 100 + '%;background:' + (checklistClass === 'win' ? 'var(--win)' : checklistClass === 'warnc' ? 'var(--warn)' : 'var(--loss)') + '"></i></div>') + '</div>' +
       '<div class="card hl"><div class="lbl">α Mentor o tej transakcji</div><p style="margin-top:8px;line-height:1.55;font-size:14px">' + AV.esc(t.mentor) + '</p></div></div>' +
-      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">' + (open ? '<button class="btn g" data-trade-close="' + t.id + '">Zamknij / częściowo</button><button class="btn g" data-trade-be="' + t.id + '">Przenieś SL na BE</button>' : '') + '<button class="btn g" data-trade-edit="' + t.id + '">Edytuj</button><button class="btn w" data-trade-del="' + t.id + '">Usuń transakcję</button></div>');
+       '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">' + (open ? '<button class="btn g" data-trade-close="' + t.id + '">Zamknij / częściowo</button><button class="btn g" data-trade-sl="' + t.id + '">Ustaw / zmień SL</button><button class="btn g" data-trade-be="' + t.id + '">Przenieś SL na BE</button>' : '') + '<button class="btn g" data-trade-edit="' + t.id + '">Edytuj</button><button class="btn w" data-trade-del="' + t.id + '">Usuń transakcję</button></div>');
     $('#tm').classList.add('on');
     AV.bindDrops($('#tmBody'), (data, key) => {
       if (!t.screens) t.screens = {};
@@ -810,10 +802,12 @@
   AV.renderNTMeta = () => {
     const en = AV.pnum($('#ntEntry')?.value), sl = AV.pnum($('#ntSl')?.value), tp = AV.pnum($('#ntTp')?.value);
     const size = AV.pnum($('#ntSize')?.value);
+    const unit = AV.renderTradeSizeUnit();
+    const baseSize = AV.baseTradeSize(size, en, unit.config);
     const cap = AV.totalCapital(AV.state);
     const limitPct = Number(AV.state.settings.maxRisk) || 1;
     const limitAmt = cap > 0 ? cap * limitPct / 100 : null;
-    const riskAmt = en && sl && size ? Math.abs(en - sl) * size : null;
+    const riskAmt = en && sl && baseSize ? Math.abs(en - sl) * baseSize : null;
     const riskPct = riskAmt != null && cap > 0 ? riskAmt / cap * 100 : null;
     const slPct = en && sl ? Math.abs(en - sl) / en : 0;
     const rr = slPct && tp ? Math.abs(tp - en) / Math.abs(en - sl) : 0;
@@ -824,7 +818,6 @@
       ' · R:R <b>' + (rr ? '1 : ' + AV.fmt(rr, 1) : '—') + '</b> · <span class="link" data-go="kalk" style="font-size:13.5px">Kalkulator Alpha</span>';
   };
 
-  AV.TRADE_BROKERS = ['WEEX', 'BingX', 'VTMarkets', 'OKX', 'Bybit', 'MetaTrader 4', 'MetaTrader 5', 'Inny'];
   AV.renderTradeSelectors = () => {
     const acc = $('#ntAccount');
     if (acc) {
@@ -834,12 +827,7 @@
       acc.value = (AV.state.accounts || []).some((a) => a.name === current) ? current : fallback;
       acc.disabled = (AV.state.accounts || []).length === 0;
     }
-    const broker = $('#ntBroker');
-    if (broker) {
-      const current = broker.value;
-      broker.innerHTML = AV.TRADE_BROKERS.map((b) => '<option value="' + AV.attr(b) + '">' + AV.esc(b) + '</option>').join('');
-      broker.value = AV.TRADE_BROKERS.includes(current) ? current : 'WEEX';
-    }
+    AV.renderTradeSizeUnit();
   };
 
   AV.renderNewTradeForm = () => {

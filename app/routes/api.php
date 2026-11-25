@@ -252,6 +252,14 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                 }
                 $beforeState = TradeRules::normalizeTradeState($beforeState);
             }
+            $metricsViolation = TradeRules::recalculateClosedManualTradeEdits($beforeState, $state);
+            if ($metricsViolation !== null) {
+                Http::json([
+                    'error' => (string) $metricsViolation['error'],
+                    'message' => (string) $metricsViolation['message'],
+                    'tradeId' => $metricsViolation['tradeId'] ?? null,
+                ], (int) ($metricsViolation['status'] ?? 409));
+            }
             $tradeViolation = TradeRules::validateTransition($beforeState, $state);
             if ($tradeViolation !== null) {
                 Http::json([

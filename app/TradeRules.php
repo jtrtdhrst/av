@@ -14,14 +14,17 @@ final class TradeRules
 {
     private const PRICE_FIELDS = ['entry', 'size'];
     private const EXECUTION_FIELDS = [
-        'id', 'pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size', 'result', 'r',
+        'id', 'pair', 'dir', 'entry', 'exit', 'sl', 'tp', 'size', 'initialSize',
+        'partials', 'partialResult', 'resultOverride', 'sizeUnit', 'sizeContractSize',
+        'result', 'r',
         'fee', 'mae', 'mfe', 'durationMin', 'date', 'closedAt', 'risk',
         'riskPct', 'source', 'account', 'session', 'plan', 'importedAt',
         'exchangeId', 'externalId', 'extId',
     ];
     private const MANUAL_SOURCES = ['', 'manual', 'panel', 'ręcznie', 'recznie'];
     private const NUMERIC_FIELDS = [
-        'entry', 'exit', 'sl', 'tp', 'size', 'result', 'r', 'risk', 'riskPct',
+        'entry', 'exit', 'sl', 'tp', 'size', 'initialSize', 'partialResult',
+        'resultOverride', 'sizeContractSize', 'result', 'r', 'risk', 'riskPct',
         'fee', 'mae', 'mfe', 'durationMin',
     ];
 
@@ -557,14 +560,6 @@ final class TradeRules
             }
 
             if ($before !== null && self::executionChanged($before, $trade)) {
-                if (self::isClosed($before)) {
-                    return self::failure(
-                        'closed_trade_execution_readonly',
-                        'Pola wykonania zamkniętej transakcji są niezmienne; poprawiaj wyłącznie ocenę i recenzję.',
-                        409,
-                        $id
-                    );
-                }
                 if (self::isExecutionReadonly($before)) {
                     return self::failure(
                         'exchange_data_readonly',
@@ -779,9 +774,14 @@ final class TradeRules
     {
         $source = mb_strtolower(trim((string) ($trade['source'] ?? '')));
         return !in_array($source, self::MANUAL_SOURCES, true)
-            || !empty($trade['extId'])
-            || !empty($trade['externalId'])
-            || !empty($trade['exchangeId']);
+            || self::hasExternalIdentifier($trade['extId'] ?? null)
+            || self::hasExternalIdentifier($trade['externalId'] ?? null)
+            || self::hasExternalIdentifier($trade['exchangeId'] ?? null);
+    }
+
+    private static function hasExternalIdentifier(mixed $value): bool
+    {
+        return $value !== null && trim((string) $value) !== '';
     }
 
     public static function executionChanged(array $before, array $after): bool
@@ -799,6 +799,391 @@ final class TradeRules
         return $stopLoss !== null
             ? abs($entry - $stopLoss) * $size
             : abs($entry * 0.01 * $size);
+    }
+
+    /**
+     * Rebuilds derived metrics for edits to an already-closed manual trade.
+     * Stored execution data is the source for partial legs and their overrides;
+     * client-supplied result/R fields are never used as calculation inputs.
+     *
+     * @return array{error:string,message:string,status:int,tradeId?:string}|null
+     */
+    public static function recalculateClosedManualTradeEdits(array $beforeState, array &$afterState): ?array
+    {
+        $beforeById = [];
+        foreach ((array) ($beforeState['trades'] ?? []) as $trade) {
+            if (!is_array($trade)) {
+                continue;
+            }
+            $id = trim((string) ($trade['id'] ?? ''));
+            if ($id !== '') {
+                $beforeById[$id] = $trade;
+            }
+        }
+
+        if (!is_array($afterState['trades'] ?? null)) {
+            return null;
+        }
+
+        foreach ($afterState['trades'] as $index => $trade) {
+            if (!is_array($trade)) {
+                continue;
+            }
+            $id = trim((string) ($trade['id'] ?? ''));
+            if ($id === '' || !isset($beforeById[$id])) {
+                continue;
+            }
+            $before = $beforeById[$id];
+            if (!self::isClosed($before)
+                || self::isExecutionReadonly($before)
+                || !self::closedTradeMetricsChanged($before, $trade)) {
+                continue;
+            }
+
+            $recalculated = self::recalculateClosedManualTrade($before, $trade, $afterState);
+            if (isset($recalculated['error'], $recalculated['status'], $recalculated['message'])) {
+                return $recalculated;
+            }
+            $afterState['trades'][$index] = $recalculated;
+        }
+
+        return null;
+    }
+
+    private static function closedTradeMetricsChanged(array $before, array $after): bool
+    {
+        foreach ([
+            'entry', 'dir', 'exit', 'sl', 'tp', 'size', 'initialSize', 'partials',
+            'partialResult', 'resultOverride', 'result', 'r', 'risk', 'riskPct',
+        ] as $field) {
+            if (!self::sameTradeField($field, $before[$field] ?? null, $after[$field] ?? null)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $before
+     * @param array<string,mixed> $requested
+     * @param array<string,mixed> $state
+     * @return array<string,mixed>
+     */
+    private static function recalculateClosedManualTrade(array $before, array $requested, array $state): array
+    {
+        // Preserve fields omitted by an older client and keep the original close
+        // timestamp byte-for-byte (including the unknown-time null case).
+        $updated = array_replace($before, $requested);
+        if (array_key_exists('closedAt', $before)) {
+            $updated['closedAt'] = $before['closedAt'];
+        } else {
+            unset($updated['closedAt']);
+        }
+
+        $partials = $before['partials'] ?? [];
+        if ($partials === null) {
+            $partials = [];
+        }
+        if (!is_array($partials) || !array_is_list($partials)) {
+            return self::closedTradeMetricsUnsupported('partials nie są poprawną listą', $before);
+        }
+        $hasPartials = $partials !== [];
+        $remainingFraction = 1.0;
+        $partialPercentages = [];
+        if ($hasPartials) {
+            foreach ($partials as $partial) {
+                if (!is_array($partial)) {
+                    return self::closedTradeMetricsUnsupported('częściowe zamknięcie nie jest obiektem', $before);
+                }
+                $pct = self::number($partial['pct'] ?? null);
+                if ($pct === null || $pct <= 0 || $pct >= 100) {
+                    return self::closedTradeMetricsUnsupported('procent częściowego zamknięcia jest nieprawidłowy', $before);
+                }
+                $partialPercentages[] = $pct;
+                $remainingFraction *= 1 - ($pct / 100);
+                if (!is_finite($remainingFraction) || $remainingFraction <= 0) {
+                    return self::closedTradeMetricsUnsupported('częściowe zamknięcia nie pozostawiają dodatniej wielkości', $before);
+                }
+            }
+        }
+
+        $storedSize = self::number($before['size'] ?? null);
+        $storedInitialSize = self::number($before['initialSize'] ?? null);
+        $initialSizeChanged = array_key_exists('initialSize', $requested)
+            && !self::sameTradeField('initialSize', $before['initialSize'] ?? null, $requested['initialSize']);
+        $sizeChanged = array_key_exists('size', $requested)
+            && !self::sameTradeField('size', $before['size'] ?? null, $requested['size']);
+
+        if ($hasPartials) {
+            if ($storedInitialSize === null || $storedInitialSize <= 0
+                || $storedSize === null || $storedSize <= 0) {
+                return self::closedTradeMetricsUnsupported('brak poprawnego initialSize lub pozostałej wielkości dla partials', $before);
+            }
+            $expectedStoredSize = $storedInitialSize * $remainingFraction;
+            $sizeTolerance = max(1.0, abs($expectedStoredSize)) * 1.0e-7;
+            if (!is_finite($expectedStoredSize) || abs($expectedStoredSize - $storedSize) > $sizeTolerance) {
+                return self::closedTradeMetricsUnsupported('initialSize, size i sekwencja partials są niespójne', $before);
+            }
+
+            if ($initialSizeChanged) {
+                $initialSize = self::number($requested['initialSize']);
+            } elseif ($sizeChanged) {
+                $requestedRemaining = self::number($requested['size']);
+                $initialSize = $requestedRemaining !== null
+                    ? $requestedRemaining / $remainingFraction
+                    : null;
+            } else {
+                $initialSize = $storedInitialSize;
+            }
+        } else {
+            if ($initialSizeChanged) {
+                $initialSize = self::number($requested['initialSize']);
+            } elseif ($sizeChanged) {
+                $initialSize = self::number($requested['size']);
+            } else {
+                $initialSize = $storedInitialSize ?? $storedSize;
+                if ($storedInitialSize !== null && $storedInitialSize > 0
+                    && $storedSize !== null && $storedSize > 0) {
+                    $sizeTolerance = max(1.0, abs($storedInitialSize)) * 1.0e-8;
+                    if (abs($storedInitialSize - $storedSize) > $sizeTolerance) {
+                        return self::closedTradeMetricsUnsupported('initialSize różni się od size, ale brak danych partials', $before);
+                    }
+                }
+            }
+        }
+        if ($initialSize === null || !is_finite($initialSize) || $initialSize <= 0) {
+            return self::closedTradeMetricsUnsupported(
+                $hasPartials ? 'brak poprawnego initialSize dla transakcji z częściowymi zamknięciami' : 'brak poprawnej wielkości',
+                $before
+            );
+        }
+
+        $entry = self::number($updated['entry'] ?? null);
+        if ($entry === null || $entry <= 0) {
+            return self::failure('bad_number', 'entry musi być skończoną liczbą dodatnią.', 422, self::tradeId($before));
+        }
+        $directionSign = self::directionSign($updated['dir'] ?? null);
+        if ($directionSign === null) {
+            return self::failure('invalid_direction', 'Kierunek musi być long albo short.', 422, self::tradeId($before));
+        }
+
+        $overrideValue = array_key_exists('resultOverride', $requested)
+            ? $requested['resultOverride']
+            : ($before['resultOverride'] ?? null);
+        $hasAggregateOverride = !self::isEmptyResult($overrideValue);
+        $aggregateOverride = null;
+        if ($hasAggregateOverride) {
+            $aggregateOverride = self::number($overrideValue);
+            if ($aggregateOverride === null) {
+                return self::closedTradeMetricsUnsupported('resultOverride nie jest liczbą', $before);
+            }
+        }
+        if (array_key_exists('resultOverride', $before) || array_key_exists('resultOverride', $requested)) {
+            $updated['resultOverride'] = $hasAggregateOverride ? self::roundTradeMetric((float) $aggregateOverride) : null;
+        }
+
+        $exitRaw = $updated['exit'] ?? null;
+        $exit = self::number($exitRaw);
+        $exitIsEmpty = self::isEmptyLevel($exitRaw)
+            || (is_string($exitRaw) && strtolower(trim($exitRaw)) === 'otwarta');
+        if (!$exitIsEmpty && ($exit === null || $exit <= 0)) {
+            return self::failure('bad_number', 'exit musi być liczbą dodatnią albo pustą.', 422, self::tradeId($before));
+        }
+
+        $entryFields = ['entry', 'dir', 'size', 'initialSize', 'exit'];
+        $pnlInputsChanged = false;
+        foreach ($entryFields as $field) {
+            if (array_key_exists($field, $requested)
+                && !self::sameTradeField($field, $before[$field] ?? null, $requested[$field])) {
+                $pnlInputsChanged = true;
+                break;
+            }
+        }
+        if (!$pnlInputsChanged && array_key_exists('partials', $requested)) {
+            $pnlInputsChanged = self::partialPnlInputsChanged($partials, $requested['partials']);
+        }
+
+        $partialResult = 0.0;
+        $remaining = $initialSize;
+        $updatedPartials = [];
+        if ($hasPartials) {
+            foreach ($partials as $index => $partial) {
+                $pct = $partialPercentages[$index];
+                $legSize = $remaining * $pct / 100;
+                if (!is_finite($legSize) || $legSize <= 0) {
+                    return self::closedTradeMetricsUnsupported('wielkość częściowej nogi przekracza zakres liczbowy', $before);
+                }
+
+                $priorResult = self::number($partial['result'] ?? null);
+                $manualOverride = $partial['resultOverride'] ?? false;
+                if (!is_bool($manualOverride)) {
+                    return self::closedTradeMetricsUnsupported('znacznik override częściowego zamknięcia jest nieprawidłowy', $before);
+                }
+                if ($manualOverride) {
+                    if ($priorResult === null) {
+                        return self::closedTradeMetricsUnsupported('wynik override częściowego zamknięcia jest nieprawidłowy', $before);
+                    }
+                    $legResult = $priorResult;
+                } else {
+                    $partialExit = self::number($partial['price'] ?? null);
+                    if ($partialExit !== null && $partialExit > 0) {
+                        $legResult = ($partialExit - $entry) * $legSize * $directionSign;
+                    } elseif ($priorResult !== null) {
+                        // Older UI versions stored manual leg results without an
+                        // override flag; keep that value and make its provenance explicit.
+                        $partial['resultOverride'] = true;
+                        $legResult = $priorResult;
+                    } else {
+                        return self::closedTradeMetricsUnsupported('brak ceny dla częściowego zamknięcia bez override', $before);
+                    }
+                }
+                if (!is_finite($legResult)) {
+                    return self::closedTradeMetricsUnsupported('wynik częściowej nogi przekracza zakres liczbowy', $before);
+                }
+
+                $partial['result'] = self::roundTradeMetric($legResult);
+                $partialResult += $partial['result'];
+                if (!is_finite($partialResult)) {
+                    return self::closedTradeMetricsUnsupported('suma częściowych wyników przekracza zakres liczbowy', $before);
+                }
+                $updatedPartials[] = $partial;
+                $remaining = max(0.0, $remaining - $legSize);
+                if (!is_finite($remaining) || $remaining <= 0) {
+                    return self::closedTradeMetricsUnsupported('częściowe zamknięcia nie pozostawiają dodatniej wielkości', $before);
+                }
+            }
+        }
+
+        if ($hasPartials
+            || array_key_exists('initialSize', $before)
+            || array_key_exists('initialSize', $requested)
+            || $sizeChanged) {
+            $updated['initialSize'] = self::tradeNumberText($initialSize);
+        }
+        $updated['size'] = self::tradeNumberText($hasPartials ? $remaining : $initialSize);
+        $updated['partials'] = $hasPartials ? $updatedPartials : $partials;
+        $updated['partialResult'] = $hasPartials ? self::roundTradeMetric($partialResult) : null;
+
+        if ($hasPartials) {
+            if ($hasAggregateOverride) {
+                $result = self::roundTradeMetric((float) $aggregateOverride);
+            } elseif ($exit !== null && $exit > 0) {
+                $finalLegResult = ($exit - $entry) * $remaining * $directionSign;
+                if (!is_finite($finalLegResult)) {
+                    return self::closedTradeMetricsUnsupported('wynik końcowej nogi przekracza zakres liczbowy', $before);
+                }
+                $result = self::roundTradeMetric($partialResult + $finalLegResult);
+            } elseif (!$pnlInputsChanged) {
+                $result = self::number($before['result'] ?? null);
+            } else {
+                return self::closedTradeMetricsUnsupported('brak ceny wyjścia dla pozostałej części transakcji', $before);
+            }
+        } elseif ($hasAggregateOverride) {
+            $result = self::roundTradeMetric((float) $aggregateOverride);
+        } elseif ($exit !== null && $exit > 0) {
+            $calculatedResult = ($exit - $entry) * $initialSize * $directionSign;
+            if (!is_finite($calculatedResult)) {
+                return self::closedTradeMetricsUnsupported('wynik przekracza zakres liczbowy', $before);
+            }
+            $result = self::roundTradeMetric($calculatedResult);
+        } else {
+            $result = self::number($before['result'] ?? null);
+        }
+        $updated['result'] = $result;
+
+        // Trade sizes are persisted in base units. Display-unit metadata is not
+        // multiplied here; risk uses the original position size, not the remainder.
+        $stopLossRaw = $updated['sl'] ?? null;
+        $stopLoss = self::isEmptyLevel($stopLossRaw) ? null : self::number($stopLossRaw);
+        $risk = $stopLoss !== null ? abs($entry - $stopLoss) * $initialSize : null;
+        if ($risk !== null && (!is_finite($risk) || $risk < 0)) {
+            return self::failure('bad_number', 'Ryzyko transakcji musi być skończoną liczbą nieujemną.', 422, self::tradeId($before));
+        }
+        $capital = 0.0;
+        foreach ((array) ($state['accounts'] ?? []) as $account) {
+            if (!is_array($account) || ($account['include'] ?? true) === false) {
+                continue;
+            }
+            $balance = self::number($account['balance'] ?? null) ?? 0.0;
+            $currency = strtoupper((string) ($account['currency'] ?? 'USDT'));
+            $fx = match ($currency) {
+                'EUR' => 1.08,
+                'PLN' => 0.25,
+                default => 1.0,
+            };
+            $capital += $balance * $fx;
+        }
+        $riskPct = $risk !== null && $capital > 0 ? $risk / $capital * 100 : null;
+        if (($riskPct !== null && !is_finite($riskPct))
+            || ($risk !== null && !is_finite($risk))) {
+            return self::failure('bad_number', 'Procent ryzyka musi być skończoną liczbą.', 422, self::tradeId($before));
+        }
+        $updated['risk'] = $risk === null ? null : self::roundTradeMetric($risk);
+        $updated['riskPct'] = $riskPct === null ? null : self::roundTradeMetric($riskPct);
+        $rawResult = self::number($result);
+        $r = $rawResult !== null && $risk !== null && $risk > 0 ? $rawResult / $risk : null;
+        if ($r !== null && !is_finite($r)) {
+            return self::closedTradeMetricsUnsupported('wielkość R przekracza zakres liczbowy', $before);
+        }
+        $updated['r'] = $r === null ? null : self::roundTradeMetric($r);
+
+        return $updated;
+    }
+
+    /**
+     * @param list<mixed> $beforePartials
+     */
+    private static function partialPnlInputsChanged(array $beforePartials, mixed $afterPartials): bool
+    {
+        if (!is_array($afterPartials) || !array_is_list($afterPartials)
+            || count($beforePartials) !== count($afterPartials)) {
+            return true;
+        }
+        foreach ($beforePartials as $index => $before) {
+            $after = $afterPartials[$index] ?? null;
+            if (!is_array($before) || !is_array($after)) {
+                return true;
+            }
+            foreach (['pct', 'price', 'resultOverride'] as $field) {
+                if (!self::sameTradeField($field === 'pct' ? 'size' : $field, $before[$field] ?? null, $after[$field] ?? null)) {
+                    return true;
+                }
+            }
+            if (($before['resultOverride'] ?? false) === true
+                && !self::sameTradeField('result', $before['result'] ?? null, $after['result'] ?? null)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function tradeId(array $trade): string
+    {
+        return trim((string) ($trade['id'] ?? ''));
+    }
+
+    private static function tradeNumberText(float $value): string
+    {
+        $text = rtrim(rtrim(number_format($value, 8, '.', ''), '0'), '.');
+        return $text === '' || $text === '-' ? '0' : $text;
+    }
+
+    private static function roundTradeMetric(float $value): float
+    {
+        return round($value, 2, PHP_ROUND_HALF_UP);
+    }
+
+    /**
+     * @return array{error:string,message:string,status:int,tradeId?:string}
+     */
+    private static function closedTradeMetricsUnsupported(string $reason, array $trade): array
+    {
+        return self::failure(
+            'closed_trade_metrics_unsupported',
+            'Nie można bezpiecznie przeliczyć metryk zamkniętej transakcji: ' . $reason . '.',
+            409,
+            self::tradeId($trade)
+        );
     }
 
     private static function domainFieldsChanged(array $before, array $after): bool

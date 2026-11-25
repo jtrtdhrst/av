@@ -917,26 +917,29 @@ async function main() {
   await expectToolError(at, 'update_trade', {
     tradeId, changes: { result: null }, idempotencyKey: idem('trade-reopen'),
   }, /edytowalne/i);
-  await expectToolError(at, 'update_trade', {
+  const closedEntryEdit = await call(at, 'update_trade', {
     tradeId, changes: { entry: 101 }, idempotencyKey: idem('trade-closed-entry'),
-  }, /zamkniętej transakcji/i);
-  await expectToolError(at, 'update_trade', {
+  });
+  assert.equal(closedEntryEdit.record.entry, '101');
+  assert.equal(closedEntryEdit.record.result, 18, 'korekta wejścia zamkniętej transakcji przelicza wynik');
+  assert.equal(closedEntryEdit.record.r, 1.5);
+  assert.equal(closedEntryEdit.record.risk, 12);
+  assert.equal(closedEntryEdit.record.closedAt, closed.record.closedAt, 'korekta nie zmienia closedAt');
+  const closedSessionEdit = await call(at, 'update_trade', {
     tradeId, changes: { session: 'Asia' }, idempotencyKey: idem('trade-closed-session'),
-  }, /zamkniętej transakcji/i);
-  await expectToolError(at, 'update_trade', {
-    tradeId, changes: { plan: false }, idempotencyKey: idem('trade-closed-plan'),
-  }, /zamkniętej transakcji/i);
+  });
+  assert.equal(closedSessionEdit.record.session, 'Asia');
   const closeReview = await call(at, 'update_trade', {
-    tradeId, expectedRevision: preservedMfeClosed.revision,
+    tradeId, expectedRevision: closedSessionEdit.revision,
     changes: { grade: 'B', note: 'Recenzja po zamknięciu' },
     idempotencyKey: idem('trade-closed-review'),
   });
   assert.deepEqual(closeReview.changes.slice().sort(), ['grade', 'mentor', 'note'].sort());
   const reviewedClosedTrade = stateA().trades.find((row) => row.id === tradeId);
-  assert.equal(reviewedClosedTrade.entry, '100');
+  assert.equal(reviewedClosedTrade.entry, '101');
   assert.equal(reviewedClosedTrade.exit, '110');
-  assert.equal(reviewedClosedTrade.result, 20);
-  assert.equal(reviewedClosedTrade.r, 2);
+  assert.equal(reviewedClosedTrade.result, 18);
+  assert.equal(reviewedClosedTrade.r, 1.5);
   assert.equal(reviewedClosedTrade.closedAt, closed.record.closedAt);
   assert.equal(reviewedClosedTrade.note, 'Recenzja po zamknięciu');
   const reviewedRead = await call(at, 'get_trade', { id: tradeId });

@@ -43,8 +43,8 @@ Legenda:
 | Plany dnia na pulpicie | ✅ | podgląd wszystkich planów przypisanych do dzisiejszej daty |
 | Makro-widget | ✅ | najbliższe wydarzenia ★★★, odświeżanie |
 | Alarm mentora | ✅ | na podstawie ostatnich transakcji |
-| Krzywa kapitału 30 dni | ✅ | liczona z transakcji |
-| Saldo portfela i lista kont | ✅ | suma sald kont włączonych do statystyk i % od kapitału startowego tylko przy kompletnych saldach bieżących i startowych; puste saldo nie jest traktowane jak zero; rozwinięcie karty pokazuje konta, kliknięcie prowadzi do „Konto i zasady” |
+| Krzywa kapitału 30 dni | ✅ | zrealizowane zdarzenia PnL według czasu partiala/zamknięcia, nie tylko dnia wejścia |
+| Saldo portfela i lista kont | ✅ | osobno suma ręcznych sald bieżących i kapitał obliczony = kapitał startowy + zrealizowane PnL (w tym partiale) + wpłaty − wypłaty; ręczne saldo i jego % od startu tylko przy kompletnych danych; puste wartości pozostają puste; rozwinięcie pokazuje konta |
 | Szybkie przejście do statystyk | ✅ | |
 
 ---
@@ -78,21 +78,21 @@ Legenda:
 | Filtry: wszystkie/zyskowne/stratne/otwarte | ✅ | |
 | Filtr oceny A/B/C | ✅ | |
 | Szukanie po parze/emocji/setupie | ✅ | |
-| Szczegóły transakcji | ✅ | wykres, MAE/MFE, checklist, notatka, mentor |
+| Szczegóły transakcji | ✅ | MAE/MFE, checklist, notatka, mentor; bez syntetycznego wykresu i kontrolek interwału (wykres playbooka pozostaje) |
 | Screeny przed/po | ✅ | upload, drag&drop, Ctrl+V; JPEG w stanie |
-| Dodanie transakcji | ✅ | formularz startuje pusty; wybór portfela i brokera (WEEX, BingX, VTMarkets, OKX, Bybit, MT4, MT5, Inny); SL jest obowiązkowy, TP opcjonalny; R:R jest elastyczne i dobierane do setupu; ręczna checklista nie ma minimalnego progu zapisu; ryzyko = \|entry − SL\| × size |
+| Dodanie transakcji | ✅ | formularz startuje pusty; wybór konta określa brokera; SL jest obowiązkowy, TP opcjonalny; R:R jest elastyczne i dobierane do setupu; ręczna checklista nie ma minimalnego progu zapisu; ryzyko = \|entry − SL\| × size |
+| Jednostka wielkości pozycji | ✅ | konto ustala jednostki bazowe, kwotę w walucie kwotowanej albo loty/kontrakty; wartości są normalizowane do kanonicznego `size` w jednostkach bazowych przy zapisie i ryzyku; loty wymagają jawnego mnożnika kontraktu |
 | Live P&L otwartej pozycji | ✅ | dziennik i szczegóły pokazują bieżący wynik oraz procent z notowań; brak notowań = status „Otwarta” |
 | Po zapisie | ✅ | formularz przełącza do dziennika i resetuje jego filtry |
 | Widoczność wpisów | ✅ | dziennik pokazuje wszystkie transakcje; „W statystykach” na koncie nadal filtruje statystyki, nie listę dziennika |
 | Pusty dziennik | ✅ | CTA „Dodaj transakcję” i „Giełdy i API” bez tekstu zastępczego; „Brak transakcji spełniających filtry” tylko przy aktywnym filtrze |
-| Edycja transakcji | ✅ | formularz wypełniony danymi, zachowuje dokładny ręczny wybór punktów checklisty |
-| Integralność zapisu transakcji | ✅ | wspólne `TradeRules`: API/MCP walidują przejście stanu, importer waliduje mapowany rekord; nowe transakcje ręczne wymagają SL, każdy znany wynik liczbowy (w tym 0) lub poprawny `closedAt` oznacza zamknięcie, nieznany czas pozostaje pusty, ID i wykonanie zamkniętych/importowanych wpisów są niezmienne |
+| Edycja transakcji | ✅ | formularz wypełniony danymi, zachowuje dokładny ręczny wybór punktów checklisty; zamknięte ręczne wykonania można korygować i przeliczać |
+| Integralność zapisu transakcji | ✅ | wspólne `TradeRules`: API/MCP walidują przejście stanu, importer waliduje mapowany rekord; nowe transakcje ręczne wymagają SL, każdy znany wynik liczbowy (w tym 0) lub poprawny `closedAt` oznacza zamknięcie, nieznany czas pozostaje pusty; zewnętrzne ID i pola wykonania importowanych wpisów są chronione, a ręczne zamknięte wpisy można poprawiać; jawny `resultOverride` zastępuje przeliczony wynik łączny |
 | Rewizja i no-op | ✅ | zapis bez semantycznej zmiany zachowuje `revision` i `updatedAt`; nie tworzy audytu mutacji |
 | Weryfikacja źródła danych | ✅ | `source` przesłane przez klienta nie omija wymogu SL; import waliduje każdy zmapowany rekord i może zachować brak SL tylko wtedy, gdy giełda go nie dostarczyła |
 | Atomowość i czas importu | ✅ | rollback obejmuje batch połączenia, stan, rewizję i markery; CI pokrywa 501 rekordów, źródłowe `closedAt` i UTC `importedAt`; limit stron lub brak kursora OKX nie kończą się częściowym sukcesem |
 | Usunięcie transakcji | ✅ | potwierdzenie, kopia rekordu w `state.trash` (wymagane przez `TradeRules`), zapis w MySQL i rollback przy błędzie |
-| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; częściowe TP 25/50/75%, zabezpieczenie SL na wejściu (BE) — SL równy wejściu jest poprawny, wcześniejsze zamknięcie; każda część trafia do `partials`, a końcowy wynik sumuje części; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
-| Wykres transakcji | ✅ | interwały 5m/15m/1h/4h przełączane w nagłówku; broker z transakcji; punkt wejścia przesunięty w lewo, żeby pokazać historię przed wejściem |
+| Zamknięcie otwartej pozycji | ✅ | cena wyjścia lub wynik ręczny, R, czas trwania; częściowe TP 25/50/75%, zabezpieczenie SL na wejściu (BE) — SL równy wejściu jest poprawny, wcześniejsze zamknięcie; każda część trafia do `partials`, wynik jest przeliczany przy korekcie, a jawny `resultOverride` zastępuje sumę; pominięte MFE zachowuje pomiar, jawne `null` go czyści |
 | Eksport CSV | ✅ | średnik + BOM (Excel PL) |
 | Import CSV z giełdy | ✅ | parser WEEX/OKX/BingX/Bybit/MT, podgląd, deduplikacja; pomija wiersz bez PnL i bez danych do jego wyliczenia; MAE/MFE, opłaty i czas pozostają puste, gdy źródło ich nie zawiera |
 | Tryb ochronny (limit strat) | ✅ | blokada, countdown, obejście z powodem |
@@ -126,7 +126,7 @@ Import XLS/XLSX nie jest czytany — zapisz jako CSV (komunikat w UI).
 | Szybkie kwoty | ✅ | saldo, dźwignia, ryzyko |
 | Portfel i MM z planu | ✅ | wybór konta ustawia saldo, dźwignię i `settings.maxRisk`; wartości można zmienić ręcznie, wybór zapisany w `state.calc` |
 | Auto SL/TP z wybranym R:R | ✅ | 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własna wartość; ręcznie wpisana cena wejścia jest zachowywana, a SL/TP liczone są od niej; przy pustym wejściu używana jest cena live; kierunek Long/Short |
-| Tryb odwrotny — wielkość kapitału | ✅ | „Zaproponuj wielkość kapitału” z entry i SL liczy depozyt (krypto) albo loty (FX) dla zadanego ryzyka i dźwigni |
+| Tryb odwrotny — wielkość pozycji | ✅ | limit straty = saldo × ryzyko; entry i SL wyznaczają ilość bazową (krypto) albo loty (FX/indeksy) oraz notional/depozyt; loty i wartość pipsa/punktu trzeba zweryfikować ze specyfikacją brokera |
 | Uśrednianie wejść | ✅ | wiele cen z procentowym podziałem kapitału, ważona średnia i przycisk ustawienia jej jako ceny wejścia |
 | Wiele take profitów | ✅ | poziomy TP z procentem pozycji, łączny zysk, ważone R:R i pokrycie pozycji |
 | Reset | ✅ | czyści wybór portfela, R:R i wartości |
@@ -146,7 +146,7 @@ Wyniki kalkulatora nie są zapisywane jako transakcja — to narzędzie pomocnic
 | Max obsunięcie | ✅ | z krzywej kapitału |
 | % ze SL, zgodność z planem, opłaty | ✅ | przy 0 transakcji „—”; opłaty 0,00 bez ujemnego zera |
 | Krzywa kapitału | ✅ | SVG z realnych danych |
-| Kalendarz PnL | ✅ | własny, niezależny zakres 7 dni / 30 dni / miesiąc i nawigacja poprzedni/następny/bieżący; liczby dni w komórkach, kolor = wynik dnia |
+| Kalendarz PnL | ✅ | własny, niezależny zakres 7 dni / 30 dni / miesiąc; partiale przypisuje do `partials[].at`, końcową część wyniku do `closedAt` (fallback: data transakcji); liczby dni i kolor wyniku |
 | Wynik wg oceny | ✅ | bez pochwał przy braku danych |
 | Checklista a wynik | ✅ | etykiety z długości checklisty użytkownika, nie stałe 7/7 |
 | Koszt błędów | ✅ | pusty stan bez „Tak trzymaj” |

@@ -130,10 +130,14 @@ final class WriteSchemas
         return self::tool(['tradeId', 'changes', 'idempotencyKey'], self::baseWithRevision() + [
             'tradeId' => self::tradeId(),
             'changes' => self::changes(
-                'Pola dziennika do zmiany. Wyniku, R, ceny wyjścia i czasu trwania nie zmieniaj przez update_trade — użyj close_trade. MAE/MFE przyjmują nieujemną liczbę lub null (wyczyszczenie). Pola wykonania zamkniętej lub importowanej transakcji są niezmienne; pozostają pola oceny i recenzji. Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.',
+                'Pola dziennika do zmiany. Dla zamkniętej transakcji ręcznej obsługiwane korekty wykonania (entry, dir, sl, tp, size) przeliczają wynik i R na serwerze, także z uwzględnieniem partials. Transakcje importowane lub z zewnętrznym ID pozostają tylko do odczytu w polach wykonania; recenzja pozostaje edytowalna. Nie zmieniaj exit, result, r, durationMin ani closedAt przez update_trade. W zamkniętej transakcji ręcznej resultOverride przyjmuje wyłącznie null: czyści agregatowy override, po czym serwer przelicza wynik; MCP nie może ustawić nowego override. MAE/MFE przyjmują nieujemną liczbę lub null (wyczyszczenie). Emocje: Spokój, Skupienie, Pewność, Nuda, Zmęczenie, Strach, FOMO, Złość, Chciwość.',
                 [
                     'mae' => ['type' => ['number', 'null'], 'minimum' => 0],
                     'mfe' => ['type' => ['number', 'null'], 'minimum' => 0],
+                    'resultOverride' => [
+                        'type' => 'null',
+                        'description' => 'Tylko dla zamkniętej transakcji ręcznej i wyłącznie null: usuwa agregatowy override; serwer ponownie oblicza wynik. MCP nie może ustawić nowej wartości.',
+                    ],
                 ]
             ),
         ]);
@@ -142,8 +146,13 @@ final class WriteSchemas
     public static function inputCloseTrade(): array
     {
         return self::tool(['tradeId', 'idempotencyKey'], self::baseWithRevision() + [
-            'tradeId' => self::tradeId(),
-            'exitPrice' => ['type' => 'number', 'description' => 'Cena wyjścia. Wynik, R i czas liczy serwer.'],
+            'tradeId' => [
+                'type' => 'string',
+                'minLength' => 1,
+                'maxLength' => 128,
+                'description' => 'ID ręcznej otwartej pozycji. close_trade nie służy do korekty transakcji już zamkniętej ani importowanej.',
+            ],
+            'exitPrice' => ['type' => 'number', 'description' => 'Cena wyjścia ręcznej otwartej pozycji. Wynik, R i czas liczy serwer.'],
             'result' => ['type' => 'number', 'description' => 'Wynik USDT, jeśli znany. Bez niego liczony z ceny wyjścia.'],
             'comment' => self::text(500),
             'mfe' => ['type' => ['number', 'null'], 'minimum' => 0, 'description' => 'Nieujemny MFE albo null, gdy pomiaru brak.'],

@@ -699,10 +699,14 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
   <details class="card" id="dashBal" style="padding:16px 20px;margin-bottom:16px">
     <summary aria-label="Rozwiń podgląd kont" style="display:flex;align-items:center;gap:14px">
       <div style="width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex-shrink:0;background:var(--winS);color:var(--win)"><svg class="i"><use href="#i-book"/></svg></div>
-      <div style="flex:1;min-width:0"><b>Saldo portfela</b><p class="mut" id="dashBalSub" style="font-size:13.5px;margin-top:2px;line-height:1.45"></p></div>
-      <div class="mono" id="dashBalVal" style="font-weight:800;white-space:nowrap;text-align:right"></div>
+      <div style="flex:1;min-width:0"><b>Portfel</b><p class="mut" id="dashBalSub" style="font-size:13.5px;margin-top:2px;line-height:1.45"></p></div>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        <div style="text-align:right"><small class="mut">Saldo ręczne</small><div class="mono" id="dashBalVal" style="font-weight:800;white-space:nowrap"></div></div>
+        <div style="text-align:right"><small class="mut">Kapitał obliczony</small><div class="mono" id="dashEquityVal" style="font-weight:800;white-space:nowrap"></div></div>
+      </div>
       <svg class="i dash-chevron" style="color:var(--dim)"><use href="#i-arrow"/></svg>
     </summary>
+    <p class="hint" id="dashEquitySub" style="margin:10px 0 0">Kapitał startowy + wynik z zamknięć + wpłaty i wypłaty. Saldo ręczne pozostaje osobne.</p>
     <div class="dash-account-list" id="dashAccountList"></div>
     <button type="button" class="btn g sm" data-go="ust">Konto i zasady</button>
   </details>
@@ -725,7 +729,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
 <div class="strip" data-go="akad"><svg class="i" style="color:var(--alpha)"><use href="#i-cap"/></svg><span id="liveTop"></span><span class="sep" id="liveSep"></span><span id="consultTopWrap"></span><span class="sep"></span><span>Kurs od A do Z: <b id="courseTop">64%</b></span><span class="link" style="margin-left:auto">Akademia <svg class="i" style="width:14px;height:14px"><use href="#i-arrow"/></svg></span></div>
   <div class="grid sec" style="grid-template-columns:1.3fr 1fr">
     <div class="card ins alert" id="dashMentor"><div class="sech" style="margin:0"><span class="tag alert">Mentor · alarm</span><span class="link" data-go="mentor">Wszystkie uwagi <svg class="i" style="width:14px;height:14px"><use href="#i-arrow"/></svg></span></div><h3>To wygląda na odgrywanie się</h3><p>12 min po stracie na ETH pojawiła się pozycja SOL 2,3× większa niż zwykle. Rynek nie wie o stracie.</p><div class="step"><b>Krok na dziś:</b> zamknij platformę i zapisz, co było w głowie przy ostatnim wejściu.</div></div>
-    <div class="card" style="cursor:pointer" data-go="stat"><div class="sech" style="margin:0"><div class="lbl">Kapitał · 30 dni</div><span class="win mono" style="font-weight:700" id="dash30">+8,2%</span></div>
+    <div class="card" style="cursor:pointer" data-go="stat"><div class="sech" style="margin:0"><div class="lbl">Wynik · 90 dni</div><span class="win mono" style="font-weight:700" id="dash30">+8,2%</span></div>
       <svg class="spark" viewBox="0 0 300 90" width="100%" height="90" preserveAspectRatio="none"><defs><linearGradient id="sp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--alpha)" stop-opacity=".35"/><stop offset="1" style="stop-color:var(--alpha)" stop-opacity="0"/></linearGradient></defs><path id="dashSparkFill" d="M0,70 L25,64 L50,67 L75,52 L100,48 L125,55 L150,40 L175,44 L200,58 L225,36 L250,28 L275,22 L300,30 L300,90 L0,90Z" fill="url(#sp)"/><path id="dashSparkLine" d="M0,70 L25,64 L50,67 L75,52 L100,48 L125,55 L150,40 L175,44 L200,58 L225,36 L250,28 L275,22 L300,30" fill="none" style="stroke:var(--alpha)" stroke-width="2.2"/></svg>
       <div class="grid g3" style="margin-top:12px;gap:8px"><div><div class="lbl">Wynik</div><div class="win" style="font-weight:800;font-size:18px;margin-top:4px" id="dashResult">+412,80</div></div><div><div class="lbl">Skuteczność</div><div style="font-weight:800;font-size:18px;margin-top:4px" id="dashWr">51%</div></div><div><div class="lbl">Ocena A</div><div style="font-weight:800;font-size:18px;margin-top:4px" id="dashGradeA">45%</div></div></div>
     </div>
@@ -846,12 +850,20 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
           <div class="grid g4" style="margin-top:4px">
             <div style="grid-column:span 2"><span class="label">Para</span><input class="input" id="ntPair" placeholder="np. BTC/USDT"></div>
             <div style="grid-column:span 2"><span class="label">Kierunek</span><div class="chips sel" id="ntDir"><span class="chip on" data-d="l" style="flex:1;text-align:center">LONG</span><span class="chip" data-d="s" style="flex:1;text-align:center">SHORT</span></div></div>
-            <div style="grid-column:span 2"><span class="label">Portfel</span><select class="input" id="ntAccount" aria-label="Portfel"></select></div>
-            <div style="grid-column:span 2"><span class="label">Broker</span><select class="input" id="ntBroker" aria-label="Broker"></select></div>
+            <div style="grid-column:span 4"><span class="label">Portfel</span><select class="input" id="ntAccount" aria-label="Portfel"></select></div>
             <div><span class="label">Wejście</span><input class="input mono" id="ntEntry" placeholder="cena wejścia"></div>
-            <div><span class="label">Wielkość</span><input class="input mono" id="ntSize" placeholder="wielkość pozycji"></div>
+            <div><span class="label" id="ntSizeLabel">Wielkość · jednostki bazowe</span><input class="input mono" id="ntSize" placeholder="wielkość pozycji"><div class="hint" id="ntSizeHint"></div></div>
             <div><span class="label">Stop loss</span><input class="input mono" id="ntSl" placeholder="cena SL"></div>
             <div><span class="label">Take profit</span><input class="input mono" id="ntTp" placeholder="cena TP"></div>
+          </div>
+          <div class="card flat" id="ntExitWrap" style="display:none;margin-top:12px;padding:12px">
+            <span class="label">Cena wyjścia zamkniętej pozycji</span>
+            <input class="input mono" id="ntExit" inputmode="decimal" placeholder="cena zamknięcia">
+          </div>
+          <div class="card flat" id="ntResultOverrideWrap" style="display:none;margin-top:12px;padding:12px">
+            <span class="label">Ręczny wynik całej zamkniętej pozycji (USDT, opcjonalnie)</span>
+            <input class="input mono" id="ntResultOverride" inputmode="decimal" placeholder="Puste pole = przelicz z cen zamknięcia">
+            <div class="hint">Wpisana wartość zastępuje wynik wyliczony. Wyczyść pole, aby wrócić do automatycznego przeliczenia.</div>
           </div>
           <span class="label">Setup z playbooka</span><div class="chips sel" id="ntSetup"><span class="chip" data-s="Retest wybicia">Retest wybicia</span><span class="chip" data-s="Odrzucenie oporu">Odrzucenie oporu</span><span class="chip" data-s="Range">Range</span><span class="chip" data-s="Pullback w trendzie">Pullback w trendzie</span><span class="chip" data-s="Wybicie bez retestu">Wybicie bez retestu</span><span class="chip on" data-s="Bez setupu">Bez setupu</span></div>
           <div class="step" id="ntRisk">Limit: <b>—</b> · Ryzyko: <b>—</b> · R:R <b>—</b> · <span class="link" data-go="kalk" style="font-size:13.5px">Kalkulator Alpha</span></div>
@@ -921,7 +933,7 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
         <div id="cRRCustomWrap" style="display:none"><span class="label" style="margin-top:0">Własne R:R (1:x)</span><input class="input mono" id="cRRCustom" inputmode="decimal" placeholder="np. 1,2"></div>
       </div>
       <div style="display:flex;gap:10px;margin-top:14px"><button class="btn p" id="cAuto" style="flex:1">Zaproponuj SL i TP (1:3)</button><button class="btn g" id="cReset"><svg class="i"><use href="#i-sync"/></svg>Reset</button></div>
-      <div style="display:flex;gap:10px;margin-top:10px"><button class="btn g" id="cSize" style="flex:1">Zaproponuj wielkość kapitału</button></div>
+      <div style="display:flex;gap:10px;margin-top:10px"><button class="btn g" id="cSize" style="flex:1">Oblicz wielkość pozycji z ryzyka</button></div>
       <div class="card flat" style="margin-top:14px">
         <div class="sech" style="margin:0"><h3>Uśrednianie wejść</h3><span class="link" id="addAvg">+ Dodaj wejście</span></div>
         <div id="avgRows" style="margin-top:8px"></div>
@@ -1305,14 +1317,15 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
     </div>
   </div>
   <div class="card sec"><div class="sech"><div><h2>Konta i kapitał</h2><p class="mut" style="font-size:13.5px;margin-top:4px">Na tej podstawie liczą się ryzyko, statystyki i zestawienie do PIT-38.</p></div><button class="btn p sm" id="addAcc"><svg class="i"><use href="#i-plus"/></svg>Dodaj konto</button></div>
-    <div style="overflow-x:auto"><table class="accounts-table"><thead><tr><th>Konto</th><th>Typ</th><th>Waluta</th><th class="acc-start" style="text-align:right">Kapitał startowy</th><th>Od</th><th class="acc-bal" style="text-align:right">Saldo</th><th style="text-align:right">Wynik</th><th>Dźwignia</th><th>W statystykach</th></tr></thead><tbody id="accBody">
-      <tr><td><b>WEEX</b> <span class="dim" style="font-size:12px">· główne</span></td><td class="mut">Futures</td><td class="mono">USDT</td><td class="mono" style="text-align:right">1 500,00</td><td class="mono dim">01.03.2026</td><td class="mono" style="text-align:right">1 812,40</td><td class="mono win" style="text-align:right">+20,8%</td><td class="mono">10×</td><td><div class="toggle on"></div></td></tr>
-      <tr><td><b>OKX</b></td><td class="mut">Spot · długi termin</td><td class="mono">USDT</td><td class="mono" style="text-align:right">500,00</td><td class="mono dim">15.04.2026</td><td class="mono" style="text-align:right">600,40</td><td class="mono win" style="text-align:right">+20,1%</td><td class="mono">1×</td><td><div class="toggle on"></div></td></tr>
-      <tr><td><b>MT5 · demo</b></td><td class="mut">Forex · ćwiczenia</td><td class="mono">USD</td><td class="mono" style="text-align:right">10 000,00</td><td class="mono dim">01.10.2026</td><td class="mono" style="text-align:right">9 640,00</td><td class="mono loss" style="text-align:right">−3,6%</td><td class="mono">30×</td><td><div class="toggle"></div></td></tr>
+    <div style="overflow-x:auto"><table class="accounts-table"><thead><tr><th>Konto</th><th>Typ</th><th>Waluta</th><th>Jednostka pozycji</th><th class="acc-start" style="text-align:right">Kapitał startowy</th><th>Od</th><th class="acc-bal" style="text-align:right">Saldo</th><th style="text-align:right">Wynik</th><th>Dźwignia</th><th>W statystykach</th></tr></thead><tbody id="accBody">
+      <tr><td><b>WEEX</b> <span class="dim" style="font-size:12px">· główne</span></td><td class="mut">Futures</td><td class="mono">USDT</td><td class="mut">Jednostki bazowe</td><td class="mono" style="text-align:right">1 500,00</td><td class="mono dim">01.03.2026</td><td class="mono" style="text-align:right">1 812,40</td><td class="mono win" style="text-align:right">+20,8%</td><td class="mono">10×</td><td><div class="toggle on"></div></td></tr>
+      <tr><td><b>OKX</b></td><td class="mut">Spot · długi termin</td><td class="mono">USDT</td><td class="mut">Jednostki bazowe</td><td class="mono" style="text-align:right">500,00</td><td class="mono dim">15.04.2026</td><td class="mono" style="text-align:right">600,40</td><td class="mono win" style="text-align:right">+20,1%</td><td class="mono">1×</td><td><div class="toggle on"></div></td></tr>
+      <tr><td><b>MT5 · demo</b></td><td class="mut">Forex · ćwiczenia</td><td class="mono">USD</td><td class="mut">Jednostki bazowe</td><td class="mono" style="text-align:right">10 000,00</td><td class="mono dim">01.10.2026</td><td class="mono" style="text-align:right">9 640,00</td><td class="mono loss" style="text-align:right">−3,6%</td><td class="mono">30×</td><td><div class="toggle"></div></td></tr>
     </tbody></table></div>
     <div id="accForm" style="display:none;margin-top:16px" class="card flat"><h3>Nowe konto</h3>
-      <div class="grid g4"><div><span class="label">Nazwa</span><input class="input" id="accName" placeholder="np. Bybit swing"></div><div><span class="label">Giełda / broker</span><select class="input" id="accExchange"><option>WEEX</option><option>OKX</option><option>BingX</option><option>Bybit</option><option>MetaTrader 4</option><option>MetaTrader 5</option><option>Prop firma</option><option>Inne</option></select></div><div><span class="label">Typ</span><select class="input" id="accType"><option>Futures</option><option>Spot</option><option>Forex / CFD</option><option>Prop challenge</option><option>Demo</option></select></div><div><span class="label">Waluta</span><select class="input" id="accCurrency"><option>USDT</option><option>USD</option><option>EUR</option><option>PLN</option></select></div>
-      <div><span class="label">Kapitał startowy</span><input class="input mono" id="accStart" placeholder="0,00"></div><div><span class="label">Data startu</span><input class="input mono" id="accDate" placeholder="dd.mm.rrrr"></div><div><span class="label">Domyślna dźwignia</span><input class="input mono" id="accLev" placeholder="10×"></div><div><span class="label">Cel konta</span><input class="input" id="accGoal" placeholder="np. +5% / mies."></div></div>
+       <div class="grid g4"><div><span class="label">Nazwa</span><input class="input" id="accName" placeholder="np. Bybit swing"></div><div><span class="label">Giełda / broker</span><select class="input" id="accExchange"><option>WEEX</option><option>OKX</option><option>BingX</option><option>Bybit</option><option>MetaTrader 4</option><option>MetaTrader 5</option><option>Prop firma</option><option>Inne</option></select></div><div><span class="label">Typ</span><select class="input" id="accType"><option>Futures</option><option>Spot</option><option>Forex / CFD</option><option>Prop challenge</option><option>Demo</option></select></div><div><span class="label">Waluta</span><select class="input" id="accCurrency"><option>USDT</option><option>USD</option><option>EUR</option><option>PLN</option></select></div>
+       <div><span class="label">Kapitał startowy</span><input class="input mono" id="accStart" placeholder="0,00"></div><div><span class="label">Data startu</span><input class="input mono" id="accDate" placeholder="dd.mm.rrrr"></div><div><span class="label">Domyślna dźwignia</span><input class="input mono" id="accLev" placeholder="10×"></div><div><span class="label">Cel konta</span><input class="input" id="accGoal" placeholder="np. +5% / mies."></div>
+       <div><span class="label">Jednostka wielkości</span><select class="input" id="accSizeUnit"><option value="units">Jednostki bazowe</option><option value="quote">Kwota w walucie kwotowanej</option><option value="lots">Loty / kontrakty</option></select></div><div id="accContractWrap" style="display:none"><span class="label">Jednostek bazowych na lot</span><input class="input mono" id="accContractSize" inputmode="decimal" placeholder="np. 100000"></div></div>
       <button class="btn p sm" style="margin-top:14px" id="saveAcc">Zapisz konto</button></div>
     <h3 style="margin-top:24px">Wpłaty i wypłaty</h3>
     <div style="overflow-x:auto"><table><thead><tr><th>Data</th><th>Konto</th><th>Operacja</th><th style="text-align:right">Kwota</th><th style="text-align:right">W walucie fiat</th><th>Do PIT-38</th></tr></thead><tbody id="flowBody">

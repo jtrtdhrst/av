@@ -499,7 +499,7 @@
   AV.renderWeekly = () => {
     const s = AV.state;
     const from = AV.startOfDay(AV.addDays(new Date(), -7));
-    const trades = AV.closedTrades(s).filter((t) => new Date(t.date) >= from);
+    const trades = AV.rangeTrades(s, 8);
     const st = AV.computeStats(trades, s);
     const best = st.byEmotion[0], worst = st.byEmotion[st.byEmotion.length - 1];
     const a = st.byGrade.find((g) => g.grade === 'A');
@@ -875,7 +875,13 @@
     const s = AV.state;
     const events = AV.buildEvents().filter((e) => e.imp === 3);
     const days = new Set(events.map((e) => AV.dateKey(new Date(e.date))));
-    const trades = AV.closedTrades(s).filter((t) => days.has(AV.dateKey(new Date(t.date))));
+    const trades = AV.includedTrades(s).flatMap((trade) => {
+      const realized = AV.tradeRealizedEvents(trade)
+        .filter((event) => event.dateKey && days.has(event.dateKey));
+      return realized.length
+        ? [{ ...trade, result: realized.reduce((sum, event) => sum + event.result, 0) }]
+        : [];
+    });
     const net = trades.reduce((a, t) => a + AV.num(t.result), 0);
     const wr = trades.length ? trades.filter((t) => t.result > 0).length / trades.length * 100 : 0;
     const noSL = trades.filter((t) => t.sl === 'brak').length;
@@ -1321,7 +1327,18 @@
     const s = AV.state;
     AV.setHTML('#accBody', s.accounts.map((a) => {
       const pct = a.start ? (a.balance - a.start) / a.start * 100 : 0;
-      return '<tr><td><b>' + AV.esc(a.name) + '</b> <span class="dim" style="font-size:12px">' + (a.primary ? '· główne' : '') + (a.primary ? '' : ' <span class="link" data-acc-del="' + a.id + '">usuń</span>') + '</span></td><td class="mut">' + AV.esc(a.type) + '</td><td class="mono">' + AV.esc(a.currency) + '</td><td class="mono" style="text-align:right"><input class="input mono" data-acc-start="' + AV.attr(a.id) + '" value="' + AV.attr(a.start ? String(a.start) : '') + '" inputmode="decimal" aria-label="Kapitał startowy" style="text-align:right;padding:6px 8px"></td><td class="mono dim">' + AV.esc(a.date) + '</td><td class="mono" style="text-align:right"><input class="input mono" data-acc-balance="' + AV.attr(a.id) + '" value="' + AV.attr(a.balance === 0 ? '0' : String(a.balance || '')) + '" inputmode="decimal" aria-label="Saldo" style="text-align:right;padding:6px 8px"></td><td class="mono ' + (pct >= 0 ? 'win' : 'loss') + '" style="text-align:right">' + AV.signed(pct, 1, '%') + '</td><td class="mono">' + AV.esc(a.lev) + '</td><td><div class="toggle ' + (a.include ? 'on' : '') + '" data-acc-inc="' + a.id + '"></div></td></tr>';
+      const id = AV.attr(a.id);
+      const unit = ['units', 'quote', 'lots'].includes(a.sizeUnit) ? a.sizeUnit : 'units';
+      const contractSize = a.contractSize == null ? '' : String(a.contractSize);
+      const unitOptions = [
+        ['units', 'Jednostki bazowe'],
+        ['quote', 'Kwota w walucie kwotowanej'],
+        ['lots', 'Loty / kontrakty']
+      ].map(([value, label]) => '<option value="' + value + '"' + (unit === value ? ' selected' : '') + '>' + label + '</option>').join('');
+      const contractInput = unit === 'lots'
+        ? '<input class="input mono" data-acc-contract="' + id + '" value="' + AV.attr(contractSize) + '" inputmode="decimal" aria-label="Jednostek bazowych na lot" style="min-width:150px;padding:6px 8px">'
+        : '';
+      return '<tr><td><b>' + AV.esc(a.name) + '</b> <span class="dim" style="font-size:12px">' + (a.primary ? '· główne' : '') + (a.primary ? '' : ' <span class="link" data-acc-del="' + id + '">usuń</span>') + '</span></td><td class="mut">' + AV.esc(a.type) + '</td><td class="mono">' + AV.esc(a.currency) + '</td><td><select class="input" data-acc-unit="' + id + '" aria-label="Jednostka pozycji" style="min-width:180px;padding:6px 8px">' + unitOptions + '</select>' + contractInput + '</td><td class="mono" style="text-align:right"><input class="input mono" data-acc-start="' + id + '" value="' + AV.attr(a.start ? String(a.start) : '') + '" inputmode="decimal" aria-label="Kapitał startowy" style="text-align:right;padding:6px 8px"></td><td class="mono dim">' + AV.esc(a.date) + '</td><td class="mono" style="text-align:right"><input class="input mono" data-acc-balance="' + id + '" value="' + AV.attr(a.balance === 0 ? '0' : String(a.balance || '')) + '" inputmode="decimal" aria-label="Saldo" style="text-align:right;padding:6px 8px"></td><td class="mono ' + (pct >= 0 ? 'win' : 'loss') + '" style="text-align:right">' + AV.signed(pct, 1, '%') + '</td><td class="mono">' + AV.esc(a.lev) + '</td><td><div class="toggle ' + (a.include ? 'on' : '') + '" data-acc-inc="' + id + '"></div></td></tr>';
     }).join(''));
   };
 

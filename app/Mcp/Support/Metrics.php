@@ -43,6 +43,7 @@ final class Metrics
     public static function summarize(array $trades): array
     {
         $trades = self::closed($trades);
+        $trades = self::collapseMetricEvents($trades);
         $n = count($trades);
         $wins = 0;
         $losses = 0;
@@ -105,13 +106,15 @@ final class Metrics
     {
         $buckets = [];
         foreach (self::closed($trades) as $trade) {
-            $value = $key($trade);
-            $label = $value === null || $value === '' ? null : $value;
-            $id = $label ?? '__none__';
-            if (!isset($buckets[$id])) {
-                $buckets[$id] = ['items' => [], 'label' => $label];
+            foreach (self::groupItems($trade) as $item) {
+                $value = $key($item);
+                $label = $value === null || $value === '' ? null : $value;
+                $id = $label ?? '__none__';
+                if (!isset($buckets[$id])) {
+                    $buckets[$id] = ['items' => [], 'label' => $label];
+                }
+                $buckets[$id]['items'][] = $item;
             }
-            $buckets[$id]['items'][] = $trade;
         }
 
         $rows = [];
@@ -136,15 +139,20 @@ final class Metrics
         $from = null;
         $to = null;
         foreach ($trades as $trade) {
-            $key = Dates::dateKey((string) ($trade['date'] ?? ''));
-            if ($key === null) {
-                continue;
-            }
-            if ($from === null || $key < $from) {
-                $from = $key;
-            }
-            if ($to === null || $key > $to) {
-                $to = $key;
+            $dates = is_array($trade['__metricDates'] ?? null)
+                ? $trade['__metricDates']
+                : [(string) ($trade['date'] ?? '')];
+            foreach ($dates as $date) {
+                $key = Dates::dateKey((string) $date);
+                if ($key === null) {
+                    continue;
+                }
+                if ($from === null || $key < $from) {
+                    $from = $key;
+                }
+                if ($to === null || $key > $to) {
+                    $to = $key;
+                }
             }
         }
 
@@ -158,6 +166,22 @@ final class Metrics
      */
     public static function range(array $trades, ?string $from, ?string $to, string $fromField = 'from', string $toField = 'to'): array
     {
+        return self::projectRange($trades, $from, $to, $fromField, $toField, true, false);
+    }
+
+    /**
+     * Realized PnL in Europe/Warsaw date range, kept to one sample per trade.
+     * Open positions with dated partial closes contribute only those realized legs.
+     */
+    private static function projectRange(
+        array $trades,
+        ?string $from,
+        ?string $to,
+        string $fromField,
+        string $toField,
+        bool $preserveUnrealized,
+        bool $aggregateEvents
+    ): array {
         $fromTs = null;
         $toTs = null;
         if ($from !== null && trim($from) !== '') {
@@ -178,21 +202,205 @@ final class Metrics
             throw new \InvalidArgumentException('Pole from nie może być późniejsze niż to.');
         }
 
-        return array_values(array_filter($trades, static function (array $trade) use ($fromTs, $toTs): bool {
-            $raw = (string) ($trade['date'] ?? '');
-            $ts = Dates::timestamp($raw);
-            if ($ts === null) {
-                return $fromTs === null && $toTs === null;
-            }
-            if ($fromTs !== null && $ts < $fromTs) {
-                return false;
-            }
-            if ($toTs !== null && $ts >= $toTs) {
-                return false;
+        $window = [];
+        foreach ($trades as $index => $trade) {
+            if (!is_array($trade)) {
+                continue;
             }
 
-            return true;
-        }));
+            $events = self::realizedEvents($trade);
+            $matched = [];
+            foreach ($events as $event) {
+                if (self::timestampInRange($event['date'], $fromTs, $toTs)) {
+                    $matched[] = $event;
+                }
+            }
+            if ($matched !== []) {
+                usort($matched, static fn (array $a, array $b): int =>
+                    (Dates::timestamp($a['date']) ?? 0) <=> (Dates::timestamp($b['date']) ?? 0)
+                );
+                $tradeKey = (string) $index . '#' . (string) ($trade['id'] ?? '');
+                if (!$aggregateEvents) {
+                    foreach ($matched as $event) {
+                        $projected = $trade;
+                        $projected['result'] = $event['result'];
+                        $projected['date'] = $event['date'];
+                        $projected['__metricTradeKey'] = $tradeKey;
+                        $projected['__metricEvent'] = true;
+                        $projected['__metricRealized'] = true;
+                        $window[] = $projected;
+                    }
+                    continue;
+                }
+
+                $projected = $trade;
+                $projected['result'] = array_sum(array_column($matched, 'result'));
+                // Keep entry-time semantics for trade attributes; date-range
+                // metadata and PnL grouping use the attached realization dates.
+                $projected['date'] = (string) ($trade['date'] ?? $matched[0]['date']);
+                $projected['__metricTradeKey'] = $tradeKey;
+                $projected['__metricDates'] = array_values(array_map(
+                    static fn (array $event): string => $event['date'],
+                    $matched
+                ));
+                $projected['__metricEvents'] = array_values(array_map(
+                    static fn (array $event): array => [
+                        'date' => $event['date'],
+                        'result' => $event['result'],
+                        'kind' => $event['kind'],
+                    ],
+                    $matched
+                ));
+                $projected['__metricRealized'] = true;
+                $window[] = $projected;
+                continue;
+            }
+
+            // Keep the generic range helper's legacy behavior for entries with no
+            // realized result. Analytics windows opt out of these unrealized rows.
+            if ($preserveUnrealized && $events === [] && self::timestampInRange(
+                (string) ($trade['date'] ?? ''),
+                $fromTs,
+                $toTs
+            )) {
+                $window[] = $trade;
+            }
+        }
+
+        return array_values($window);
+    }
+
+    /**
+     * Per-realization amounts. trade.result is cumulative, so subtract only the
+     * individually dated partial legs before assigning its remainder to closedAt.
+     *
+     * @return list<array{date:string,result:float,kind:string}>
+     */
+    public static function realizedEvents(array $trade): array
+    {
+        $events = [];
+        $datedPartialTotal = 0.0;
+        $partials = $trade['partials'] ?? [];
+        if (is_array($partials) && array_is_list($partials)) {
+            foreach ($partials as $partial) {
+                if (!is_array($partial)) {
+                    continue;
+                }
+                $date = self::validTimestamp((string) ($partial['at'] ?? ''));
+                $result = self::finiteNumber($partial['result'] ?? null);
+                if ($date === null || $result === null || !is_finite($datedPartialTotal + $result)) {
+                    continue;
+                }
+                $datedPartialTotal += $result;
+                $events[] = ['date' => $date, 'result' => $result, 'kind' => 'partial'];
+            }
+        }
+
+        $totalResult = self::finiteNumber($trade['result'] ?? null);
+        if ($totalResult !== null) {
+            $closeAt = self::validTimestamp((string) ($trade['closedAt'] ?? ''))
+                ?? self::validTimestamp((string) ($trade['date'] ?? ''));
+            $remainingResult = $totalResult - $datedPartialTotal;
+            if ($closeAt !== null && is_finite($remainingResult)) {
+                $events[] = ['date' => $closeAt, 'result' => $remainingResult, 'kind' => 'close'];
+            }
+        }
+
+        return $events;
+    }
+
+    private static function timestampInRange(string $raw, ?int $fromTs, ?int $toTs): bool
+    {
+        $ts = Dates::timestamp($raw);
+        if ($ts === null) {
+            return $fromTs === null && $toTs === null;
+        }
+        if ($fromTs !== null && $ts < $fromTs) {
+            return false;
+        }
+        if ($toTs !== null && $ts >= $toTs) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function validTimestamp(string $raw): ?string
+    {
+        $raw = trim($raw);
+
+        return $raw !== '' && Dates::timestamp($raw) !== null ? $raw : null;
+    }
+
+    private static function finiteNumber(mixed $value): ?float
+    {
+        if ((!is_int($value) && !is_float($value) && !is_string($value))
+            || (is_string($value) && trim($value) === '')
+            || !is_numeric($value)) {
+            return null;
+        }
+        $number = (float) $value;
+
+        return is_finite($number) ? $number : null;
+    }
+
+    /**
+     * @param list<array> $trades
+     * @return list<array>
+     */
+    private static function collapseMetricEvents(array $trades): array
+    {
+        $collapsed = [];
+        $eventIndexes = [];
+        foreach ($trades as $trade) {
+            if (empty($trade['__metricEvent']) || !isset($trade['__metricTradeKey'])) {
+                $collapsed[] = $trade;
+                continue;
+            }
+
+            $key = (string) $trade['__metricTradeKey'];
+            if (!array_key_exists($key, $eventIndexes)) {
+                $row = $trade;
+                unset($row['__metricEvent'], $row['__metricTradeKey'], $row['__metricEvents'], $row['__metricDates'], $row['__metricRealized']);
+                $eventIndexes[$key] = count($collapsed);
+                $collapsed[] = $row;
+                continue;
+            }
+
+            $index = $eventIndexes[$key];
+            $collapsed[$index]['result'] = (float) ($collapsed[$index]['result'] ?? 0)
+                + (float) ($trade['result'] ?? 0);
+        }
+
+        return $collapsed;
+    }
+
+    /**
+     * One event per grouped item, while the summarized sample remains one trade.
+     *
+     * @return list<array>
+     */
+    private static function groupItems(array $trade): array
+    {
+        $events = $trade['__metricEvents'] ?? null;
+        if (!is_array($events) || $events === []) {
+            return [$trade];
+        }
+
+        $items = [];
+        foreach ($events as $event) {
+            if (!is_array($event)) {
+                continue;
+            }
+            $item = $trade;
+            $item['date'] = (string) ($event['date'] ?? $trade['date'] ?? '');
+            $item['result'] = (float) ($event['result'] ?? 0);
+            $item['__metricEvent'] = true;
+            unset($item['__metricEvents'], $item['__metricDates'], $item['__metricRealized']);
+            $items[] = $item;
+        }
+
+        return $items !== [] ? $items : [$trade];
     }
 
     /**
@@ -200,11 +408,12 @@ final class Metrics
      */
     public static function window(array $state, ?string $from, ?string $to, array $filters = []): array
     {
-        $closed = array_values(array_filter(
-            self::closed((array) ($state['trades'] ?? [])),
-            static fn (array $trade): bool => self::accountIncluded($state, (string) ($trade['account'] ?? ''))
+        $included = array_values(array_filter(
+            (array) ($state['trades'] ?? []),
+            static fn (mixed $trade): bool => is_array($trade)
+                && self::accountIncluded($state, (string) ($trade['account'] ?? ''))
         ));
-        $window = self::range($closed, $from, $to);
+        $window = self::projectRange($included, $from, $to, 'from', 'to', false, true);
         $range = self::dateRange($window);
 
         return [

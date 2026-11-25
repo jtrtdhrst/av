@@ -337,11 +337,58 @@ async function main() {
 
   const tradeIntegrityState = JSON.parse(JSON.stringify(saved.json.state));
   const integrityTradeId = 'e2e_trade_rules_' + Date.now();
+  const externalTradeId = 'e2e_external_trade_' + Date.now();
+  const externalTradeIdValue = 'e2e-csv-' + Date.now();
+  const partialTradeId = 'e2e_partial_recalc_' + Date.now();
+  const overrideTradeId = 'e2e_result_override_' + Date.now();
+  const malformedPartialTradeId = 'e2e_malformed_partial_' + Date.now();
   tradeIntegrityState.trades.push({
     id: integrityTradeId, date: '2026-11-17T10:00:00Z', pair: ' E2E/USDT ', dir: 'long',
     entry: '100,000000001', exit: 'otwarta', sl: '90', tp: '110', size: '1',
     result: '', r: null, source: 'Ręcznie', account: 'WEEX', fee: 0,
     mae: null, mfe: null, durationMin: 0
+  });
+  tradeIntegrityState.trades.push({
+    id: partialTradeId, date: '2026-11-17T10:00:00Z', pair: 'E2EPART/USDT', dir: 'l',
+    entry: '100', exit: '120', sl: '90', tp: '140', size: '2.5', initialSize: '10',
+    partials: [
+      { price: '110', pct: 50, result: 40, resultOverride: true, at: '2026-11-17T10:05:00Z' },
+      { price: '120', pct: 50, result: 50, resultOverride: false, at: '2026-11-17T10:10:00Z' }
+    ],
+    partialResult: 90, resultOverride: null, result: 140, r: 1.4, risk: 100, riskPct: null,
+    sizeUnit: 'contracts', sizeContractSize: 100, source: 'Ręcznie',
+    closedAt: '2026-11-17T10:15:00Z'
+  });
+  tradeIntegrityState.trades.push({
+    id: overrideTradeId, date: '2026-11-17T10:00:00Z', pair: 'E2EOVERRIDE/USDT', dir: 'l',
+    entry: '100', exit: '110', sl: '90', tp: '120', size: '2', initialSize: '2',
+    resultOverride: 777, result: 777, r: 38.85, source: 'Ręcznie',
+    closedAt: '2026-11-17T10:20:00Z'
+  });
+  tradeIntegrityState.trades.push({
+    id: malformedPartialTradeId, date: '2026-11-17T10:00:00Z', pair: 'E2EBADPART/USDT', dir: 'l',
+    entry: '100', exit: '120', sl: '90', tp: '140', size: '5', initialSize: '10',
+    partials: [{ price: '110', pct: 150, result: 50, resultOverride: false, at: '2026-11-17T10:05:00Z' }],
+    partialResult: 50, result: 100, r: 1, source: 'Ręcznie',
+    closedAt: '2026-11-17T10:15:00Z'
+  });
+  tradeIntegrityState.trades.push({
+    id: externalTradeId, date: '2026-11-17T10:00:00Z', pair: 'E2EEXT/USDT', dir: 'l',
+    entry: '200', exit: '205', sl: '190', tp: '220', size: '1',
+    result: 5, r: 0.5, source: 'CSV', extId: externalTradeIdValue,
+    initialSize: '2',
+    partials: [{ price: '202', pct: 50, result: 2, resultOverride: false, at: '2026-11-17T10:05:00Z' }],
+    partialResult: 2, resultOverride: null, sizeUnit: 'contracts', sizeContractSize: 1,
+    importedAt: new Date().toISOString()
+  });
+  const zeroExternalTradeId = 'e2e_external_zero_id_' + Date.now();
+  tradeIntegrityState.trades.push({
+    id: zeroExternalTradeId, date: '2026-11-17T10:00:00Z', pair: 'E2EZERO/USDT', dir: 'l',
+    entry: '300', exit: '310', sl: '290', tp: '330', size: '1',
+    result: 10, r: 1, source: 'Ręcznie', extId: '0',
+    initialSize: '2',
+    partials: [{ price: '305', pct: 50, result: 5, resultOverride: false, at: '2026-11-17T10:05:00Z' }],
+    partialResult: 5, resultOverride: null, sizeUnit: 'contracts', sizeContractSize: 1
   });
   const validTradePut = await req('/api/state', {
     method: 'PUT',
@@ -351,10 +398,18 @@ async function main() {
   assert.equal(validTradePut.res.status, 200, validTradePut.text);
   const normalizedAliasState = await req('/api/state');
   const normalizedIntegrityTrade = normalizedAliasState.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  const normalizedPartialTrade = normalizedAliasState.json.state.trades.find((trade) => trade.id === partialTradeId);
+  const normalizedExternalTrade = normalizedAliasState.json.state.trades.find((trade) => trade.id === externalTradeId);
+  const normalizedZeroExternalTrade = normalizedAliasState.json.state.trades.find((trade) => trade.id === zeroExternalTradeId);
   assert.equal(normalizedIntegrityTrade.dir, 'l');
   assert.equal(normalizedIntegrityTrade.pair, 'E2E/USDT');
   assert.equal(normalizedIntegrityTrade.entry, '100.000000001');
   assert.equal(normalizedIntegrityTrade.result, null, 'blank result must stay open and be normalized to null');
+  assert.equal(normalizedPartialTrade?.partials[0].resultOverride, true);
+  assert.equal(normalizedPartialTrade?.partials[0].at, '2026-11-17T10:05:00Z');
+  assert.equal(normalizedExternalTrade?.source, 'CSV');
+  assert.equal(normalizedExternalTrade?.extId, externalTradeIdValue);
+  assert.equal(normalizedZeroExternalTrade?.extId, '0');
   const staleIdenticalWrite = await req('/api/state', {
     method: 'PUT',
     body: JSON.stringify({ state: normalizedAliasState.json.state, baseRevision: noTrashNoOpPut.json.revision }),
@@ -404,49 +459,177 @@ async function main() {
   assert.equal(closedTradePut.res.status, 200, closedTradePut.text);
   assert.match(closedTradePut.json.updatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   const changedClosedExecution = JSON.parse(JSON.stringify(closedTradeState));
-  changedClosedExecution.trades.find((trade) => trade.id === integrityTradeId).entry = '101';
-  const rejectedClosedExecution = await req('/api/state', {
+  Object.assign(
+    changedClosedExecution.trades.find((trade) => trade.id === integrityTradeId),
+    { entry: '101', exit: '111', result: 999, r: 999 }
+  );
+  const correctedClosedExecution = await req('/api/state', {
     method: 'PUT',
     body: JSON.stringify({ state: changedClosedExecution, baseRevision: closedTradePut.json.revision }),
     headers: { Origin: ORIGIN }
   });
-  assert.equal(rejectedClosedExecution.res.status, 409, rejectedClosedExecution.text);
-  assert.equal(rejectedClosedExecution.json.error, 'closed_trade_execution_readonly');
+  assert.equal(correctedClosedExecution.res.status, 200, correctedClosedExecution.text);
+  assert.ok(correctedClosedExecution.json.revision > closedTradePut.json.revision);
+  const correctedClosedState = await req('/api/state');
+  const correctedManualTrade = correctedClosedState.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  assert.equal(correctedManualTrade.entry, '101');
+  assert.equal(correctedManualTrade.exit, '111');
+  assert.equal(correctedManualTrade.result, 10, 'result must be recalculated from the edited execution, not kept from the client');
+  assert.equal(correctedManualTrade.risk, 11);
+  assert.equal(correctedManualTrade.r, 0.91, 'R must be recalculated from base-unit risk');
+  assert.equal(correctedManualTrade.closedAt, null);
+  log('PUT /api/state przelicza wynik i R po korekcie zamkniętego wykonania ręcznego', true, integrityTradeId);
 
-  const invalidClosedState = JSON.parse(JSON.stringify(closedTradeState));
+  const changedPartialExecution = JSON.parse(JSON.stringify(correctedClosedState.json.state));
+  const partialTrade = changedPartialExecution.trades.find((trade) => trade.id === partialTradeId);
+  Object.assign(partialTrade, {
+    entry: '105',
+    exit: '135',
+    partialResult: 999,
+    result: 999,
+    r: 999,
+    risk: 999
+  });
+  partialTrade.partials.forEach((partial) => { partial.result = 999; });
+  const partialCorrectionPut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: changedPartialExecution, baseRevision: correctedClosedState.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(partialCorrectionPut.res.status, 200, partialCorrectionPut.text);
+  const partialCorrectionState = await req('/api/state');
+  const correctedPartialTrade = partialCorrectionState.json.state.trades.find((trade) => trade.id === partialTradeId);
+  assert.equal(correctedPartialTrade.result, 152.5, 'partial result plus final leg must be rebuilt from the edited execution');
+  assert.equal(correctedPartialTrade.partialResult, 77.5, 'partial aggregate must be rebuilt from ordered legs');
+  assert.equal(correctedPartialTrade.partials[0].result, 40, 'manual partial override must remain authoritative');
+  assert.equal(correctedPartialTrade.partials[0].resultOverride, true);
+  assert.equal(correctedPartialTrade.partials[1].result, 37.5);
+  assert.equal(correctedPartialTrade.risk, 150, 'risk must use initial base-unit size, not remaining size or contract metadata');
+  assert.equal(correctedPartialTrade.r, 1.02);
+  assert.equal(correctedPartialTrade.size, '2.5');
+  assert.equal(correctedPartialTrade.initialSize, '10');
+  assert.equal(correctedPartialTrade.partials[0].at, '2026-11-17T10:05:00Z');
+  assert.equal(correctedPartialTrade.partials[1].at, '2026-11-17T10:10:00Z');
+  assert.equal(correctedPartialTrade.closedAt, '2026-11-17T10:15:00Z');
+  log('PUT /api/state odtwarza wynik partials, zachowując override, kolejność i czasy UTC', true, partialTradeId);
+
+  const changedOverrideExecution = JSON.parse(JSON.stringify(partialCorrectionState.json.state));
+  const aggregateOverrideTrade = changedOverrideExecution.trades.find((trade) => trade.id === overrideTradeId);
+  Object.assign(aggregateOverrideTrade, { entry: '101', exit: '120', result: 999, r: 999, risk: 999 });
+  const aggregateOverridePut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: changedOverrideExecution, baseRevision: partialCorrectionState.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(aggregateOverridePut.res.status, 200, aggregateOverridePut.text);
+  const aggregateOverrideState = await req('/api/state');
+  const preservedAggregateOverride = aggregateOverrideState.json.state.trades.find((trade) => trade.id === overrideTradeId);
+  assert.equal(preservedAggregateOverride.resultOverride, 777);
+  assert.equal(preservedAggregateOverride.result, 777);
+  assert.equal(preservedAggregateOverride.risk, 22);
+  assert.equal(preservedAggregateOverride.r, 35.32);
+  assert.equal(preservedAggregateOverride.closedAt, '2026-11-17T10:20:00Z');
+  log('PUT /api/state zachowuje ręczny wynik i przelicza R agregatu', true, overrideTradeId);
+
+  const changedMalformedPartial = JSON.parse(JSON.stringify(aggregateOverrideState.json.state));
+  changedMalformedPartial.trades.find((trade) => trade.id === malformedPartialTradeId).entry = '101';
+  const malformedPartialPut = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: changedMalformedPartial, baseRevision: aggregateOverrideState.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.equal(malformedPartialPut.res.status, 409, malformedPartialPut.text);
+  assert.equal(malformedPartialPut.json.error, 'closed_trade_metrics_unsupported');
+  const unchangedMalformedPartial = await req('/api/state');
+  assert.equal(unchangedMalformedPartial.json.revision, aggregateOverrideState.json.revision);
+  assert.equal(
+    unchangedMalformedPartial.json.state.trades.find((trade) => trade.id === malformedPartialTradeId).entry,
+    '100'
+  );
+  log('PUT /api/state odrzuca ręczne przeliczenie niebezpiecznych legacy partials', true, malformedPartialTradeId);
+
+  const changedExternalExecution = JSON.parse(JSON.stringify(unchangedMalformedPartial.json.state));
+  changedExternalExecution.trades.find((trade) => trade.id === externalTradeId).entry = '201';
+  const rejectedExternalExecution = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: changedExternalExecution, baseRevision: unchangedMalformedPartial.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.notEqual(rejectedExternalExecution.res.status, 200, rejectedExternalExecution.text);
+  assert.ok(
+    ['exchange_data_readonly', 'closed_trade_execution_readonly'].includes(rejectedExternalExecution.json?.error),
+    rejectedExternalExecution.text
+  );
+  const unchangedExternalExecution = await req('/api/state');
+  const unchangedExternalTrade = unchangedExternalExecution.json.state.trades.find((trade) => trade.id === externalTradeId);
+  const unchangedManualTrade = unchangedExternalExecution.json.state.trades.find((trade) => trade.id === integrityTradeId);
+  assert.equal(unchangedExternalExecution.json.revision, unchangedMalformedPartial.json.revision);
+  assert.equal(unchangedExternalTrade.entry, '200');
+  assert.equal(unchangedManualTrade.entry, '101');
+  log('PUT /api/state nadal blokuje wykonanie zamkniętej transakcji importowanej', true, externalTradeId);
+
+  const changedExternalMetadata = JSON.parse(JSON.stringify(unchangedExternalExecution.json.state));
+  const changedZeroExternalTrade = changedExternalMetadata.trades.find((trade) => trade.id === zeroExternalTradeId);
+  Object.assign(changedZeroExternalTrade, {
+    initialSize: '3',
+    partials: [{ price: '306', pct: 50, result: 6, resultOverride: true, at: '2026-11-17T10:06:00Z' }],
+    partialResult: 6,
+    resultOverride: 123,
+    sizeUnit: 'lots',
+    sizeContractSize: 0.1
+  });
+  const rejectedExternalMetadata = await req('/api/state', {
+    method: 'PUT',
+    body: JSON.stringify({ state: changedExternalMetadata, baseRevision: unchangedExternalExecution.json.revision }),
+    headers: { Origin: ORIGIN }
+  });
+  assert.notEqual(rejectedExternalMetadata.res.status, 200, rejectedExternalMetadata.text);
+  assert.ok(
+    ['exchange_data_readonly', 'closed_trade_execution_readonly'].includes(rejectedExternalMetadata.json?.error),
+    rejectedExternalMetadata.text
+  );
+  const unchangedExternalMetadata = await req('/api/state');
+  const unchangedZeroExternalTrade = unchangedExternalMetadata.json.state.trades.find((trade) => trade.id === zeroExternalTradeId);
+  assert.equal(unchangedExternalMetadata.json.revision, unchangedExternalExecution.json.revision);
+  assert.deepEqual(unchangedZeroExternalTrade, unchangedExternalExecution.json.state.trades.find((trade) => trade.id === zeroExternalTradeId));
+  log('PUT /api/state atomowo blokuje metadane wykonania transakcji z extId "0"', true, zeroExternalTradeId);
+
+  const invalidClosedState = JSON.parse(JSON.stringify(unchangedExternalExecution.json.state));
   invalidClosedState.trades.reverse();
   const invalidClosedTrade = invalidClosedState.trades.find((trade) => trade.id === integrityTradeId);
   invalidClosedTrade.id = integrityTradeId + '_changed';
-  invalidClosedTrade.entry = '101';
+  invalidClosedTrade.entry = '102';
   const invalidClosedPut = await req('/api/state', {
     method: 'PUT',
-    body: JSON.stringify({ state: invalidClosedState, baseRevision: closedTradePut.json.revision }),
+    body: JSON.stringify({ state: invalidClosedState, baseRevision: aggregateOverrideState.json.revision }),
     headers: { Origin: ORIGIN }
   });
   assert.equal(invalidClosedPut.res.status, 409, invalidClosedPut.text);
   assert.equal(invalidClosedPut.json.error, 'trade_id_immutable');
   const preservedHistoricalClose = await req('/api/state');
   const historicalTrade = preservedHistoricalClose.json.state.trades.find((trade) => trade.id === integrityTradeId);
-  assert.equal(historicalTrade.result, 5);
+  assert.equal(historicalTrade.entry, '101');
+  assert.equal(historicalTrade.exit, '111');
+  assert.equal(historicalTrade.result, 10);
   assert.equal(historicalTrade.closedAt, null);
-  assert.equal(preservedHistoricalClose.json.revision, closedTradePut.json.revision);
+  assert.equal(preservedHistoricalClose.json.revision, aggregateOverrideState.json.revision);
   const annotatedClosedState = JSON.parse(JSON.stringify(preservedHistoricalClose.json.state));
   const annotatedTrade = annotatedClosedState.trades.find((trade) => trade.id === integrityTradeId);
   annotatedTrade.note = 'E2E: historyczne zamknięcie, czas nieznany';
   const annotatedClosedPut = await req('/api/state', {
     method: 'PUT',
-    body: JSON.stringify({ state: annotatedClosedState, baseRevision: closedTradePut.json.revision }),
+    body: JSON.stringify({ state: annotatedClosedState, baseRevision: aggregateOverrideState.json.revision }),
     headers: { Origin: ORIGIN }
   });
   assert.equal(annotatedClosedPut.res.status, 200, annotatedClosedPut.text);
   const afterAnnotation = await req('/api/state');
   const annotatedStoredTrade = afterAnnotation.json.state.trades.find((trade) => trade.id === integrityTradeId);
-  assert.equal(annotatedStoredTrade.entry, '100.000000001');
-  assert.equal(annotatedStoredTrade.exit, '105');
-  assert.equal(annotatedStoredTrade.result, 5);
+  assert.equal(annotatedStoredTrade.entry, '101');
+  assert.equal(annotatedStoredTrade.exit, '111');
+  assert.equal(annotatedStoredTrade.result, 10);
   assert.equal(annotatedStoredTrade.closedAt, null);
   assert.equal(annotatedStoredTrade.note, 'E2E: historyczne zamknięcie, czas nieznany');
-  log('PUT /api/state blokuje wykonanie, ale pozwala na recenzję bez backfillu czasu', true, integrityTradeId);
+  log('PUT /api/state zachowuje korektę wykonania i recenzję bez backfillu czasu', true, integrityTradeId);
 
   const stateBeforeSoftDelete = await req('/api/state');
   const softDeletedState = JSON.parse(JSON.stringify(stateBeforeSoftDelete.json.state));

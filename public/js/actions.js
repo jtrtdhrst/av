@@ -523,13 +523,6 @@
     $('#tm')?.addEventListener('click', (e) => {
       if (e.target.id === 'tm' || e.target.closest('#mc')) $('#tm').classList.remove('on');
     });
-    $('#tmBody')?.addEventListener('click', (e) => {
-      const tf = e.target.closest('[data-tf]');
-      if (!tf) return;
-      e.preventDefault();
-      AV.ui.chartTf = tf.dataset.tf;
-      if (AV.ui.openTradeId) AV.openTrade(AV.ui.openTradeId);
-    });
     document.addEventListener('click', (e) => {
       const ed = e.target.closest('[data-trade-edit]');
       if (ed) { e.preventDefault(); AV.editTrade(ed.dataset.tradeEdit); return; }
@@ -544,6 +537,8 @@
       }
       const be = e.target.closest('[data-trade-be]');
       if (be) { e.preventDefault(); AV.breakevenTrade(be.dataset.tradeBe); return; }
+      const sl = e.target.closest('[data-trade-sl]');
+      if (sl) { e.preventDefault(); AV.setTradeStopLoss(sl.dataset.tradeSl); return; }
       const cl = e.target.closest('[data-trade-close]');
       if (cl) { e.preventDefault(); AV.closeTradeModal(cl.dataset.tradeClose); }
     });
@@ -605,14 +600,91 @@
     AV.toast(saved ? 'SL przeniesiony na BE' : 'SL przeniesiony lokalnie. Synchronizacja po powrocie połączenia.', saved ? 3000 : 5000);
   };
 
+  AV.setTradeStopLoss = async (id) => {
+    const trade = AV.state.trades.find((row) => row.id === id);
+    if (!trade || AV.isTradeClosed(trade)) return;
+    const body = AV.openModal(
+      '<div class="eyebrow">Zarządzanie pozycją</div><h1 style="font-size:26px;margin-top:6px">Ustaw / zmień SL</h1>' +
+      '<p class="mut" style="margin-top:8px;font-size:13.5px">' + AV.esc(trade.pair) + ' · ' + (AV.tradeDirection(trade.dir) === 's' ? 'SHORT' : 'LONG') + '</p>' +
+      '<span class="label">Cena stop loss</span><input class="input mono" id="tradeSlValue" inputmode="decimal" value="' + AV.attr(trade.sl === 'brak' ? '' : trade.sl || '') + '" placeholder="Cena SL">' +
+      '<div class="hint">SL musi pozostać po właściwej stronie ceny wejścia.</div>' +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px"><button class="btn g" data-gclose>Anuluj</button><button class="btn p" id="tradeSlSave">Zapisz SL</button></div>',
+      { maxWidth: '460px' }
+    );
+    $('#tradeSlValue', body)?.focus();
+    $('#tradeSlSave', body).onclick = async () => {
+      const sl = AV.pnum($('#tradeSlValue', body).value);
+      if (!(sl > 0)) { AV.toast('Podaj dodatnią cenę SL'); return; }
+      if (!(await AV.waitForPushIdle())) { AV.toast('Trwa inny zapis. Spróbuj ponownie za chwilę.'); return; }
+      const currentTrade = AV.state.trades.find((row) => row.id === id);
+      if (!currentTrade || AV.isTradeClosed(currentTrade)) {
+        AV.closeModal();
+        AV.toast('Pozycja zmieniła się w innej karcie. Otwórz ją ponownie przed korektą SL.');
+        return;
+      }
+      const currentEntry = AV.pnum(currentTrade.entry);
+      const currentLong = AV.tradeDirection(currentTrade.dir) !== 's';
+      if (!(currentEntry > 0)) { AV.toast('Podaj dodatnią cenę wejścia przed ustawieniem SL'); return; }
+      if (currentLong ? sl > currentEntry : sl < currentEntry) {
+        AV.toast('Stop loss jest po złej stronie wejścia');
+        return;
+      }
+      if (sl === AV.pnum(currentTrade.sl)) { AV.closeModal(); AV.openTrade(id); return; }
+      const old = JSON.parse(JSON.stringify(currentTrade));
+      const nextSl = AV.fmt(sl, AV.dec(currentEntry));
+      currentTrade.sl = nextSl;
+      currentTrade.be = sl === currentEntry;
+      const size = AV.pnum(currentTrade.size);
+      const risk = size > 0 ? Math.abs(currentEntry - sl) * size : null;
+      currentTrade.risk = risk == null ? null : Math.round(risk * 100) / 100;
+      const capital = AV.totalCapital(AV.state);
+      currentTrade.riskPct = risk != null && capital > 0 ? Math.round(risk / capital * 10000) / 100 : null;
+      AV.saveNow();
+      clearTimeout(AV._pushTimer);
+      AV.api.dirty = false;
+      let saved = await AV.pushStateImmediate();
+      if (!saved && AV.api.pushing) {
+        await AV.waitForPushIdle();
+        saved = await AV.pushStateImmediate();
+      }
+      if (!saved && AV.api.online && AV.api.authenticated) {
+        const latestTrade = AV.state.trades.find((row) => row.id === id);
+        const sameExecution = latestTrade
+          && String(latestTrade.pair ?? '') === String(old.pair ?? '')
+          && String(latestTrade.account ?? '') === String(old.account ?? '')
+          && AV.pnum(latestTrade.entry) === AV.pnum(old.entry)
+          && AV.pnum(latestTrade.size) === AV.pnum(old.size)
+          && AV.tradeDirection(latestTrade.dir) === AV.tradeDirection(old.dir)
+          && String(latestTrade.sizeUnit ?? '') === String(old.sizeUnit ?? '')
+          && String(latestTrade.sizeContractSize ?? '') === String(old.sizeContractSize ?? '');
+        const rolledBack = !!(sameExecution && AV.pnum(latestTrade.sl) === AV.pnum(nextSl));
+        if (rolledBack) {
+          Object.assign(latestTrade, { sl: old.sl, be: old.be, risk: old.risk, riskPct: old.riskPct });
+          AV.saveNow();
+        }
+        AV.renderAll();
+        AV.toast(rolledBack
+          ? 'Nie udało się zapisać SL — poprzednia wartość została przywrócona.'
+          : 'Pozycja zmieniła się w innej karcie. Otwórz ją ponownie i spróbuj ponownie.',
+        5000);
+        return;
+      }
+      AV.closeModal();
+      AV.openTrade(id);
+      AV.renderAll();
+      AV.toast(saved ? 'Stop loss zapisany' : 'Stop loss zapisany lokalnie; synchronizacja nastąpi po powrocie połączenia.', 4500);
+    };
+  };
+
   AV.editTrade = (id) => {
     const t = AV.state.trades.find((x) => x.id === id);
     if (!t) return;
     AV.ui.editId = id;
     const source = String(t.source ?? '').trim().toLowerCase();
-    AV.ui.ntExecutionLocked = AV.isTradeClosed(t)
-      || !!t.extId
-      || (source !== '' && !['manual', 'panel', 'ręcznie', 'recznie'].includes(source));
+    const manualSources = ['', 'manual', 'panel', 'ręcznie', 'recznie'];
+    const hasExternalIdentifier = (value) => value != null && value !== false && String(value).trim() !== '';
+    AV.ui.ntExecutionLocked = !manualSources.includes(source)
+      || ['extId', 'externalId', 'exchangeId'].some((field) => hasExternalIdentifier(t[field]));
     AV.ui.ntChecklistTouched = false;
     AV.ui.ntGradeManual = true;
     AV.ui.ntChecks = {};
@@ -626,9 +698,10 @@
     AV.renderNewTradeForm();
     AV.setVal('#ntPair', t.pair);
     AV.setVal('#ntEntry', t.entry);
-    AV.setVal('#ntSize', t.size);
     AV.setVal('#ntSl', t.sl);
     AV.setVal('#ntTp', t.tp);
+    AV.show('#ntExitWrap', AV.isTradeClosed(t));
+    AV.setVal('#ntExit', AV.isTradeClosed(t) ? (t.exit === 'otwarta' ? '' : t.exit || '') : '');
     AV.setVal('#ntNote', t.note);
     const accSel = $('#ntAccount');
     if (accSel) {
@@ -637,19 +710,18 @@
       }
       accSel.value = t.account || accSel.value;
     }
-    const brokerSel = $('#ntBroker');
-    if (brokerSel) {
-      const brokerValue = t.broker || t.source || 'WEEX';
-      if (!Array.from(brokerSel.options).some((o) => o.value === brokerValue)) {
-        brokerSel.insertAdjacentHTML('beforeend', '<option value="' + AV.attr(brokerValue) + '">' + AV.esc(brokerValue) + '</option>');
-      }
-      brokerSel.value = brokerValue;
-    }
+    const sizeConfig = AV.renderTradeSizeUnit();
+    const sourceSize = AV.isTradeClosed(t) ? (AV.pnum(t.initialSize) > 0 ? t.initialSize : t.size) : t.size;
+    AV.setVal('#ntSize', AV.displayTradeSize(sourceSize, t.entry, sizeConfig.config));
+    AV.show('#ntResultOverrideWrap', AV.isTradeClosed(t) && !AV.ui.ntExecutionLocked);
+    AV.setVal('#ntResultOverride', t.resultOverride == null ? '' : String(t.resultOverride));
     $$('#ntDir .chip').forEach((c) => c.classList.toggle('on', c.dataset.d === AV.tradeDirection(t.dir)));
     ['#ntPair', '#ntEntry', '#ntSize', '#ntSl', '#ntTp'].forEach((selector) => {
       const input = $(selector);
       if (input) input.disabled = AV.ui.ntExecutionLocked;
     });
+    const exitInput = $('#ntExit');
+    if (exitInput) exitInput.disabled = AV.ui.ntExecutionLocked;
     const direction = $('#ntDir');
     direction?.classList.toggle('disabled', AV.ui.ntExecutionLocked);
     if (direction) {
@@ -669,9 +741,16 @@
     AV.ui.ntGradeManual = true;
     AV.show('#cancelEdit', true);
     AV.setText('#saveTrade', 'Zapisz zmiany');
-    AV.toast(AV.isTradeClosed(t)
-      ? 'Zamknięta transakcja: pola wykonania są tylko do odczytu.'
+    AV.toast(AV.isTradeClosed(t) && AV.ui.ntExecutionLocked
+      ? 'Importowana transakcja: pola wykonania są tylko do odczytu.'
+      : AV.isTradeClosed(t)
+        ? 'Możesz poprawić wykonanie; wynik przeliczy się automatycznie. Wpisz wynik ręczny tylko jako override.'
       : 'Edytujesz transakcję z ' + AV.dateTimeShort(t.date));
+    // Późna odpowiedź pushu (np. 409 i przeładowanie stanu) może przełączyć widok.
+    // Formularz edycji ma pozostać widoczny bez ponownego nadpisywania pól.
+    AV.currentView = 'nowa';
+    $$('.view').forEach((section) => section.classList.toggle('on', section.id === 'nowa'));
+    $$('.navg button').forEach((button) => button.classList.toggle('on', button.dataset.v === 'nowa'));
   };
 
   AV.closeTradeModal = (id) => {
@@ -681,7 +760,7 @@
     const body = AV.openModal('<div class="eyebrow">Zamknięcie pozycji</div><h1 style="font-size:26px;margin-top:6px">' + AV.esc(t.pair) + ' · ' + (AV.tradeDirection(t.dir) === 's' ? 'SHORT' : 'LONG') + '</h1>' +
       '<p class="mut" style="margin-top:8px;font-size:13.5px">Wpisz cenę wyjścia. Wynik policzę z wielkości pozycji. Możesz też podać wynik ręcznie. Część pozycji możesz zamknąć, wybierając procent.</p>' +
       '<span class="label">Zamknij część pozycji</span><div class="chips sel" id="ctPct"><span class="chip" data-pct="25">25%</span><span class="chip" data-pct="50">50%</span><span class="chip" data-pct="75">75%</span><span class="chip on" data-pct="100">100%</span></div>' +
-      '<div class="grid g2" style="margin-top:14px"><div><span class="label">Cena wyjścia</span><input class="input mono" id="ctExit" value="' + AV.attr(t.exit === 'otwarta' ? t.entry : t.exit) + '"></div><div><span class="label">Wynik USDT (opcjonalnie)</span><input class="input mono" id="ctResult" placeholder="np. 65,20"></div></div>' +
+      '<div class="grid g2" style="margin-top:14px"><div><span class="label">Cena wyjścia</span><input class="input mono" id="ctExit" value="' + AV.attr(t.exit === 'otwarta' ? t.entry : t.exit) + '"></div><div><span class="label" id="ctResultLabel">Wynik USDT (opcjonalnie)</span><input class="input mono" id="ctResult" placeholder="np. 65,20"></div></div>' +
       '<label class="check" style="margin-top:10px"><span class="box" id="ctBeBox"></span><span>Przenieś SL na wejście (BE)</span></label>' +
       '<div class="hint" id="ctHint" style="margin-top:10px">Wejście ' + AV.esc(t.entry) + ' · wielkość ' + AV.esc(t.size) + '</div>' +
       '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px"><button class="btn g" data-gclose>Anuluj</button><button class="btn p" id="ctSave">Zamknij pozycję</button></div>', { maxWidth: '520px' });
@@ -690,6 +769,7 @@
       const exit = AV.pnum($('#ctExit', body).value), entry = AV.pnum(t.entry), size = AV.pnum(t.size), pct = pctValue();
       const calc = (exit - entry) * size * (pct / 100) * (AV.tradeDirection(t.dir) === 's' ? -1 : 1);
       const remaining = size * (1 - pct / 100);
+      AV.setText('#ctResultLabel', pct >= 100 ? 'Wynik całej pozycji · USDT (opcjonalnie)' : 'Wynik zamykanej części · USDT (opcjonalnie)');
       AV.setText('#ctHint', 'Szacowany wynik: ' + (Number.isFinite(calc) ? AV.signed(calc, 2, ' USDT') : '—') + ' · zamykasz ' + pct + '% (' + AV.fmt(size * pct / 100, 4) + ')' + (pct < 100 ? ' · zostaje ' + AV.fmt(remaining, 4) : '') + ' · SL ' + t.sl + ' · TP ' + t.tp);
     };
     $('#ctPct', body).addEventListener('click', (e) => {
@@ -731,16 +811,18 @@
       const originalState = AV.state;
       const originalTrade = JSON.parse(JSON.stringify(t));
       const slText = String(t.sl ?? '').trim();
+      const initialSize = AV.pnum(t.initialSize) > 0 ? AV.pnum(t.initialSize) : fullSize;
       const risk = slText !== '' && slText !== 'brak' && slText !== '—'
-        ? Math.abs(entry - AV.pnum(slText)) * (AV.pnum(t.initialSize) > 0 ? AV.pnum(t.initialSize) : fullSize)
+        ? Math.abs(entry - AV.pnum(slText)) * initialSize
         : null;
       const closedAtMs = Date.now();
       const round2 = (value) => Math.round(value * 100) / 100;
       const fullClose = pct >= 100;
       if (fullClose) {
-        t.initialSize = AV.pnum(t.initialSize) > 0 ? t.initialSize : AV.fmt(fullSize, 4);
+        t.initialSize = AV.fmt(initialSize, 8);
         t.exit = exit == null ? '' : AV.fmt(exit, AV.dec(exit));
-        t.result = round2((AV.pnum(t.partialResult) || 0) + result);
+        t.resultOverride = resultText ? round2(result) : null;
+        t.result = resultText ? round2(result) : round2((AV.pnum(t.partialResult) || 0) + result);
         t.r = risk != null && risk > 0 ? Math.round(t.result / risk * 100) / 100 : null;
         t.closedAt = new Date(closedAtMs).toISOString();
         t.durationMin = Math.max(1, Math.round((closedAtMs - new Date(t.date)) / 60000));
@@ -751,9 +833,9 @@
             : 'Pozycja zamknięta na zero (break-even). Oceń, czy wyjście było zgodne z planem.');
         if (moveBe) t.be = true;
       } else {
-        t.initialSize = AV.pnum(t.initialSize) > 0 ? t.initialSize : AV.fmt(fullSize, 4);
+        t.initialSize = AV.fmt(initialSize, 8);
         t.partials = Array.isArray(t.partials) ? t.partials : [];
-        t.partials.push({ price: exit == null ? '' : AV.fmt(exit, AV.dec(exit)), pct, result: round2(result), at: new Date(closedAtMs).toISOString() });
+        t.partials.push({ price: exit == null ? '' : AV.fmt(exit, AV.dec(exit)), pct, result: round2(result), resultOverride: !!resultText, at: new Date(closedAtMs).toISOString() });
         t.partialResult = round2((AV.pnum(t.partialResult) || 0) + result);
         t.size = String(Math.round(Math.max(0, fullSize * (1 - pct / 100)) * 1e8) / 1e8);
         if (moveBe) { t.sl = String(t.entry); t.be = true; }
@@ -818,6 +900,11 @@
     inputs.forEach((sel) => $(sel)?.addEventListener('input', AV.debounce(() => {
       AV.renderNTMeta(); AV.renderChecklist(); AV.saveDraft();
     }, 180)));
+    $('#ntAccount')?.addEventListener('change', () => {
+      AV.renderTradeSizeUnit();
+      AV.renderNTMeta();
+      AV.saveDraft();
+    });
     $('#ntDir')?.addEventListener('click', (e) => {
       if (AV.ui.ntExecutionLocked) return;
       const c = e.target.closest('.chip'); if (!c) return;
@@ -896,7 +983,8 @@
     const s = AV.state;
     const editingTrade = AV.ui.editId && s.trades.find((trade) => trade.id === AV.ui.editId);
     const closedEdit = !!(editingTrade && AV.isTradeClosed(editingTrade));
-    if (closedEdit) {
+    const executionLocked = !!editingTrade && !!AV.ui.ntExecutionLocked;
+    if (closedEdit && executionLocked) {
       const checks = Object.values(AV.ui.ntChecks || {}).filter(Boolean).length;
       const total = Object.keys(AV.ui.ntChecks || {}).length || (s.settings.checklist || []).length || 7;
       const grade = $('.gp.on')?.dataset.g || (checks === total ? 'A' : checks >= Math.ceil(total * 0.7) ? 'B' : 'C');
@@ -917,23 +1005,32 @@
       AV.renderAll(); AV.showView('trans'); AV.toast('Recenzja zapisana; pola wykonania pozostały bez zmian');
       return;
     }
-    if (AV.lockInfo(s).active) { AV.toast('Tryb ochronny: odblokuj dziennik, żeby zapisać transakcję'); return; }
-    const existingTrade = AV.ui.editId ? s.trades.find((trade) => trade.id === AV.ui.editId) : null;
-    const executionLocked = !!existingTrade && !!AV.ui.ntExecutionLocked;
+    if (!editingTrade && AV.lockInfo(s).active) { AV.toast('Tryb ochronny: odblokuj dziennik, żeby zapisać transakcję'); return; }
+    const existingTrade = editingTrade || null;
+    const selectedAccountName = $('#ntAccount')?.value || existingTrade?.account || '';
+    const account = s.accounts.find((item) => item.name === selectedAccountName) || AV.tradeAccount(s, existingTrade);
+    const sizeConfig = AV.tradeSizeConfig(existingTrade, account);
     const pair = executionLocked ? String(existingTrade.pair ?? '') : $('#ntPair').value.trim().toUpperCase();
     const entry = executionLocked ? null : AV.pnum($('#ntEntry').value);
     const sl = executionLocked ? null : AV.pnum($('#ntSl').value);
     const tp = executionLocked ? null : AV.pnum($('#ntTp').value);
-    const size = executionLocked ? null : AV.pnum($('#ntSize').value);
+    const displayedSize = executionLocked ? null : AV.pnum($('#ntSize').value);
+    const size = executionLocked ? null : AV.baseTradeSize(displayedSize, entry, sizeConfig);
     const existingStop = String(existingTrade?.sl ?? '').trim();
     const existingHasNoStop = !!existingTrade && (existingStop === '' || existingStop === 'brak' || existingStop === '—');
+    const dir = executionLocked ? existingTrade.dir : ($('#ntDir .chip.on')?.dataset.d || 'l');
     if (!executionLocked) {
       if (!pair) { AV.toast('Podaj parę'); return; }
-      if (!entry) { AV.toast('Podaj cenę wejścia'); return; }
-      if (!size) { AV.toast('Podaj wielkość pozycji'); return; }
+      if (!(entry > 0)) { AV.toast('Podaj cenę wejścia'); return; }
+      if (!(displayedSize > 0)) { AV.toast('Podaj wielkość pozycji'); return; }
+      if (!(size > 0)) {
+        AV.toast(sizeConfig.unit === 'lots' ? 'Ustaw dodatni mnożnik lota/kontraktu na koncie' : 'Nie można przeliczyć wielkości pozycji');
+        return;
+      }
       if (!sl && !existingHasNoStop) { AV.toast('Podaj stop loss'); return; }
-      if (sl && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? sl > entry : sl < entry)) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
-      if (tp && ((($('#ntDir .chip.on')?.dataset.d || 'l') === 'l') ? tp <= entry : tp >= entry)) { AV.toast('Take profit jest po złej stronie wejścia'); return; }
+      if (sl && (dir === 'l' ? sl > entry : sl < entry)) { AV.toast('Stop loss jest po złej stronie wejścia'); return; }
+      if (tp && (dir === 'l' ? tp <= entry : tp >= entry)) { AV.toast('Take profit jest po złej stronie wejścia'); return; }
+      if (closedEdit && !(AV.pnum($('#ntExit')?.value) > 0)) { AV.toast('Podaj dodatnią cenę wyjścia'); return; }
     }
     const checklistPoints = AV.checklistPoints(s, AV.ui.editId ? AV.ui.ntChecklistHistory : []);
     const checklistItems = checklistPoints.filter((point) => AV.ui.ntChecks?.[point]);
@@ -944,44 +1041,131 @@
     const emotion = $('#ntEmotion .chip.on')?.textContent || (existingTrade ? (existingTrade.emotion || '') : 'Spokój');
     const setup = $('#ntSetup .chip.on')?.dataset.s || (existingTrade ? (existingTrade.setup || '') : 'Bez setupu');
     const note = $('#ntNote').value.trim();
-    const dir = executionLocked ? existingTrade.dir : ($('#ntDir .chip.on')?.dataset.d || 'l');
     const now = new Date();
     const tradeDate = existingTrade?.date || now.toISOString();
-    const planAligned = executionLocked ? !!existingTrade.plan : AV.tradePlanMatch(s, { date: tradeDate, pair, dir });
+    const planAligned = existingTrade ? !!existingTrade.plan : AV.tradePlanMatch(s, { date: tradeDate, pair, dir });
     const risk = executionLocked ? null : (sl ? Math.abs(entry - sl) * size : null);
     const cap = AV.totalCapital(s);
     const maxRiskPct = Number(s.settings.maxRisk) || 1;
     const riskPct = risk != null && risk > 0 && cap > 0 ? risk / cap * 100 : null;
+    const accountName = executionLocked
+      ? (existingTrade.account || '')
+      : (account?.name || selectedAccountName || s.accounts.find((item) => item.include)?.name || s.accounts[0]?.name || 'Konto główne');
+    const broker = executionLocked
+      ? (existingTrade.broker || existingTrade.source || '')
+      : (account?.exchange || existingTrade?.broker || existingTrade?.source || '');
+    const formattedSize = size == null ? existingTrade?.size : AV.fmt(size, 8);
+    let closedFields = {};
+    if (closedEdit && !executionLocked) {
+      const exit = AV.pnum($('#ntExit').value);
+      const partials = (Array.isArray(existingTrade.partials) ? existingTrade.partials : []).map((partial) => ({ ...partial }));
+      const originalSize = size;
+      let remaining = originalSize;
+      let partialResult = 0;
+      const sign = dir === 's' ? -1 : 1;
+      const round2 = (value) => Math.round(value * 100) / 100;
+      for (const partial of partials) {
+        const pct = AV.pnum(partial?.pct);
+        if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) {
+          AV.toast('Częściowe zamknięcie ma nieprawidłowy procent. Zapis nie został wykonany.');
+          return;
+        }
+        const legSize = remaining * pct / 100;
+        const closePrice = AV.pnum(partial.price);
+        const priorResult = AV.pnum(partial.result);
+        if (partial.resultOverride != null && typeof partial.resultOverride !== 'boolean') {
+          AV.toast('Override częściowego wyniku ma nieprawidłowy format.');
+          return;
+        }
+        let legResult;
+        if (partial.resultOverride === true) {
+          if (!Number.isFinite(priorResult)) {
+            AV.toast('Brakuje ręcznego wyniku częściowego zamknięcia.');
+            return;
+          }
+          legResult = priorResult;
+        } else if (Number.isFinite(closePrice) && closePrice > 0) {
+          legResult = (closePrice - entry) * legSize * sign;
+        } else if (Number.isFinite(priorResult)) {
+          // Older records may contain a manual leg result without provenance.
+          partial.resultOverride = true;
+          legResult = priorResult;
+        } else {
+          AV.toast('Brakuje poprawnej ceny częściowego zamknięcia.');
+          return;
+        }
+        if (!Number.isFinite(legResult)) {
+          AV.toast('Wynik częściowego zamknięcia przekracza zakres liczbowy.');
+          return;
+        }
+        partial.result = round2(legResult);
+        partialResult += partial.result;
+        remaining -= legSize;
+        if (!Number.isFinite(partialResult) || !Number.isFinite(remaining) || remaining <= 0) {
+          AV.toast('Częściowe zamknięcia nie pozostawiają poprawnej wielkości pozycji.');
+          return;
+        }
+      }
+      const finalLegResult = (exit - entry) * remaining * sign;
+      if (!Number.isFinite(finalLegResult)) {
+        AV.toast('Wynik końcowej części transakcji przekracza zakres liczbowy.');
+        return;
+      }
+      const overrideText = $('#ntResultOverride')?.value.trim() || '';
+      const totalOverride = overrideText === '' ? null : AV.pnum(overrideText);
+      if (overrideText !== '' && !Number.isFinite(totalOverride)) { AV.toast('Wynik override musi być liczbą'); return; }
+      const totalResult = totalOverride == null ? partialResult + finalLegResult : totalOverride;
+      const initialRisk = sl ? Math.abs(entry - sl) * originalSize : null;
+      const remainingSize = partials.length ? remaining : originalSize;
+      closedFields = {
+        exit: AV.fmt(exit, AV.dec(exit)),
+        initialSize: AV.fmt(originalSize, 8),
+        size: AV.fmt(remainingSize, 8),
+        partials,
+        partialResult: partials.length ? round2(partialResult) : null,
+        resultOverride: totalOverride == null ? null : round2(totalOverride),
+        result: round2(totalResult),
+        r: initialRisk != null && initialRisk > 0 ? round2(totalResult / initialRisk) : null
+      };
+    }
     const payload = {
       pair, dir,
       entry: executionLocked ? existingTrade.entry : AV.fmt(entry, AV.dec(entry)),
       sl: executionLocked ? existingTrade.sl : (sl ? AV.fmt(sl, AV.dec(entry)) : (existingHasNoStop ? existingStop : 'brak')),
       tp: executionLocked ? existingTrade.tp : (tp ? AV.fmt(tp, AV.dec(entry)) : '—'),
-      size: executionLocked ? existingTrade.size : AV.fmt(size, size < 1 ? 4 : 2),
+      size: executionLocked ? existingTrade.size : formattedSize,
       grade, checklist: checks, checklistItems, checkTotal: total, errors, emotion, setup, note,
+      ...closedFields,
       ...(executionLocked ? {} : {
         risk: risk == null ? null : Math.round(risk * 100) / 100,
-        riskPct: riskPct == null ? null : Math.round(riskPct * 100) / 100
+        riskPct: riskPct == null ? null : Math.round(riskPct * 100) / 100,
+        sizeUnit: sizeConfig.unit,
+        sizeContractSize: sizeConfig.unit === 'lots' ? sizeConfig.contractSize : null
       }),
-      account: executionLocked ? (existingTrade.account || '') : ($('#ntAccount')?.value || (s.accounts.find((a) => a.include)?.name || s.accounts[0]?.name || 'Konto główne')),
-      broker: executionLocked ? (existingTrade.broker || existingTrade.source || '') : ($('#ntBroker')?.value || existingTrade?.broker || existingTrade?.source || 'WEEX'),
+      account: accountName,
+      broker,
       plan: planAligned,
       mentor: grade === 'A' ? 'Wzorowo: plan, pełna checklista, SL, spokojna głowa. Tak wyglądają Twoje najlepsze transakcje.' : grade === 'B' ? 'Setup z planu, drobne odstępstwa. Trzymaj się checklisty do końca.' : (errors.length ? 'Ocena C i ' + errors.length + ' ' + AV.plural(errors.length, 'błąd', 'błędy', 'błędów') + '. To nie pech, to decyzja. Wróć do planu.' : 'Ocena C: brak setupu albo pośpiech. Odczekaj i wróć z planem.')
     };
-    if (existingTrade && !executionLocked && (
+    if (!closedEdit && existingTrade && !executionLocked && (
       existingTrade.entry !== payload.entry || existingTrade.sl !== payload.sl ||
       existingTrade.size !== payload.size || existingTrade.dir !== payload.dir
     )) {
       const updatedRisk = sl ? Math.abs(entry - sl) * size : null;
-      const previousResult = Number(existingTrade.result);
+      const previousResult = closedEdit ? Number(payload.result) : Number(existingTrade.result);
       payload.r = existingTrade.result != null && Number.isFinite(previousResult) && updatedRisk != null && updatedRisk > 0
         ? Math.round(previousResult / updatedRisk * 100) / 100
         : null;
     }
     if (AV.ui.editId && !AV.ui.ntChecklistTouched) {
-      delete payload.checklist;
-      delete payload.checklistItems;
-      delete payload.checkTotal;
+      const priorItems = Array.isArray(AV.ui.ntChecklistHistory) ? AV.ui.ntChecklistHistory : [];
+      const checklistChanged = checklistItems.length !== priorItems.length
+        || checklistItems.some((p) => !priorItems.includes(p));
+      if (!checklistChanged) {
+        delete payload.checklist;
+        delete payload.checklistItems;
+        delete payload.checkTotal;
+      }
     }
     const persist = () => {
       if (AV.ui.editId) {
@@ -1234,16 +1418,19 @@
     const breakeven = rr > 0 ? Math.round(100 / (1 + rr)) : null;
     const rrh = breakeven == null ? '' : breakeven <= 50 ? 'wystarczy ~' + breakeven + '% skuteczności' : 'poniżej 1:1, przemyśl cel';
     if (AV.calc.mode === 'crypto') {
-      const no = ml / slP, mg = no / lev, pf = no * tpP;
-      AV.setText('#rMainL', 'Za tę kwotę wejdź w trade');
-      AV.setText('#rMainH', 'depozyt przy dźwigni ' + lev + '× · ' + AV.fmt(mg / bal * 100, 1) + '% salda');
-      AV.setText('#rNotL', 'Wartość pozycji');
-      set(AV.fmt(mg) + ' $', '−' + AV.fmt(ml) + ' $', tp ? '+' + AV.fmt(pf) + ' $' : '—', AV.fmt(no) + ' $', tp ? '1 : ' + AV.fmt(rr, 2) : '—', rrh);
+      const quantity = ml / Math.abs(en - sl), no = quantity * en, mg = no / lev, pf = quantity * Math.abs(tp - en);
+      const instrument = AV.INST.crypto[+$('#cInst').value || 0]?.[0] || 'BTCUSDT';
+      const baseUnit = String(instrument).split('/')[0].replace(/(?:USDT|USDC|BUSD|USD)$/i, '') || 'units';
+      AV.setText('#rMainL', 'Wielkość pozycji (' + baseUnit + ')');
+      AV.setText('#rMainH', 'Notional ' + AV.fmt(no, 2) + ' $ · depozyt ' + AV.fmt(mg, 2) + ' $ przy dźwigni ' + lev + '× · ryzyko ' + AV.fmt(ml, 2) + ' $');
+      AV.setText('#rNotL', 'Wartość pozycji (notional)');
+      set(AV.fmt(quantity, 6) + ' ' + baseUnit, '−' + AV.fmt(ml) + ' $', tp ? '+' + AV.fmt(pf) + ' $' : '—', AV.fmt(no) + ' $', tp ? '1 : ' + AV.fmt(rr, 2) : '—', rrh);
       AV.setHTML('#rSteps', AV.stepsHTML([
         ['Max strata', 'saldo × ryzyko', '<b>' + AV.fmt(ml) + ' $</b>'],
         ['Odległość SL', '|wejście − SL| ÷ wejście', '<b>' + AV.fmt(slP * 100, 2) + '%</b>'],
-        ['Wartość pozycji', 'max strata ÷ SL%', '<b>' + AV.fmt(no) + ' $</b>'],
-        ['Kwota wejścia', 'wartość ÷ dźwignia', '<b>' + AV.fmt(mg) + ' $</b>'],
+        ['Ilość bazowa', 'max strata ÷ |wejście − SL|', '<b>' + AV.fmt(quantity, 6) + ' ' + baseUnit + '</b>'],
+        ['Wartość pozycji', 'ilość bazowa × wejście', '<b>' + AV.fmt(no) + ' $</b>'],
+        ['Depozyt', 'wartość pozycji ÷ dźwignia', '<b>' + AV.fmt(mg) + ' $</b>'],
         ['Zysk przy TP', 'wartość × TP%', tp ? '<b>' + AV.fmt(pf) + ' $</b>' : '—']
       ]));
     } else {
@@ -1332,11 +1519,14 @@
     AV.calcResult();
     const ml = bal * risk / 100, slP = Math.abs(en - sl) / en;
     if (AV.calc.mode === 'crypto') {
-      const notional = ml / slP, margin = notional / lev;
-      AV.setText('#rMainL', 'Proponowana kwota wejścia (depozyt)');
-      AV.setText('#rMain', AV.fmt(margin, 2) + ' $');
-      AV.setText('#rMainH', 'przy dżwigni ' + lev + '× · wartość pozycji ' + AV.fmt(notional, 2) + ' $ · ryzyko ' + AV.fmt(ml, 2) + ' $');
-      AV.toast('Wchodzisz kwotą ' + AV.fmt(margin, 2) + ' $ (dźwignia ' + lev + '×), ryzykując ' + AV.fmt(ml, 2) + ' $');
+      const quantity = ml / Math.abs(en - sl);
+      const notional = quantity * en, margin = notional / lev;
+      const instrument = AV.INST.crypto[+$('#cInst').value || 0]?.[0] || 'BTCUSDT';
+      const baseUnit = String(instrument).split('/')[0].replace(/(?:USDT|USDC|BUSD|USD)$/i, '') || 'units';
+      AV.setText('#rMainL', 'Proponowana wielkość pozycji (' + baseUnit + ')');
+      AV.setText('#rMain', AV.fmt(quantity, 6) + ' ' + baseUnit);
+      AV.setText('#rMainH', 'Notional ' + AV.fmt(notional, 2) + ' $ · depozyt ' + AV.fmt(margin, 2) + ' $ przy dźwigni ' + lev + '× · ryzyko ' + AV.fmt(ml, 2) + ' $');
+      AV.toast('Wielkość pozycji: ' + AV.fmt(quantity, 6) + ' ' + baseUnit + ', ryzyko ' + AV.fmt(ml, 2) + ' $');
     } else {
       const x = AV.INST[AV.calc.mode][+$('#cInst').value || 0];
       const pip = x[3], sp = Math.abs(en - sl) / pip, pv = AV.pipVal(x, en), lots = ml / (sp * pv);
@@ -2008,32 +2198,60 @@
       const name = $('#accName').value.trim();
       const start = AV.pnum($('#accStart').value);
       if (!name) { AV.toast('Podaj nazwę konta'); return; }
+      const sizeUnit = $('#accSizeUnit')?.value || 'units';
+      const contractSize = AV.pnum($('#accContractSize')?.value);
+      if (sizeUnit === 'lots' && !(contractSize > 0)) {
+        AV.toast('Dla lotów/kontraktów podaj dodatnią liczbę jednostek bazowych na lot');
+        $('#accContractSize')?.focus();
+        return;
+      }
       AV.state.accounts.push({
         id: AV.uid('acc'), name, exchange: $('#accExchange').value, type: $('#accType').value,
-        currency: $('#accCurrency').value, start, date: $('#accDate').value.trim() || AV.dateLabel(new Date()),
+        currency: $('#accCurrency').value, start, sizeUnit, contractSize: sizeUnit === 'lots' ? contractSize : null,
+        date: $('#accDate').value.trim() || AV.dateLabel(new Date()),
         lev: $('#accLev').value.trim() || '1×', goal: $('#accGoal').value.trim(), balance: start, include: true, primary: false
       });
       AV.saveNow(); $('#accForm').style.display = 'none';
-      ['#accName', '#accStart', '#accDate', '#accLev', '#accGoal'].forEach((x) => $(x).value = '');
+      ['#accName', '#accStart', '#accDate', '#accLev', '#accGoal', '#accContractSize'].forEach((x) => $(x).value = '');
+      AV.setVal('#accSizeUnit', 'units'); AV.show('#accContractWrap', false);
       AV.renderAccounts(); AV.renderSettings(); AV.renderDashboard(); AV.renderCalcPortfolios(); AV.toast('Konto dodane');
     });
     $('#accBody')?.addEventListener('change', (e) => {
       const startEl = e.target.closest('[data-acc-start]');
       const balEl = e.target.closest('[data-acc-balance]');
-      const el = startEl || balEl;
+      const unitEl = e.target.closest('[data-acc-unit]');
+      const contractEl = e.target.closest('[data-acc-contract]');
+      const el = startEl || balEl || unitEl || contractEl;
       if (!el) return;
-      const id = startEl ? startEl.dataset.accStart : balEl.dataset.accBalance;
+      const id = startEl ? startEl.dataset.accStart
+        : balEl ? balEl.dataset.accBalance
+          : unitEl ? unitEl.dataset.accUnit : contractEl.dataset.accContract;
       const acc = AV.state.accounts.find((x) => x.id === id);
       if (!acc) return;
       const val = AV.pnum(el.value);
       if (startEl) acc.start = Math.max(0, val);
-      else acc.balance = Math.max(0, val);
+      else if (balEl) acc.balance = Math.max(0, val);
+      else if (unitEl) {
+        if (el.value === 'lots' && !(AV.pnum(acc.contractSize) > 0)) {
+          acc.sizeUnit = 'lots';
+          AV.renderAccounts();
+          AV.toast('Wpisz jednostki bazowe na lot/kontrakt, aby używać tej jednostki');
+          Array.from(AV.$$('#accBody [data-acc-contract]')).find((input) => input.dataset.accContract === id)?.focus();
+        } else {
+          acc.sizeUnit = el.value;
+        }
+      } else {
+        if (!(val > 0)) { AV.toast('Mnożnik kontraktu musi być dodatni'); AV.renderAccounts(); return; }
+        acc.contractSize = val;
+      }
       AV.saveNow();
+      AV.renderAccounts();
+      AV.renderNewTradeForm();
       AV.renderSettings();
       AV.renderDashboard();
       AV.renderTax();
       AV.renderCalcPortfolios();
-      AV.toast('Saldo konta zapisane');
+      AV.toast(startEl || balEl ? 'Saldo konta zapisane' : 'Jednostka pozycji zapisana');
     });
     $('#accBody')?.addEventListener('click', (e) => {
       const del = e.target.closest('[data-acc-del]');

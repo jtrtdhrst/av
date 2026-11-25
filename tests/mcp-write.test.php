@@ -84,6 +84,11 @@ check(
     ($closeMfeSchema['type'] ?? null) === ['number', 'null']
     && ($closeMfeSchema['minimum'] ?? null) === 0
 );
+$updateTradeChangesSchema = WriteSchemas::inputUpdateTrade()['properties']['changes'] ?? [];
+check(
+    'Schemat update_trade: otwarty changes dopuszcza wyczyszczenie resultOverride',
+    ($updateTradeChangesSchema['additionalProperties'] ?? null) === true
+);
 
 // --- Rejestr operacji i routing zapisu --------------------------------
 $operations = WriteEngine::OPERATIONS;
@@ -386,11 +391,115 @@ check(
     'Transakcja: zamknięcie po zmianie SL liczy R z nowego ryzyka',
     $closedAdjusted['result']['result'] === 20.0 && $closedAdjusted['result']['r'] === 1.0
 );
+$closedManualSlCorrection = $apply($closedTrade['state'], 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['sl' => 90],
+]);
 check(
-    'Transakcja: zamknięta pozycja nie pozwala zmienić SL',
-    $errorOf($closedTrade['state'], 'trade.update', [
-        'tradeId' => $tradeId, 'changes' => ['sl' => 90],
-    ]) === 'closed_trade_execution_readonly'
+    'Transakcja ręczna: korekta SL zamkniętej pozycji jest dozwolona',
+    $closedManualSlCorrection['result']['sl'] === '90'
+    && $closedManualSlCorrection['result']['risk'] === 20.0
+    && $closedManualSlCorrection['result']['r'] === 1.0
+    && TradeRules::isClosed($closedManualSlCorrection['result'])
+);
+$closedManualExecutionCorrection = $apply($closedTrade['state'], 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['entry' => 101],
+]);
+check(
+    'Transakcja ręczna: korekta wykonania zamkniętej pozycji przelicza wynik, ryzyko i R',
+    $closedManualExecutionCorrection['result']['entry'] === '101'
+    && $closedManualExecutionCorrection['result']['exit'] === '110'
+    && $closedManualExecutionCorrection['result']['result'] === 18.0
+    && $closedManualExecutionCorrection['result']['risk'] === 12.0
+    && $closedManualExecutionCorrection['result']['riskPct'] === 1.2
+    && $closedManualExecutionCorrection['result']['r'] === 1.5
+);
+$closedManualDirectionCorrection = $apply($closedTrade['state'], 'trade.update', [
+    'tradeId' => $tradeId,
+    'changes' => ['dir' => 'short', 'entry' => 101, 'sl' => 105, 'tp' => 90],
+]);
+check(
+    'Transakcja ręczna: zmiana kierunku zamkniętej pozycji przelicza wynik i R',
+    $closedManualDirectionCorrection['result']['dir'] === 's'
+    && $closedManualDirectionCorrection['result']['result'] === -18.0
+    && $closedManualDirectionCorrection['result']['risk'] === 8.0
+    && $closedManualDirectionCorrection['result']['r'] === -2.25
+);
+$partialClosedRecord = array_replace($closedTrade['result'], [
+    'entry' => '100',
+    'sl' => '90',
+    'exit' => '130',
+    'initialSize' => '10',
+    'size' => '2.5',
+    'partials' => [
+        ['price' => '110', 'pct' => 50, 'result' => 50.0, 'resultOverride' => false, 'at' => '2026-01-02T12:10:00Z'],
+        ['price' => '120', 'pct' => 50, 'result' => 999.0, 'resultOverride' => true, 'at' => '2026-01-02T12:20:00Z'],
+    ],
+    'partialResult' => 1049.0,
+    'resultOverride' => null,
+    'result' => 1124.0,
+]);
+$partialClosedState = $closedTrade['state'];
+$partialClosedState['trades'][0] = $partialClosedRecord;
+$partialCorrection = $apply($partialClosedState, 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['entry' => 102, 'size' => 3],
+]);
+check(
+    'Transakcja częściowa: korekta przelicza kolejne nogi od initialSize i zachowuje override oraz czasy',
+    $partialCorrection['result']['initialSize'] === '12'
+    && $partialCorrection['result']['size'] === '3'
+    && $partialCorrection['result']['partials'][0]['result'] === 48.0
+    && $partialCorrection['result']['partials'][1]['result'] === 999.0
+    && $partialCorrection['result']['partials'][1]['resultOverride'] === true
+    && $partialCorrection['result']['partials'][0]['at'] === $partialClosedRecord['partials'][0]['at']
+    && $partialCorrection['result']['partials'][1]['at'] === $partialClosedRecord['partials'][1]['at']
+    && $partialCorrection['result']['partialResult'] === 1047.0
+    && $partialCorrection['result']['result'] === 1131.0
+    && $partialCorrection['result']['risk'] === 144.0
+    && $partialCorrection['result']['r'] === 7.85
+);
+$aggregateOverrideRecord = array_replace($partialClosedRecord, [
+    'resultOverride' => 300.0,
+    'result' => 300.0,
+]);
+$aggregateOverrideState = $closedTrade['state'];
+$aggregateOverrideState['trades'][0] = $aggregateOverrideRecord;
+$aggregateOverrideCorrection = $apply($aggregateOverrideState, 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['entry' => 102],
+]);
+check(
+    'Transakcja częściowa: agregatowy resultOverride pozostaje nadrzędny przy korekcie',
+    $aggregateOverrideCorrection['result']['initialSize'] === '10'
+    && $aggregateOverrideCorrection['result']['size'] === '2.5'
+    && $aggregateOverrideCorrection['result']['partials'][0]['result'] === 40.0
+    && $aggregateOverrideCorrection['result']['partials'][1]['result'] === 999.0
+    && $aggregateOverrideCorrection['result']['partialResult'] === 1039.0
+    && $aggregateOverrideCorrection['result']['resultOverride'] === 300.0
+    && $aggregateOverrideCorrection['result']['result'] === 300.0
+    && $aggregateOverrideCorrection['result']['r'] === 2.5
+);
+$aggregateOverrideCleared = $apply($aggregateOverrideState, 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['resultOverride' => null],
+]);
+check(
+    'Transakcja częściowa: wyczyszczenie agregatowego override liczy sumę nóg od nowa',
+    $aggregateOverrideCleared['result']['resultOverride'] === null
+    && $aggregateOverrideCleared['result']['partialResult'] === 1049.0
+    && $aggregateOverrideCleared['result']['result'] === 1124.0
+    && $aggregateOverrideCleared['result']['r'] === 11.24
+);
+check(
+    'Transakcja: update_trade nie pozwala ustawić liczbowego resultOverride',
+    $errorOf($aggregateOverrideState, 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['resultOverride' => 500],
+    ]) === 'field_not_editable'
+);
+$partialWithoutExitState = $partialClosedState;
+$partialWithoutExitState['trades'][0]['exit'] = null;
+check(
+    'Transakcja częściowa: bez exit i agregatowego override korekta jest odrzucana zamiast psuć wynik',
+    $errorOf($partialWithoutExitState, 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => ['entry' => 102],
+    ]) === 'closed_trade_metrics_unsupported'
 );
 check(
     'Transakcja: odrzuca SL po złej stronie po zmianie wejścia',
@@ -428,6 +537,29 @@ check(
         'tradeId' => $tradeId, 'changes' => ['r' => 1],
     ]) === 'field_not_editable'
 );
+$importedClosedState = $closedTrade['state'];
+$importedClosedState['trades'][0]['source'] = 'CSV';
+foreach (['entry' => 101, 'session' => 'Asia', 'plan' => true] as $field => $value) {
+    check(
+        'Transakcja nie ręczna: korekta zamkniętej pozycji jest zablokowana (' . $field . ')',
+        $errorOf($importedClosedState, 'trade.update', [
+            'tradeId' => $tradeId, 'changes' => [$field => $value],
+        ]) === 'exchange_data_readonly'
+    );
+}
+foreach (['extId', 'externalId', 'exchangeId'] as $externalIdField) {
+    $externalIdClosedState = $closedTrade['state'];
+    $externalIdClosedState['trades'][0][$externalIdField] = '0';
+    check(
+        'Transakcja z identyfikatorem zewnętrznym "0": wykonanie zamkniętej pozycji zablokowane (' . $externalIdField . ')',
+        $errorOf($externalIdClosedState, 'trade.update', [
+            'tradeId' => $tradeId, 'changes' => ['entry' => 101],
+        ]) === 'exchange_data_readonly'
+        && $errorOf($externalIdClosedState, 'trade.update', [
+            'tradeId' => $tradeId, 'changes' => ['resultOverride' => null],
+        ]) === 'exchange_data_readonly'
+    );
+}
 check(
     'Transakcja: tekst z doklejonymi znakami nie jest liczbą',
     $errorOf($trade['state'], 'trade.update', [
@@ -552,9 +684,16 @@ check(
     'Transakcja: break-even nie może być zamknięty drugi raz',
     $errorOf($closedAtResultOnly['state'], 'trade.close', ['tradeId' => $tradeId, 'result' => 10]) === 'already_closed'
 );
+$closedManualEntryCorrection = $apply($closedAtResultOnly['state'], 'trade.update', [
+    'tradeId' => $tradeId, 'changes' => ['entry' => 101],
+]);
 check(
-    'Transakcja: wykonanie zamkniętej pozycji jest niezmienne',
-    $errorOf($closedAtResultOnly['state'], 'trade.update', ['tradeId' => $tradeId, 'changes' => ['entry' => 101]]) === 'closed_trade_execution_readonly'
+    'Transakcja ręczna: korekta wejścia zamkniętej pozycji jest dozwolona',
+    $closedManualEntryCorrection['result']['entry'] === '101'
+    && $closedManualEntryCorrection['result']['result'] === 0.0
+    && $closedManualEntryCorrection['result']['risk'] === 12.0
+    && $closedManualEntryCorrection['result']['r'] === 0.0
+    && TradeRules::isClosed($closedManualEntryCorrection['result'])
 );
  $legacyClosed = $trade['result'];
  $legacyClosed['exit'] = '100';
@@ -649,6 +788,16 @@ $aliasWithExecutionChange = TradeRules::validateTransition(
     ['trades' => [$closedAtResultOnly['result']]],
     ['trades' => [array_replace($closedAtResultOnly['result'], ['dir' => 'long', 'entry' => '101'])]]
 );
+$restImportedTrade = array_replace($closedAtResultOnly['result'], ['source' => 'CSV']);
+$restImportedCorrection = TradeRules::validateTransition(
+    ['trades' => [$restImportedTrade]],
+    ['trades' => [array_replace($restImportedTrade, ['entry' => '101'])]]
+);
+$restZeroExternalIdTrade = array_replace($closedAtResultOnly['result'], ['extId' => '0']);
+$restZeroExternalIdCorrection = TradeRules::validateTransition(
+    ['trades' => [$restZeroExternalIdTrade]],
+    ['trades' => [array_replace($restZeroExternalIdTrade, ['entry' => '101'])]]
+);
 check(
     'Transakcja: ochrona ID nie zależy od kolejności; usunięcie wymaga oryginału w koszu',
     TradeRules::validateTransition($identityBefore, $identityAfterReordered)['error'] === 'trade_id_immutable'
@@ -663,11 +812,19 @@ check(
     && ($idlessNewTrade['error'] ?? '') === 'missing_trade_id'
     && ($idlessDuplicate['error'] ?? '') === 'missing_trade_id'
     && $idlessNoteEdit === null
-    && ($aliasWithExecutionChange['error'] ?? '') === 'closed_trade_execution_readonly'
     && !TradeRules::executionChanged(
         $closedAtResultOnly['result'],
         array_replace($closedAtResultOnly['result'], ['dir' => 'long'])
     )
+);
+check(
+    'TradeRules: alias kierunku nie blokuje korekty zamkniętej transakcji ręcznej',
+    $aliasWithExecutionChange === null
+);
+check(
+    'TradeRules REST: zamknięty import i zewnętrzne ID "0" pozostają tylko do odczytu',
+    ($restImportedCorrection['error'] ?? '') === 'exchange_data_readonly'
+    && ($restZeroExternalIdCorrection['error'] ?? '') === 'exchange_data_readonly'
 );
 $tradeTrashBefore = [
     'trades' => [],
@@ -688,12 +845,14 @@ check(
     (TradeRules::validateTransition($tradeTrashBefore, $tradeTrashTamper)['error'] ?? '') === 'trade_trash_immutable'
     && TradeRules::validateTransition($tradeTrashBefore, $aliasTradeTrashRestore) === null
 );
-foreach (['session' => 'Asia', 'plan' => false] as $field => $value) {
+foreach (['session' => 'Asia', 'plan' => true] as $field => $value) {
+    $closedContextCorrection = $apply($closedAtResultOnly['state'], 'trade.update', [
+        'tradeId' => $tradeId, 'changes' => [$field => $value],
+    ]);
     check(
-        'Transakcja: kontekst zamkniętej pozycji niezmienny (' . $field . ')',
-        $errorOf($closedAtResultOnly['state'], 'trade.update', [
-            'tradeId' => $tradeId, 'changes' => [$field => $value],
-        ]) === 'closed_trade_execution_readonly'
+        'Transakcja ręczna: edycja zamkniętego wykonania jest zgodna z REST TradeRules (' . $field . ')',
+        $closedContextCorrection['result'][$field] === $value
+        && TradeRules::isClosed($closedContextCorrection['result'])
     );
 }
 $reviewedTrade = $apply($trade['state'], 'review.create', [
