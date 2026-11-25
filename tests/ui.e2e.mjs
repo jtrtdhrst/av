@@ -2104,14 +2104,23 @@ try {
   await page.click('#tradeSlSave');
   await page.waitForFunction((id) => {
     const trade = AV.state.trades.find((row) => row.id === id);
-    return AV.pnum(trade?.sl) === 97 && !document.querySelector('#tradeSlValue');
+    const modalClosed = !document.querySelector('#gModal')?.classList.contains('on');
+    return AV.pnum(trade?.sl) === 97 && modalClosed;
   }, manageId, { timeout: 15000 });
-  const setSlState = await page.evaluate((id) => {
+  const setSlState = await page.evaluate(async (id) => {
     const trade = AV.state.trades.find((row) => row.id === id);
-    return { sl: trade?.sl, slNum: AV.pnum(trade?.sl), risk: trade?.risk };
+    const response = await fetch('/api/state', { cache: 'no-store' });
+    const payload = response.ok ? await response.json() : null;
+    const persistedTrade = (payload?.state?.trades || []).find((row) => row.id === id);
+    return {
+      sl: trade?.sl, slNum: AV.pnum(trade?.sl), risk: trade?.risk,
+      serverSl: persistedTrade?.sl, serverSlNum: AV.pnum(persistedTrade?.sl),
+      serverRisk: persistedTrade?.risk, serverRiskNum: AV.pnum(persistedTrade?.risk)
+    };
   }, manageId);
   log('pozycja: akcja Ustaw / zmień SL zapisuje cenę i ryzyko',
-    setSlState.slNum === 97 && setSlState.risk === 6, JSON.stringify(setSlState));
+    setSlState.slNum === 97 && setSlState.risk === 6 &&
+      setSlState.serverSlNum === 97 && setSlState.serverRiskNum === 6, JSON.stringify(setSlState));
   await page.evaluate((id) => AV.breakevenTrade(id), manageId);
   const beState = await page.evaluate((id) => {
     const t = AV.state.trades.find((x) => x.id === id);
