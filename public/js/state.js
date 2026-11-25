@@ -1702,7 +1702,7 @@
     levels: [{ type: 'Opór', price: '', note: '' }],
     ifMain: '', thenMain: '', ifAlt: '', thenAlt: '',
     risk: '', maxTrades: '', until: '', notDo: '',
-    approvedAt: null
+    approvedAt: null, completionStatus: null
   });
   AV.marketMatchesPlan = (plan, pair) => {
     if (!plan) return false;

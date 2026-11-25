@@ -66,6 +66,7 @@ Legenda:
 | Trwały zapis w MySQL | ✅ | każdy plan ma własny identyfikator i rynek w `user_states.state.plans`; przeładowanie odtwarza wiele planów tej samej daty |
 | Dziś/Wczoraj/Globalnie/Historia | ✅ | „Globalnie” przechowuje scenariusze długoterminowe bez przypisania do dnia; trwały zapis i powrót po przeładowaniu |
 | Kafelki planów globalnych | ✅ | siatka planów w zakładce „Globalnie” z podglądem rynku, kierunku, poziomów i statusu; kliknięcie otwiera plan w edytorze |
+| Podsumowanie realizacji dnia | ✅ | zatwierdzone plany można oznaczyć jako zrealizowane/niezrealizowane lub wyczyścić oznaczenie; licznik daty pokazuje oba statusy i plany do podsumowania, bez szkiców i planów globalnych |
 | Trzymanie się planu | ✅ | 5 dni wstecz |
 
 ---

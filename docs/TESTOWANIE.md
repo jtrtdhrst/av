@@ -25,7 +25,7 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Demo state tests | przesunięcie dat fixture demo, idempotencja, plany jako punkt zaczepienia |
 | Wearables E2E | OAuth2/PKCE, rotacja tokenów, UI, bezpieczeństwo |
 | API E2E | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, korekta ręcznego zamkniętego wykonania i łączny `resultOverride`, niezmienność zewnętrznych ID/importowanych wykonań, no-op zachowuje `revision` i ISO `updatedAt`, legacy close bez SL, stan, events, macro, admin, eksport i cleanup fixture |
-| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia i poziomy, historyczna checklista przy zmianie konfiguracji, wymagany SL, PnL po dacie realizacji, brak sukcesu przy błędzie zapisu zamknięcia, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup fixture |
+| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia, poziomy i podsumowanie realizacji; natychmiastowe oznaczenie nie gubi szkicu tekstu, kopia oznaczonego planu z wczoraj resetuje status; historyczna checklista przy zmianie konfiguracji, wymagany SL, PnL po dacie realizacji, brak sukcesu przy błędzie zapisu zamknięcia, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup fixture |
 | Integracje E2E | mocki OKX/BingX/WEEX/MetaApi/EA, batch 501, rollback, czas źródłowy/UTC, limit stron i brak kursora bez częściowego importu |
 | Tax E2E | PIT-38, CSV/PDF, wpłaty/wypłaty |
 | PWA E2E | manifest, SW, instalacja, push, offline |
@@ -211,7 +211,7 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - live i konsultacja z `/api/events`,
 - harmonogram tygodnia i strip,
 - nawigacja 15 widoków (w tym prop),
-- plan dnia: wiele niezależnych planów dla daty, wybór planu/rynku, poziomy wsparcia, oporu, płynności, POI i własny, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie, zakładka „Globalnie” z kafelkami i trwałością planu bez daty,
+- plan dnia: wiele niezależnych planów dla daty, wybór planu/rynku, poziomy wsparcia, oporu, płynności, POI i własny, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie; statusy realizacji zatwierdzonych planów, agregaty dla daty, wyczyszczenie oznaczenia, wyłączenie szkiców/globalnych, trwałość po reloadzie i brak utraty statusu przy autosave; natychmiastowe oznaczenie zachowuje niezapisany tekst, a kopia oznaczonego planu z wczoraj zaczyna bez statusu; zakładka „Globalnie” z kafelkami i trwałością planu bez daty,
 - pulpit: rozwijana lista kont, podgląd salda tylko przy kompletnych danych, brak arbitralnych limitów przy wielu planach, skrót do „Konto i zasady”, edycja salda i etykieta „Kapitał startowy”,
 - ręczna transakcja: konto określa brokera i jednostkę wejściową; `size` jest normalizowane do jednostek bazowych, a loty wymagają jawnego mnożnika kontraktu; SL wymagany, R:R elastyczne bez stałego minimum, checklista bez minimalnego progu zapisu; ręczny wybór punktów zachowuje się przy edycji,
 - CSV: brak PnL bez danych do wyliczenia pomija wiersz; jawny PnL 0 zostaje break-even; brakujące MAE/MFE, opłaty, czas i checklista nie są zamieniane na zera ani wartości domyślne; eksport dziennika zachowuje MAE/MFE i nie zapisuje nieznanej opłaty jako zero,

@@ -54,7 +54,7 @@ npm ci
 npm test                 # API: SL/source także przez kosz, data/closedAt, legacy close, fixture cleanup i no-op revision/updatedAt
 npm run test:prop        # silnik prop challenge: 27 scenariuszy
 npm run test:router      # adresy podstron (hash routing): 18 scenariuszy
-npm run test:ui          # UI: rozwijane konta, wiele planów, wymagany SL, błąd zapisu zamknięcia, API round-trip i fixture cleanup
+npm run test:ui          # UI: rozwijane konta, wiele planów i podsumowanie realizacji; niezapisany tekst przy statusie, reset statusu przy kopii z wczoraj, wymagany SL, błąd zapisu zamknięcia, API round-trip i fixture cleanup
 npm run test:tax         # PIT-38: 8 scenariuszy (MySQL + UI)
 npm run test:isolation   # izolacja użytkowników: 9 scenariuszy
 npm run test:pwa         # PWA mobile: manifest, offline, brak przepełnienia 390/1024 px

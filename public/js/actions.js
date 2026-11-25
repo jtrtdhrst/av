@@ -408,6 +408,32 @@
       AV.planId = e.target.value || null;
       AV.renderPlan();
     });
+    $('#planOutcomeControls')?.addEventListener('click', async (e) => {
+      const button = e.target.closest('[data-plan-outcome]');
+      if (!button || button.disabled || AV.ui.planOutcomeSaving) return;
+      AV.savePlanDraft();
+      const plan = AV.planById(AV.state, AV.planId);
+      if (!plan || plan.date === 'global' || AV.planDate === 'global' || !plan.approvedAt) return;
+      const choice = button.dataset.planOutcome;
+      const completionStatus = choice === 'clear'
+        ? null
+        : ['realized', 'unrealized'].includes(choice) ? choice : undefined;
+      if (completionStatus === undefined || completionStatus === plan.completionStatus) return;
+      button.disabled = true;
+      const message = completionStatus === 'realized'
+        ? 'Plan oznaczono jako zrealizowany.'
+        : completionStatus === 'unrealized'
+          ? 'Plan oznaczono jako niezrealizowany.'
+          : 'Cofnięto podsumowanie planu.';
+      AV.ui.planOutcomeSaving = true;
+      try {
+        const saved = await AV.commitPlan({ ...plan, completionStatus }, message);
+        if (!saved) AV.renderPlan();
+      } finally {
+        AV.ui.planOutcomeSaving = false;
+        AV.renderPlanOutcome();
+      }
+    });
     $('#addPlan')?.addEventListener('click', () => {
       const plan = AV.planTemplate(AV.planDate);
       plan.id = AV.uid('plan');
@@ -483,7 +509,7 @@
       if (!y) { AV.toast('Brak planu z poprzedniego dnia'); return; }
       const copy = AV.clone(y);
       copy.id = AV.uid('plan');
-      copy.date = AV.planDate; copy.approvedAt = null;
+      copy.date = AV.planDate; copy.approvedAt = null; copy.completionStatus = null;
       await AV.commitPlan(copy, 'Skopiowano plan z poprzedniego dnia.');
       AV.renderPlan();
     });

@@ -475,10 +475,11 @@ try {
       why: plans[0]?.why,
       tiles: document.querySelectorAll('#planGlobalGrid [data-plan-open="global"]').length,
       tabOn: document.querySelector('#planSeg button[data-day="global"]')?.classList.contains('on'),
+      outcomeHidden: getComputedStyle(document.querySelector('#planOutcomeCard')).display === 'none',
       server: JSON.stringify(data.state?.plans?.global || '')
     };
   });
-  log('plan globalny: zapis i kafelki', globalPlan.count >= 1 && globalPlan.date === 'global' && globalPlan.approved && globalPlan.why === globalWhy && globalPlan.tiles >= 1 && globalPlan.tabOn, JSON.stringify(globalPlan));
+  log('plan globalny: zapis i kafelki bez podsumowania dnia', globalPlan.count >= 1 && globalPlan.date === 'global' && globalPlan.approved && globalPlan.why === globalWhy && globalPlan.tiles >= 1 && globalPlan.tabOn && globalPlan.outcomeHidden, JSON.stringify(globalPlan));
   log('plan globalny: trwały zapis w bazie', globalPlan.server.includes('global'), globalPlan.server.slice(0, 200));
 
   // dwa niezależne plany tego samego dnia i rynku pozostają osobnymi rekordami po reloadzie
@@ -504,47 +505,136 @@ try {
     const data = await res.json();
     return Object.values(data.state?.plans || {}).some((p) => p?.id === id && p.why === expectedWhy && p.approvedAt);
   }, { id: secondPlanId, why: secondWhy }, { timeout: 15000 });
-   const sameMarketAfter = await page.evaluate(() => AV.plansForDate(AV.state, AV.planDate)
-     .filter((p) => p.market === 'ETH')
-     .map((p) => ({ id: p.id, date: p.date, bias: p.bias, why: p.why })));
-   log('plan dnia: ten sam dzień i rynek mają niezależne plany', !!firstPlanId && !!secondPlanId && firstPlanId !== secondPlanId && sameMarketAfter.length === sameMarketBefore + 1 && sameMarketAfter.some((p) => p.id === secondPlanId && p.why === secondWhy), JSON.stringify(sameMarketAfter));
-   const ambiguousPlanDashboard = await page.evaluate(() => {
-     AV.showView('pulpit');
-     return {
-       plans: AV.plansForDate(AV.state, AV.dateKey(new Date())).length,
-       trades: document.querySelector('#dayTrades')?.textContent.trim() || '',
-       tradesBar: getComputedStyle(document.querySelector('#tradesBar').parentElement).display,
-       risk: document.querySelector('#dayRisk')?.textContent.trim() || '',
-       riskBar: getComputedStyle(document.querySelector('#riskBar').parentElement).display,
-       tag: document.querySelector('#dashPlanTag')?.textContent.trim() || ''
-     };
-   });
-   log('pulpit: wiele planów nie wybiera arbitralnie limitów',
-     ambiguousPlanDashboard.plans > 1 && !ambiguousPlanDashboard.trades.includes('/') &&
-       ambiguousPlanDashboard.tradesBar === 'none' && !ambiguousPlanDashboard.risk.includes('/') &&
-       ambiguousPlanDashboard.riskBar === 'none' && ambiguousPlanDashboard.tag === 'wiele planów',
-     JSON.stringify(ambiguousPlanDashboard));
+  const sameMarketAfter = await page.evaluate(() => AV.plansForDate(AV.state, AV.planDate)
+    .filter((p) => p.market === 'ETH')
+    .map((p) => ({ id: p.id, date: p.date, bias: p.bias, why: p.why })));
+  log('plan dnia: ten sam dzień i rynek mają niezależne plany', !!firstPlanId && !!secondPlanId && firstPlanId !== secondPlanId && sameMarketAfter.length === sameMarketBefore + 1 && sameMarketAfter.some((p) => p.id === secondPlanId && p.why === secondWhy), JSON.stringify(sameMarketAfter));
+  const waitForPlanOutcome = async (id, completionStatus, expectedWhy = null) => page.waitForFunction(async ({ planId, status, why }) => {
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const data = await res.json();
+    const plans = Object.values(data.state?.plans || {}).flatMap((plan) => Array.isArray(plan) ? plan : [plan]);
+    return plans.some((plan) => plan?.id === planId &&
+      (status == null ? plan.completionStatus == null : plan.completionStatus === status) &&
+      (why == null || plan.why === why));
+  }, { planId: id, status: completionStatus, why: expectedWhy }, { timeout: 15000 });
+  const waitForOutcomeControls = () => page.waitForFunction(() =>
+    !document.querySelector('#planOutcomeRealized')?.disabled &&
+    !document.querySelector('#planOutcomeUnrealized')?.disabled, null, { timeout: 15000 });
+  const firstOutcomeWhy = why + ' · status E2E';
+  await page.selectOption('#planSelect', firstPlanId);
+  await page.fill('#planWhy', firstOutcomeWhy);
+  await page.click('#planOutcomeRealized');
+  await waitForPlanOutcome(firstPlanId, 'realized', firstOutcomeWhy);
+  await waitForOutcomeControls();
+  await page.selectOption('#planSelect', secondPlanId);
+  await page.click('#planOutcomeUnrealized');
+  await waitForPlanOutcome(secondPlanId, 'unrealized');
+  await waitForOutcomeControls();
+  const outcomeSummary = await page.evaluate(() => {
+    const approved = AV.plansForDate(AV.state, AV.planDate).filter((plan) => !!plan.approvedAt);
+    const count = (selector) => Number(document.querySelector(selector)?.textContent.trim());
+    return {
+      realized: count('#planOutcomeRealizedCount'),
+      unrealized: count('#planOutcomeUnrealizedCount'),
+      pending: count('#planOutcomePendingCount'),
+      expectedRealized: approved.filter((plan) => plan.completionStatus === 'realized').length,
+      expectedUnrealized: approved.filter((plan) => plan.completionStatus === 'unrealized').length,
+      expectedPending: approved.filter((plan) => !['realized', 'unrealized'].includes(plan.completionStatus)).length,
+      firstStatus: AV.planById(AV.state, firstPlanId)?.completionStatus,
+      secondStatus: AV.planById(AV.state, secondPlanId)?.completionStatus
+    };
+  });
+  log('plan dnia: podsumowanie zatwierdzonych planów', outcomeSummary.realized === outcomeSummary.expectedRealized &&
+    outcomeSummary.unrealized === outcomeSummary.expectedUnrealized && outcomeSummary.pending === outcomeSummary.expectedPending &&
+    outcomeSummary.firstStatus === 'realized' && outcomeSummary.secondStatus === 'unrealized', JSON.stringify(outcomeSummary));
+  await page.click('#planOutcomeClear');
+  await waitForPlanOutcome(secondPlanId, null);
+  await waitForOutcomeControls();
+  await page.waitForFunction((expectedPending) =>
+    Number(document.querySelector('#planOutcomePendingCount')?.textContent.trim()) === expectedPending,
+  outcomeSummary.pending + 1, { timeout: 15000 });
+  const clearedOutcome = await page.evaluate(() => ({
+    status: AV.planById(AV.state, AV.planId)?.completionStatus,
+    pending: Number(document.querySelector('#planOutcomePendingCount')?.textContent.trim())
+  }));
+  log('plan dnia: cofnięcie oznaczenia', clearedOutcome.status == null && clearedOutcome.pending === outcomeSummary.pending + 1, JSON.stringify(clearedOutcome));
+  await page.click('#planOutcomeUnrealized');
+  await waitForPlanOutcome(secondPlanId, 'unrealized');
+  await waitForOutcomeControls();
+  const copyFixture = await page.evaluate(async (sourceId) => {
+    clearTimeout(AV._pushTimer);
+    if (AV.api.pushing && !(await AV.waitForPushIdle(15000))) throw new Error('Poprzedni zapis planu nie zakończył się przed testem kopiowania.');
+    clearTimeout(AV._pushTimer);
+    const source = AV.planById(AV.state, sourceId);
+    if (!source) throw new Error('Brak planu źródłowego dla testu kopiowania.');
+    const market = 'E2E-COPY-' + Date.now().toString(36);
+    const date = AV.planDate;
+    const yesterday = AV.dateKey(AV.addDays(new Date(date + 'T12:00:00'), -1));
+    const base = AV.clone(source);
+    const target = { ...base, id: AV.uid('plan'), date, market, approvedAt: Date.now(), completionStatus: null };
+    const priorDay = { ...base, id: AV.uid('plan'), date: yesterday, market, approvedAt: Date.now(), completionStatus: 'realized' };
+    AV.storePlan(AV.state, target);
+    AV.storePlan(AV.state, priorDay);
+    let saved = await AV.pushStateImmediate();
+    if (!saved && AV.api.pushing) {
+      await AV.waitForPushIdle(15000);
+      saved = await AV.pushStateImmediate();
+    }
+    if (!saved) throw new Error('Nie udało się zapisać fixture do kopiowania planu.');
+    return { targetId: target.id, date, yesterday, market };
+  }, secondPlanId);
+  await page.selectOption('#planSelect', copyFixture.targetId);
+  await page.click('#copyPlan');
+  await page.waitForFunction((targetId) => !!AV.planId && AV.planId !== targetId, copyFixture.targetId, { timeout: 15000 });
+  const copiedPlanId = await page.evaluate(() => AV.planId);
+  await waitForPlanOutcome(copiedPlanId, null);
+  const copiedOutcome = await page.evaluate(() => {
+    const plan = AV.planById(AV.state, AV.planId);
+    return { id: plan?.id, date: plan?.date, market: plan?.market, approved: !!plan?.approvedAt, completionStatus: plan?.completionStatus };
+  });
+  log('plan dnia: kopia oznaczonego wczorajszego planu zaczyna bez wyniku',
+    copiedOutcome.id === copiedPlanId && copiedOutcome.date === copyFixture.date && copiedOutcome.market === copyFixture.market &&
+      !copiedOutcome.approved && copiedOutcome.completionStatus == null,
+    JSON.stringify({ fixture: copyFixture, copied: copiedOutcome }));
+  const ambiguousPlanDashboard = await page.evaluate(() => {
+    AV.showView('pulpit');
+    return {
+      plans: AV.plansForDate(AV.state, AV.dateKey(new Date())).length,
+      trades: document.querySelector('#dayTrades')?.textContent.trim() || '',
+      tradesBar: getComputedStyle(document.querySelector('#tradesBar').parentElement).display,
+      risk: document.querySelector('#dayRisk')?.textContent.trim() || '',
+      riskBar: getComputedStyle(document.querySelector('#riskBar').parentElement).display,
+      tag: document.querySelector('#dashPlanTag')?.textContent.trim() || ''
+    };
+  });
+  log('pulpit: wiele planów nie wybiera arbitralnie limitów',
+    ambiguousPlanDashboard.plans > 1 && !ambiguousPlanDashboard.trades.includes('/') &&
+      ambiguousPlanDashboard.tradesBar === 'none' && !ambiguousPlanDashboard.risk.includes('/') &&
+      ambiguousPlanDashboard.riskBar === 'none' && ambiguousPlanDashboard.tag === 'wiele planów',
+    JSON.stringify(ambiguousPlanDashboard));
 
-   await page.reload({ waitUntil: 'load' });
+  await page.reload({ waitUntil: 'load' });
   await page.waitForFunction(() => window.AV?.ready && AV.api.authenticated, null, { timeout: 15000 });
   await page.click('.navg button[data-v="plan"]');
   await page.waitForFunction((ids) => ids.every((id) => Array.from(document.querySelectorAll('#planSelect option')).some((o) => o.value === id)), [firstPlanId, secondPlanId], { timeout: 15000 });
   await page.selectOption('#planSelect', firstPlanId);
   const firstPlanAfterReload = await page.evaluate(() => {
     const p = AV.planById(AV.state, AV.planId);
-    return { id: p?.id, date: p?.date, market: p?.market, bias: p?.bias, why: p?.why, levels: p?.levels || [] };
+    return { id: p?.id, date: p?.date, market: p?.market, bias: p?.bias, why: p?.why, levels: p?.levels || [], completionStatus: p?.completionStatus };
   });
   await page.selectOption('#planSelect', secondPlanId);
   const secondPlanAfterReload = await page.evaluate(() => {
     const p = AV.planById(AV.state, AV.planId);
-    return { id: p?.id, date: p?.date, market: p?.market, bias: p?.bias, why: p?.why, levels: p?.levels || [] };
+    return { id: p?.id, date: p?.date, market: p?.market, bias: p?.bias, why: p?.why, levels: p?.levels || [], completionStatus: p?.completionStatus };
   });
   log('plan dnia: dwa plany tego samego rynku niezależne po reloadzie',
     firstPlanAfterReload.id === firstPlanId && secondPlanAfterReload.id === secondPlanId &&
       firstPlanAfterReload.date === secondPlanAfterReload.date && firstPlanAfterReload.market === 'ETH' &&
-      secondPlanAfterReload.market === 'ETH' && firstPlanAfterReload.why === why && secondPlanAfterReload.why === secondWhy &&
+      secondPlanAfterReload.market === 'ETH' && firstPlanAfterReload.why === firstOutcomeWhy && secondPlanAfterReload.why === secondWhy &&
+      firstPlanAfterReload.completionStatus === 'realized' && secondPlanAfterReload.completionStatus === 'unrealized' &&
       firstPlanAfterReload.bias !== secondPlanAfterReload.bias &&
-       firstPlanAfterReload.levels.some((l) => l.type === 'Liquidity') && firstPlanAfterReload.levels.some((l) => l.type === 'POI') &&
+      firstPlanAfterReload.levels.some((l) => l.type === 'Liquidity') && firstPlanAfterReload.levels.some((l) => l.type === 'POI') &&
       secondPlanAfterReload.levels.some((l) => l.type === 'POI'),
     JSON.stringify({ firstPlanAfterReload, secondPlanAfterReload }));
 
@@ -554,9 +644,9 @@ try {
   await page.waitForTimeout(300);
   const planSelect = await page.evaluate(() => {
     const p = AV.planById(AV.state, AV.planId) || {};
-    return { market: p.market, bias: p.bias, select: document.querySelector('#planMarketSelect').value, chip: document.querySelector('#planMarkets .chip.on')?.dataset.m };
+    return { market: p.market, bias: p.bias, select: document.querySelector('#planMarketSelect').value, chip: document.querySelector('#planMarkets .chip.on')?.dataset.m, completionStatus: p.completionStatus };
   });
-  log('plan: select rynku i bias', planSelect.market === 'SOL' && planSelect.bias === 'long' && planSelect.select === 'SOL' && planSelect.chip === 'SOL', JSON.stringify(planSelect));
+  log('plan: select rynku i bias zachowuje podsumowanie', planSelect.market === 'SOL' && planSelect.bias === 'long' && planSelect.select === 'SOL' && planSelect.chip === 'SOL' && planSelect.completionStatus === 'unrealized', JSON.stringify(planSelect));
 
   await page.selectOption('#planMarketSelect', '__other');
   await page.fill('#planMarketCustom', 'EURUSD');

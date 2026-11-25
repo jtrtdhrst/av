@@ -776,6 +776,19 @@ footer.ft .lk{display:flex;flex-wrap:wrap;gap:6px 18px}footer.ft .lk span,footer
         <div class="mut" style="margin-top:4px" id="planSideSub">powyżej 68 500 · retest wybicia</div>
         <div id="planSideBody"></div>
       </div>
+      <div class="card" id="planOutcomeCard">
+        <div class="sech" style="margin:0"><div><h2>Podsumowanie dnia</h2><p class="mut" id="planOutcomeHint" style="font-size:13px;margin-top:4px">Zatwierdź plan, aby rozpocząć podsumowanie dnia.</p></div></div>
+        <div class="grid g3" style="margin-top:12px">
+          <div><span class="label">Zrealizowane</span><div class="val mono" id="planOutcomeRealizedCount">0</div></div>
+          <div><span class="label">Niezrealizowane</span><div class="val mono" id="planOutcomeUnrealizedCount">0</div></div>
+          <div><span class="label">Do podsumowania</span><div class="val mono" id="planOutcomePendingCount">0</div></div>
+        </div>
+        <div id="planOutcomeControls" role="group" aria-label="Podsumowanie realizacji wybranego planu" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+          <button class="btn g sm" id="planOutcomeRealized" type="button" data-plan-outcome="realized" aria-pressed="false" disabled>Plan zrealizowany</button>
+          <button class="btn g sm" id="planOutcomeUnrealized" type="button" data-plan-outcome="unrealized" aria-pressed="false" disabled>Plan niezrealizowany</button>
+          <button class="btn g sm" id="planOutcomeClear" type="button" data-plan-outcome="clear" disabled>Cofnij oznaczenie</button>
+        </div>
+      </div>
       <div class="card"><div class="lbl">Trzymanie się planu</div>
         <div class="val" id="adherenceVal">4 z 5 dni</div><div class="hint" id="adherenceHint">w dni zgodne z planem średnio +31,40 · w pozostałe −42,10</div>
         <div class="hist" id="adherenceHist"><i style="background:var(--winS);color:var(--win)">pn</i><i style="background:var(--winS);color:var(--win)">wt</i><i style="background:var(--lossS);color:var(--loss)">śr</i><i style="background:var(--winS);color:var(--win)">czw</i><i style="background:var(--winS);color:var(--win)">pt</i></div>
