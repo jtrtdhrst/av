@@ -303,7 +303,7 @@
     }
     $$('#planMarkets .chip').forEach((c) => c.classList.toggle('on', c.dataset.m === market));
   };
-  AV.renderPlan = () => {
+  AV.renderPlan = (force = false) => {
     const s = AV.state;
     const key = AV.planDate;
     if (!s.plans || typeof s.plans !== 'object') s.plans = {};
@@ -327,7 +327,7 @@
     const active = document.activeElement;
     const editing = !!(editor && active && active !== document.body && editor.contains(active) &&
       !['planSelect', 'addPlan'].includes(active.id));
-    if (!editing) {
+    if (force || !editing) {
       AV.syncPlanMarket(p);
       $$('#planBias .chip').forEach((c) => c.classList.toggle('on', c.dataset.b === p.bias));
       AV.setVal('#planWhy', p.why || '');

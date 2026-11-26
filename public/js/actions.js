@@ -405,8 +405,12 @@
       }
     });
     $('#planSelect')?.addEventListener('change', (e) => {
-      AV.planId = e.target.value || null;
-      AV.renderPlan();
+      e.stopPropagation();
+      const nextPlanId = e.target.value || null;
+      if (nextPlanId === AV.planId) return;
+      AV.savePlanDraft();
+      AV.planId = nextPlanId;
+      AV.renderPlan(true);
     });
     $('#planOutcomeControls')?.addEventListener('click', async (e) => {
       const button = e.target.closest('[data-plan-outcome]');

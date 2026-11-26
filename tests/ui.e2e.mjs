@@ -521,6 +521,30 @@ try {
   const waitForOutcomeControls = () => page.waitForFunction(() =>
     !document.querySelector('#planOutcomeRealized')?.disabled &&
     !document.querySelector('#planOutcomeUnrealized')?.disabled, null, { timeout: 15000 });
+  const selectionSwitchWhy = secondWhy + ' · zmiana planu E2E';
+  await page.selectOption('#planSelect', firstPlanId);
+  await page.fill('#planWhy', selectionSwitchWhy);
+  await page.selectOption('#planSelect', secondPlanId);
+  await waitForPlanOutcome(firstPlanId, null, selectionSwitchWhy);
+  const selectedPlanAfterSwitch = await page.evaluate(() => {
+    const plan = AV.readPlanForm();
+    return {
+      selectedId: AV.planId,
+      formId: plan.id,
+      market: plan.market,
+      bias: plan.bias,
+      why: plan.why,
+      levelTypes: plan.levels.map((level) => level.type)
+    };
+  });
+  log('plan dnia: zmiana planu zapisuje szkic poprzedniego i ładuje wybrany',
+    selectedPlanAfterSwitch.selectedId === secondPlanId &&
+      selectedPlanAfterSwitch.formId === secondPlanId &&
+      selectedPlanAfterSwitch.market === 'ETH' &&
+      selectedPlanAfterSwitch.bias === 'long' &&
+      selectedPlanAfterSwitch.why === secondWhy &&
+      selectedPlanAfterSwitch.levelTypes.includes('POI'),
+    JSON.stringify(selectedPlanAfterSwitch));
   const firstOutcomeWhy = why + ' · status E2E';
   await page.selectOption('#planSelect', firstPlanId);
   await page.fill('#planWhy', firstOutcomeWhy);
