@@ -1738,6 +1738,69 @@
   };
 
   /* ---------- akademia ---------- */
+  AV.setupConsultationDialog = (modalBody, titleId) => {
+    const opener = AV.ui?.consultationPanelOpener;
+    const restoreFocus = () => {
+      const target = opener && opener !== document.body && opener.isConnected
+        ? opener
+        : document.querySelector('#consultOpen');
+      target?.focus();
+    };
+    const closeButton = modalBody.querySelector('[data-gclose]');
+    if (closeButton) {
+      closeButton.setAttribute('role', 'button');
+      closeButton.setAttribute('tabindex', '0');
+      closeButton.setAttribute('aria-label', 'Zamknij panel konsultacji');
+      closeButton.addEventListener('click', restoreFocus);
+      closeButton.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          AV.closeModal();
+          restoreFocus();
+        }
+      });
+    }
+    if (titleId) modalBody.setAttribute('aria-labelledby', titleId);
+    modalBody.setAttribute('tabindex', '-1');
+    const focusable = () => Array.from(modalBody.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+    modalBody.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        AV.closeModal();
+        restoreFocus();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        modalBody.focus();
+        return;
+      }
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    const modalRoot = document.querySelector('#gModal');
+    if (modalRoot) {
+      modalRoot._consultationFocusRestore = restoreFocus;
+      if (!modalRoot._consultationFocusListener) {
+        modalRoot._consultationFocusListener = (event) => {
+          if (event.target === modalRoot) modalRoot._consultationFocusRestore?.();
+        };
+        modalRoot.addEventListener('click', modalRoot._consultationFocusListener);
+      }
+    }
+    focusable()[0]?.focus();
+  };
+
   AV.openConsultationBooking = () => {
     const options = [];
     let d = AV.addDays(new Date(), 1);
@@ -1745,18 +1808,24 @@
       if (d.getDay() !== 0 && d.getDay() !== 6) options.push(new Date(d));
       d = AV.addDays(d, 1);
     }
-    const body = AV.openModal('<div class="eyebrow">Konsultacje 1:1</div><h1 style="font-size:26px;margin-top:6px">Zarezerwuj kolejną</h1><p class="mut" style="margin-top:8px;font-size:13.5px">Wybierz termin. Rezerwacja jest lokalna — w wersji produkcyjnej potwierdzi się w kalendarzu.</p><div class="grid" style="margin-top:14px;gap:8px" id="bookSlots">' +
-      options.map((x, i) => '<button class="btn g" data-slot="' + i + '" style="justify-content:flex-start">' + x.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · 18:00</button>').join('') + '</div>', { maxWidth: '520px' });
+    const body = AV.openModal('<div class="eyebrow">Konsultacje 1:1</div><h1 id="consultBookingTitle" style="font-size:26px;margin-top:6px">Zarezerwuj kolejną</h1><p class="mut" style="margin-top:8px;font-size:13.5px">Wybierz termin. Rezerwacja jest lokalna — w wersji produkcyjnej potwierdzi się w kalendarzu.</p><div class="grid" style="margin-top:14px;gap:8px" id="bookSlots">' +
+      options.map((x, i) => '<button class="btn g" data-slot="' + i + '" style="justify-content:flex-start">' + x.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · 18:00</button>').join('') + '</div>', {
+      maxWidth: '520px',
+      onMount: (modalBody) => AV.setupConsultationDialog(modalBody, 'consultBookingTitle')
+    });
     body.querySelectorAll('#bookSlots [data-slot]').forEach((b) => b.onclick = () => {
       const d2 = options[+b.dataset.slot];
       AV.state.meta.consultation = { date: AV.dateKey(d2), time: '18:00', who: 'Marcin' };
       AV.state.meta.consultationUsed = Math.min(3, (AV.state.meta.consultationUsed || 0) + 1);
-      AV.saveNow(); AV.closeModal(); AV.renderAcademy(); AV.renderUser();
+      AV.saveNow(); AV.closeModal();
+      AV.ui?.consultationPanelOpener?.focus();
+      AV.renderAcademy(); AV.renderUser();
       AV.toast('Zarezerwowano: ' + d2.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ', 18:00');
     });
   };
 
   AV.openConsultationPanel = () => {
+    AV.ui.consultationPanelOpener = document.activeElement;
     const state = AV.state || {};
     const data = AV.api.events || {};
     const event = data.nextConsultation || null;
@@ -1764,7 +1833,13 @@
     const savedDate = typeof savedConsultation?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(savedConsultation.date)
       ? AV.parseKey(savedConsultation.date)
       : null;
-    const localBooking = !event && savedDate && AV.dateKey(savedDate) === savedConsultation.date
+    const savedDateIsValid = savedDate && AV.dateKey(savedDate) === savedConsultation.date;
+    const savedTime = typeof savedConsultation?.time === 'string'
+      ? /^([01]\d|2[0-3]):([0-5]\d)$/.exec(savedConsultation.time)
+      : null;
+    const savedStart = savedDateIsValid && savedTime ? new Date(savedDate) : null;
+    if (savedStart) savedStart.setHours(Number(savedTime[1]), Number(savedTime[2]), 0, 0);
+    const localBooking = !event && savedStart && savedStart.getTime() > Date.now()
       ? savedConsultation
       : null;
     const usedValue = Number(state.meta?.consultationUsed || 0);
@@ -1803,7 +1878,7 @@
       {
         maxWidth: '520px',
         onMount: (modalBody) => {
-          modalBody.setAttribute('aria-labelledby', 'consultDialogTitle');
+          AV.setupConsultationDialog(modalBody, 'consultDialogTitle');
           modalBody.querySelectorAll('[data-setting]').forEach((el) => el.addEventListener('click', () => {
             AV.toggleSetting(el);
             el.setAttribute('aria-checked', String(el.classList.contains('on')));
