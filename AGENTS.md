@@ -75,7 +75,10 @@ Nie zaczynaj od zgadywania. Najpierw ustal, który punkt styku zmieniasz.
 ### Discord
 
 - Źródło prawdy: `GET https://discord.com/api/v10/guilds/{guild.id}/scheduled-events?with_user_count=true`.
-- Bot: tylko `View Channels`; bez Manage Events, bez Administratora, bez Privileged Gateway Intents.
+- Wydarzenia i recheck roli: bot bez Manage Events i bez Administratora; nie otwieraj połączenia Gateway.
+- Materiały Akademii są wąskim wyjątkiem zatwierdzonym przez właściciela: REST tylko do stałej listy 13 kanałów opisanej w `docs/DISCORD.md`. Przyznaj `View Channel` i `Read Message History` wyłącznie tym kanałom; bez Administratora, wysyłania i dodatkowych uprawnień.
+- Dla pól treści HTTP Discord wymaga uprzywilejowanego `Message Content`. Włącz tylko ten przełącznik w Developer Portal, jeśli jest potrzebny do REST; nie używaj Gateway ani intencji Gateway. OAuth pozostaje `identify guilds.members.read` — nie dodawaj scope `messages`.
+- Pierwszych 11 kanałów sprawdzaj bezpośrednio przez `GET /channels/{channel_id}` i wymagaj `parent_id` zatwierdzonej kategorii. Dwóch wymaganych kanałów dodatkowych nie uzależniaj od kategorii. Nie enumeruj kanałów serwera ani nie rozszerzaj allowlisty.
 - Nie twórz testowych wydarzeń na prawdziwym serwerze.
 - Nie hardcoduj aktualnie pobranych wydarzeń, nazw prowadzących, godzin ani dnia tygodnia.
 - Stage oznaczaj jako **niezweryfikowany**, dopóki realne `STAGE_INSTANCE` nie pojawi się w odpowiedzi API.
@@ -85,7 +88,8 @@ Nie zaczynaj od zgadywania. Najpierw ustal, który punkt styku zmieniasz.
 
 - Czasy źródłowe: UTC + oryginalne ISO 8601.
 - Prezentacja: `Europe/Warsaw` przez `DateTimeImmutable` + `DateTimeZone`, bez stałego offsetu.
-- Puste dane = **puste pola**. Zakazane: „Brak wydarzeń”, „Niedostępne”, „--”, „Wkrótce”, domyślne `20:00`, stare demo.
+- Wydarzenia: puste dane = **puste pola**. Zakazane: „Brak wydarzeń”, „Niedostępne”, „--”, „Wkrótce”, domyślne `20:00`, stare demo.
+- Materiały Akademii mogą pokazywać prawdziwe stany ładowania, pustego filtra/wyszukiwania i błędu synchronizacji; nie pokazuj fikcyjnych materiałów ani surowych błędów API.
 - Sukces z `[]` czyści widok; błąd API zachowuje ostatni dobry zestaw.
 - Nie usuwaj fizycznie wydarzeń przy synchronizacji — używaj soft delete.
 - Nie zmieniaj niepowiązanych modułów.
@@ -98,6 +102,7 @@ Nie zaczynaj od zgadywania. Najpierw ustal, który punkt styku zmieniasz.
 - Nie próbuj odczytywać sekretów GitHub (są write-only).
 - `config.json` w ukrytym .app, deny + 600.
 - Endpointy wydarzeń za istniejącą autoryzacją.
+- Endpoint materiałów za logowaniem i istniejącym uprawnieniem `full` do Akademii; nie udostępniaj treści kanałów kontom `solo`.
 - `raw_payload` nie jest publiczny.
 - Nie dodawaj publicznego endpointu uruchamiającego synchronizację.
 

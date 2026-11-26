@@ -427,6 +427,78 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Quotes'
+  /api/academy/materials:
+    get:
+      tags: [API]
+      summary: Stronicowany odczyt materiałów Akademii
+      description: Wymaga sesji i aktywnego planu full z potwierdzoną rolą. Nie uruchamia synchronizacji.
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+            default: all
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Materiały z kanonicznym URL źródła i bez surowych załączników Discord
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor, sync]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [guildId, channelId, sourceMessageId, descriptionMessageId, category, publishedAt, materialType, discordUrl]
+                      properties:
+                        guildId: { type: string }
+                        channelId: { type: string }
+                        sourceMessageId: { type: string }
+                        descriptionMessageId: { type: string }
+                        category: { type: string }
+                        title: { type: [string, 'null'] }
+                        description: { type: [string, 'null'] }
+                        authorId: { type: [string, 'null'] }
+                        authorName: { type: [string, 'null'] }
+                        publishedAt: { type: string, format: date-time }
+                        materialType: { type: string, enum: [text, video, image, audio, file, mixed] }
+                        discordUrl: { type: string, format: uri }
+                  nextCursor:
+                    type: [string, 'null']
+                  sync:
+                    type: object
+                    required: [status, ready]
+                    properties:
+                      status: { type: string }
+                      ready: { type: boolean }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Brak aktywnego entitlementu Akademii
+        '405':
+          description: Dozwolona jest wyłącznie metoda GET
   /api/macro-events:
     get:
       tags: [API]

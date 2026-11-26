@@ -45,6 +45,8 @@ wearables_status=0
 run_if_due wearables 30 /usr/bin/php "$APP_DIR/bin/sync-wearables.php" || wearables_status=$?
 demo_status=0
 run_if_due demo 60 /usr/bin/php "$APP_DIR/bin/sync-demo-state.php" || demo_status=$?
+academy_status=0
+run_if_due academy-materials 5 /usr/bin/php "$APP_DIR/bin/sync-academy-materials.php" || academy_status=$?
 
 if [ "$sync_status" -ne 0 ]; then
   exit "$sync_status"
@@ -58,4 +60,7 @@ fi
 if [ "$wearables_status" -ne 0 ]; then
   exit "$wearables_status"
 fi
-exit "$demo_status"
+if [ "$demo_status" -ne 0 ]; then
+  exit "$demo_status"
+fi
+exit "$academy_status"

@@ -22,6 +22,7 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Apply database schema | migracja `app/db/migrate.php` na MySQL 8.4 |
 | Role recheck tests | decyzje login i cron recheck na mocku Discord |
 | Discord events tests | DB/sync, DST, UPSERT, soft delete |
+| Academy materials tests | allowlista i weryfikacja Discord, GET-only transport, checkpointy backfillu, status dostępu do treści, paginacja, idempotencja, audyt/soft delete, częściowe błędy i brak wycieku URL-i CDN |
 | Macro events tests | normalizacja FF/TradingView, poprzedni pełny tydzień i pełne tygodnie +1…+3 (także cold-start), API −14/+35 dni, pusty/odfiltrowany feed, partial/error, zachowanie ostatnich dobrych danych |
 | Quotes tests | cache, TTL, fallback, E2E notowań |
 | Demo state tests | przesunięcie dat fixture demo, idempotencja, plany jako punkt zaczepienia |
