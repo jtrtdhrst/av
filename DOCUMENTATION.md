@@ -661,8 +661,7 @@ Zasady:
 - `AV.liveInfo()` - `liveNow` i pozostały czas (bez countdownu w UI).
 - `renderAcademy()` ustawia:
   - `#liveTitle`, `#liveWho`, `#liveWhen`, `#liveCd`,
-  - `#nextConsult`, `#nextConsultWho`, `#consultMonth`,
-  - `#liveTop`, `#consultTopWrap`,
+  - `#liveTop` oraz `#consultTopText` — etykietę globalnego skrótu konsultacji; skrót pozostaje dostępny również bez nadchodzącego wydarzenia,
   - `#acad` — widok tygodnia albo miesiąca; `#acadSeg` przełącza skalę, `[data-aw]` przesuwa okres, `#acadRange` pokazuje zakres,
   - `#liveJoin` jest widoczne tylko od 15 minut przed startem; przed oknem `#liveJoinNote` podaje godzinę odblokowania,
   - `#liveRemMin` — 5/15/30/60 minut przypomnienia,
@@ -670,6 +669,8 @@ Zasady:
   - `#glossaryCount`, `#alphaTestScore` — liczniki materiałów,
   - `#acadUpdated` — czas ostatniego sukcesu / „nieaktualne” / „błąd synchronizacji”,
   - `#adminEventsCard` — tylko dla admina i tylko gdy są `unassigned`.
+- Akademia nie zawiera osobnej karty konsultacji; jej karta live zajmuje pełną szerokość. Kliknięcie skrótu na pulpicie otwiera modal z limitem wykorzystania, szczegółami wydarzenia tylko wtedy, gdy są dostępne, przypomnieniami, rezerwacją i przejściem do Dziennika.
+- Gdy brak przyszłego wydarzenia Discord, panel może pokazać wyłącznie poprawną, przyszłą rezerwację lokalną; nieprawidłowe i przeszłe rezerwacje pozostają ukryte. Wydarzenie Discord ma pierwszeństwo przed lokalnym wpisem.
 - Dni tygodnia: `PN WT ŚR CZW PT SB ND`; bieżący dzień: `· DZIŚ`.
 - Modal nagrania: brak linku → pole `#recUrlInput` i zapis do `state.recordings[].url`; link YouTube → iframe w panelu, pozostałe → przycisk otwarcia.
 - Słownik (`AV.GLOSSARY`), Alpha Testy (`AV.ALPHA_TEST`, wynik w `meta.alphaTestScore`) i złote zasady (`AV.GOLDEN_RULES`) to modale z danych `data.js`.
@@ -751,9 +752,9 @@ To wymaganie produktowe (FR-08), realizowane w `renderAcademy()` i `state.js`:
 | Sytuacja | UI |
 | --- | --- |
 | brak live | `#liveTitle`, `#liveWho`, `#liveWhen`, `#liveCd`, `#liveTop` puste; przyciski ukryte |
-| brak konsultacji | `#nextConsult`, `#nextConsultWho`, `#consultMonth`, `#consultTopWrap` puste |
+| brak wydarzenia konsultacji Discord | skrót pulpitu pozostaje dostępny; modal pokazuje tylko poprawną przyszłą rezerwację lokalną, jeśli istnieje; wygasłe/błędne dane i fikcyjny miesiąc są ukryte |
 | brak wydarzeń w tygodniu | 7 dni, zero wpisów |
-| sukces z `[]` | wszystkie pola puste, `sync.status=success` |
+| sukces z `[]` | pola wydarzeń pozostają puste, skrót konsultacji nadal działa, `sync.status=success` |
 | błąd API | ostatnie dane pozostają, `sync.status=error`, `stale=true` |
 | brak `user_count` | nie pokazuj „0 os.” |
 | brak `end_time` | nie pokazuj wymyślonych 60 min |
@@ -906,8 +907,8 @@ narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptogra
 | Notowania | `tests/quotes.test.php` | cache, TTL, fallback, cząstkowe pobranie, uszkodzony cache | 14/14 PASS |
 | Daty demo | `tests/demo-state.test.php` | przesunięcie fixture na dziś, idempotencja, plany jako punkt zaczepienia, błędne dane | 15/15 PASS |
 | API | `tests/api.e2e.mjs` | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, blokada wstrzyknięcia wpisu przez kosz, no-op revision/updatedAt, zamknięcie legacy bez SL, stan, events, macro, admin, eksport, prop i cleanup fixture | CI po zmianie |
-| UI | `tests/ui.e2e.mjs` | 15 widoków, live, prop, makro do +3 ze stanami partial/error/stale, wiele planów, poziomy i statusy realizacji z agregatem, zachowaniem niezapisanego tekstu przy natychmiastowym kliknięciu, resetem przy kopiowaniu z wczoraj, reloadem/autosave oraz wyłączeniem globalnych, saldo ręczne i kapitał obliczony, kalkulator, wymagany SL i przeliczanie wielkości, PnL wg dat realizacji, round-trip przez API i cleanup fixture, MCP status/fallback i odznaki | CI po zmianie |
-| UI empty | `tests/ui-empty.e2e.mjs` | puste pola po sukcesie z `[]` | 12/12 PASS |
+| UI | `tests/ui.e2e.mjs` | 15 widoków, live na pełną szerokość, skrót i modal konsultacji z wydarzeniem/przypomnieniami/rezerwacją lokalną i focus trapem, przejście do Dziennika, prop, makro do +3 ze stanami partial/error/stale, wiele planów, poziomy i statusy realizacji z agregatem, zachowaniem niezapisanego tekstu przy natychmiastowym kliknięciu, resetem przy kopiowaniu z wczoraj, reloadem/autosave oraz wyłączeniem globalnych, saldo ręczne i kapitał obliczony, kalkulator, wymagany SL i przeliczanie wielkości, PnL wg dat realizacji, round-trip przez API i cleanup fixture, MCP status/fallback i odznaki | CI po zmianie |
+| UI empty | `tests/ui-empty.e2e.mjs` | 15 scenariuszy: sukces z `[]`, brak karty konsultacji, skrót nadal dostępny, wygasła rezerwacja lokalna ukryta, brak fikcyjnych szczegółów | CI po zmianie |
 | PIT-38 | `tests/tax.e2e.mjs` | rok podatkowy, nadwyżka, neutrale/forex, CSV i PDF, wpłaty z kursem NBP, pomijanie zdarzeń bez daty/kursu/ujemnych, tekstowy carry, saldo konta, ostrzeżenie w UI | CI po zmianie |
 | PWA mobile | `tests/pwa.e2e.mjs` | manifest, SW, instalacja, powiadomienie, deep link, 10 s, push, offline, brak przepełnienia 15 widoków przy 390 i 1024 px | PASS |
 | Urządzenia | `tests/wearables.e2e.mjs` | OAuth2 + PKCE Oura, rotacja tokenów i klucza, statusy, Apple, UI, bezpieczeństwo, wyłączenie Garmin/Whoop | PASS |
@@ -989,7 +990,7 @@ CI sprawdza linki, sekcje i brak dryfu (`node scripts/sync-docs.mjs --check` + `
 | --- | --- |
 | Scheduled Event | wydarzenie Discord z datą, typem i statusem |
 | `live` | wydarzenie trafiające do harmonogramu live'ów |
-| `consultation` | wydarzenie trafiające do karty konsultacji 1:1 |
+| `consultation` | wydarzenie pokazywane w panelu konsultacji otwieranym ze skrótu na pulpicie |
 | `unassigned` | wydarzenie nierozpoznane, wymaga decyzji admina |
 | soft delete | oznaczenie `is_deleted=1` zamiast fizycznego usunięcia |
 | UPSERT | `INSERT ... ON DUPLICATE KEY UPDATE` |

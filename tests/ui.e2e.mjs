@@ -139,17 +139,101 @@ try {
   await page.waitForTimeout(600);
   const liveTitle = (await page.locator('#liveTitle').innerText()).trim();
   const liveWho = (await page.locator('#liveWho').innerText()).trim();
-  const nextConsult = (await page.locator('#nextConsult').innerText()).trim();
   const acadText = (await page.locator('#acad').innerText()).trim();
   const liveTop = (await page.locator('#liveTop').innerText()).trim();
   const liveHref = await page.locator('#liveJoin').getAttribute('href');
   const liveCardText = await page.locator('#liveCard').innerText();
+  const academyConsultControls = await page.locator('#akad #consultMonth, #akad #consultUsed, #akad #consultBar, #akad #nextConsult, #akad #nextConsultWho, #akad #bookBtn, #akad #shareTrade').count();
+  const academyLiveGridColumns = await page.locator('#liveCard').evaluate((el) => el.parentElement.style.gridTemplateColumns);
   log('Discord live z API', liveTitle.includes('AT - Marcin') && liveWho.includes('Marcin'), liveTitle + ' / ' + liveWho);
   log('Discord live link', /^https:\/\/discord\.com\/events\/\d{17,20}\/\d{17,20}$/.test(liveHref || ''), liveHref || 'brak');
   log('brak countdownu Start za', !liveCardText.includes('Start za'), liveCardText.replace(/\s+/g, ' ').slice(0, 80));
-  log('Discord konsultacja z API', nextConsult.length > 0, nextConsult);
+  log('karta konsultacji usunięta z Akademii', academyConsultControls === 0, academyConsultControls + ' pozostałych kontrolek');
+  log('karta live zajmuje pełną szerokość', academyLiveGridColumns === '1fr', academyLiveGridColumns);
   log('Discord harmonogram tygodnia', acadText.includes('AT - Marcin'), acadText.slice(0, 120));
   log('Discord strip live', liveTop.length > 0, liveTop);
+
+  await page.click('.navg button[data-v="pulpit"]');
+  await page.click('#consultOpen');
+  const consultationDialog = await page.evaluate(() => {
+    const dialog = document.querySelector('#gBody');
+    const labelledBy = dialog?.getAttribute('aria-labelledby') || '';
+    return {
+      labelled: dialog?.getAttribute('role') === 'dialog' && dialog?.getAttribute('aria-modal') === 'true' &&
+        !!labelledBy && !!document.getElementById(labelledBy),
+      focused: !!dialog?.contains(document.activeElement)
+    };
+  });
+  await page.keyboard.press('Shift+Tab');
+  const shiftTabTrapped = await page.evaluate(() => document.activeElement?.id === 'shareTrade');
+  await page.keyboard.press('Tab');
+  const tabTrapped = await page.evaluate(() => document.activeElement?.hasAttribute('data-gclose'));
+  await page.keyboard.press('Escape');
+  const focusRestored = await page.evaluate(() =>
+    !document.querySelector('#gModal')?.classList.contains('on') && document.activeElement?.id === 'consultOpen'
+  );
+  log('modal konsultacji ma etykietę, focus trap i zwrot fokusu',
+    consultationDialog.labelled && consultationDialog.focused && shiftTabTrapped && tabTrapped && focusRestored,
+    JSON.stringify({ ...consultationDialog, shiftTabTrapped, tabTrapped, focusRestored }));
+  await page.click('#consultOpen');
+  const consultationBefore = await page.evaluate(() => ({
+    consultation: AV.state.meta?.consultation || null,
+    consultationUsed: AV.state.meta?.consultationUsed || 0,
+    nextConsultation: AV.api.events?.nextConsultation || null
+  }));
+  const nextConsult = (await page.locator('#gBody #nextConsult').innerText()).trim();
+  const nextConsultWho = (await page.locator('#gBody #nextConsultWho').innerText()).trim();
+  const consultationControls = await page.locator('#gBody [data-setting="remindDay"], #gBody [data-setting="remindHour"], #gBody #bookBtn, #gBody #shareTrade').count();
+  const viewAfterConsultOpen = await page.locator('.view.on').getAttribute('id');
+  log('skrót pulpitu otwiera szczegóły konsultacji', nextConsult.length > 0 && nextConsultWho.includes('Discord') && consultationControls === 4 && viewAfterConsultOpen === 'pulpit', nextConsult + ' / ' + nextConsultWho);
+  for (const [key, label] of [['remindDay', 'dzień wcześniej'], ['remindHour', '1 h przed']]) {
+    const reminderToggle = page.locator(`#gBody [data-setting="${key}"]`);
+    const reminderBefore = await reminderToggle.getAttribute('aria-checked');
+    await reminderToggle.click();
+    const reminderChanged = await reminderToggle.getAttribute('aria-checked');
+    await reminderToggle.click();
+    const reminderRestored = await reminderToggle.getAttribute('aria-checked');
+    log(`przypomnienie konsultacji ${label} pozostaje dostępne`, reminderBefore !== reminderChanged && reminderBefore === reminderRestored, reminderBefore + ' → ' + reminderChanged + ' → ' + reminderRestored);
+  }
+  await page.click('#gBody #bookBtn');
+  const bookingSlots = await page.locator('#gBody #bookSlots [data-slot]').count();
+  log('rezerwacja konsultacji pozostaje dostępna', bookingSlots === 6, bookingSlots + ' terminów');
+  await page.locator('#gBody #bookSlots [data-slot="0"]').click();
+  const bookingState = await page.evaluate(() => ({
+    consultation: AV.state.meta.consultation,
+    consultationUsed: AV.state.meta.consultationUsed
+  }));
+  const expectedConsultationUsed = Math.min(3, consultationBefore.consultationUsed + 1);
+  log('rezerwacja zapisuje wybrany termin i wykorzystane godziny',
+    /^\d{4}-\d{2}-\d{2}$/.test(bookingState.consultation?.date || '') &&
+      bookingState.consultation.time === '18:00' &&
+      bookingState.consultation.who === 'Marcin' &&
+      bookingState.consultationUsed === expectedConsultationUsed,
+    JSON.stringify(bookingState));
+  await page.evaluate(() => {
+    if (AV.api.events) AV.api.events.nextConsultation = null;
+    AV.openConsultationPanel();
+  });
+  const localBooking = await page.evaluate(() => ({
+    date: document.querySelector('#gBody #nextConsult')?.textContent.trim() || '',
+    details: document.querySelector('#gBody #nextConsultWho')?.textContent.trim() || ''
+  }));
+  log('lokalna rezerwacja widoczna bez wydarzenia Discord',
+    localBooking.date.includes('18:00') && localBooking.details.includes('rezerwacja lokalna'),
+    localBooking.date + ' / ' + localBooking.details);
+  await page.evaluate((before) => {
+    AV.state.meta.consultation = before.consultation;
+    AV.state.meta.consultationUsed = before.consultationUsed;
+    if (AV.api.events) AV.api.events.nextConsultation = before.nextConsultation;
+    AV.saveNow();
+    AV.renderAcademy();
+    AV.renderUser();
+  }, consultationBefore);
+  await page.locator('#gBody [data-gclose]').click();
+  await page.click('#consultOpen');
+  await page.click('#gBody #shareTrade');
+  const shareTradeView = await page.locator('.view.on').getAttribute('id');
+  log('wysłanie transakcji do omówienia pozostaje dostępne', shareTradeView === 'trans', shareTradeView || '');
 
   // nawigacja po wszystkich widokach
   const views = ['plan', 'trans', 'play', 'nowa', 'kalk', 'prop', 'stat', 'mentor', 'akad', 'tax', 'kal', 'cialo', 'gieldy', 'ust', 'pulpit'];

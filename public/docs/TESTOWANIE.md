@@ -27,11 +27,11 @@ CI używa MySQL 8.4, PHP 8.3, Node 24 i systemowego Chrome. Konfiguracja testowa
 | Demo state tests | przesunięcie dat fixture demo, idempotencja, plany jako punkt zaczepienia |
 | Wearables E2E | OAuth2/PKCE, rotacja tokenów, UI, bezpieczeństwo |
 | API E2E | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, korekta ręcznego zamkniętego wykonania i łączny `resultOverride`, niezmienność zewnętrznych ID/importowanych wykonań, no-op zachowuje `revision` i ISO `updatedAt`, legacy close bez SL, stan, events, macro, admin, eksport i cleanup fixture |
-| UI E2E | 15 widoków, rozwijane konta, wiele planów dnia, poziomy i podsumowanie realizacji; natychmiastowe oznaczenie nie gubi szkicu tekstu, kopia oznaczonego planu z wczoraj resetuje status; historyczna checklista przy zmianie konfiguracji, wymagany SL, PnL po dacie realizacji, brak sukcesu przy błędzie zapisu zamknięcia, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup fixture |
+| UI E2E | 15 widoków, Akademia bez karty konsultacji z kartą live na pełną szerokość, panel konsultacji ze skrótu pulpitu (wydarzenie, przypomnienia, rezerwacja, Dziennik), rozwijane konta, wiele planów dnia, poziomy i podsumowanie realizacji; natychmiastowe oznaczenie nie gubi szkicu tekstu, kopia oznaczonego planu z wczoraj resetuje status; historyczna checklista przy zmianie konfiguracji, wymagany SL, PnL po dacie realizacji, brak sukcesu przy błędzie zapisu zamknięcia, import CSV bez fikcyjnych metryk/PnL, statystyki i cleanup fixture |
 | Integracje E2E | mocki OKX/BingX/WEEX/MetaApi/EA, batch 501, rollback, czas źródłowy/UTC, limit stron i brak kursora bez częściowego importu |
 | Tax E2E | PIT-38, CSV/PDF, wpłaty/wypłaty |
 | PWA E2E | manifest, SW, instalacja, push, offline |
-| UI empty-state E2E | puste pola po sukcesie z `[]` |
+| UI empty-state E2E | sukces z `[]`: karta konsultacji nie wraca, skrót pozostaje, szczegóły wydarzenia są puste |
 | MCP unit/E2E | 79 narzędzi z runtime rejestru, klucze idempotencji 8–120 znaków, stabilny hash screenów przy zmianie kolejności kluczy JSON, screen `write_op` po MySQL round-trip, regresje dat/metryk/transakcji, semantyczny no-op bez zmiany rewizji, snapshot propozycji z kontrolą rewizji replay, redakcja screenów w odpowiedziach/diffach/replay, fixture'y testowe blokowane poza odizolowanym CI |
 | MCP deploy guard | tylko `main` lub pełny SHA z `main` z udanym `ci.yml` dla dokładnego SHA; health revision i liczba narzędzi |
 
@@ -210,7 +210,8 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - start UI i modal logowania,
 - demo login + sesja,
 - 47 transakcji z MySQL,
-- live i konsultacja z `/api/events`,
+- live i konsultacja z `/api/events`; Akademia bez karty konsultacji, live na pełną szerokość, szczegóły/akcje konsultacji zachowane w panelu ze skrótu pulpitu; poprawna przyszła rezerwacja lokalna widoczna bez wydarzenia Discord, przeszła ukryta,
+- dostępność panelu konsultacji: etykieta dialogu, przeniesienie/zwrot fokusu, pułapka Tab/Shift+Tab i zamknięcie Escape,
 - harmonogram tygodnia i strip,
 - nawigacja 15 widoków (w tym prop),
 - plan dnia: wiele niezależnych planów dla daty, wybór planu/rynku, poziomy wsparcia, oporu, płynności, POI i własny, zatwierdzenie, zapis w MySQL i odtworzenie po reloadzie; statusy realizacji zatwierdzonych planów, agregaty dla daty, wyczyszczenie oznaczenia, wyłączenie szkiców/globalnych, trwałość po reloadzie i brak utraty statusu przy autosave; natychmiastowe oznaczenie zachowuje niezapisany tekst, a kopia oznaczonego planu z wczoraj zaczyna bez statusu; zakładka „Globalnie” z kafelkami i trwałością planu bez daty,
@@ -224,7 +225,7 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - kalkulator: wybór portfela ustawia saldo/MM, gotowe R:R 1:1, 1:1,2, 1:1,5, 1:2, 1:3, 1:5 lub własne; SL/TP zgodne z wybranym stosunkiem; ręczna cena wejścia nie jest nadpisywana przez live ani przez auto SL/TP; tryb odwrotny „Zaproponuj wielkość kapitału”, uśrednianie wejść i wiele TP,
 - statystyki: zakres ogólny pozostaje niezależny od kalendarza PnL przy zmianie obu zakresów; kalendarz PnL ma własny zakres 7/30 dni lub miesiąc i nawigację okresu; partiale są grupowane wg `partials[].at`, końcowa część wg `closedAt`, z fallbackiem do `trade.date`,
 - statystyki: wyniki transakcji i R zapisane jako tekst (np. z API/MCP) są sumowane numerycznie — net, GP/GL, profit factor, expectation, equity, PnL dnia i statystyki setupu,
-- akademia: „Dołącz” dopiero 15 min przed startem, własny czas przypomnienia, harmonogram tydzień/miesiąc z odświeżaniem i rozwinięciem wydarzeń cyklicznych, kategorie nagrań, fallback biblioteki i odtwarzanie z linku, postęp kursu (12 lekcji) i bootcampu (6 modułów), słownik z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady,
+- akademia: karta live na pełną szerokość, „Dołącz” dopiero 15 min przed startem, własny czas przypomnienia, harmonogram tydzień/miesiąc z odświeżaniem i rozwinięciem wydarzeń cyklicznych, kategorie nagrań, fallback biblioteki i odtwarzanie z linku, postęp kursu (12 lekcji) i bootcampu (6 modułów), słownik z wyszukiwaniem, Alpha Testy z wynikiem, złote zasady; skrót pulpitu otwiera szczegóły, przypomnienia, rezerwację i akcję Dziennika konsultacji,
 - filtry dziennika, szczegóły transakcji,
 - nagłówek: brak technicznego statusu bazy, ukryty chip giełd bez połączeń, ticker z `/api/quotes`,
 - tryb ochronny: deterministyczne 2 straty dnia i obejście limitu,
@@ -240,13 +241,15 @@ Migracje: `php app/db/migrate.php` na czystej bazie tworzy wszystkie tabele z `d
 - przywrócenie stanu demo,
 - wylogowanie i usunięcie prywatnego cache z `localStorage`.
 
-## UI empty-state — 12 scenariuszy
+## UI empty-state — 15 scenariuszy
 
 `tests/ui-empty.e2e.mjs` przy poprawnym sync zwracającym `[]` sprawdza:
 
 - pusty tytuł, prowadzący i ukryta karta live,
-- pustą kartę konsultacji,
-- puste pola w strip,
+- brak karty konsultacji w Akademii i pełna szerokość karty live,
+- dostępny skrót konsultacji na pulpicie bez nadchodzącego wydarzenia,
+- ukrycie przeszłej lokalnej rezerwacji i brak fikcyjnych szczegółów wydarzenia w panelu; akcje pozostają dostępne,
+- pusty strip live,
 - ukryty link „Dołącz”,
 - 7 dni tygodnia bez wydarzeń,
 - `events.length === 0`,

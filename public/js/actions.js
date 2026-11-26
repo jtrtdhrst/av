@@ -1738,7 +1738,174 @@
   };
 
   /* ---------- akademia ---------- */
+  AV.setupConsultationDialog = (modalBody, titleId) => {
+    const opener = AV.ui?.consultationPanelOpener;
+    const restoreFocus = () => {
+      const target = opener && opener !== document.body && opener.isConnected
+        ? opener
+        : document.querySelector('#consultOpen');
+      target?.focus();
+    };
+    const closeButton = modalBody.querySelector('[data-gclose]');
+    if (closeButton) {
+      closeButton.setAttribute('role', 'button');
+      closeButton.setAttribute('tabindex', '0');
+      closeButton.setAttribute('aria-label', 'Zamknij panel konsultacji');
+      closeButton.addEventListener('click', restoreFocus);
+      closeButton.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          AV.closeModal();
+          restoreFocus();
+        }
+      });
+    }
+    if (titleId) modalBody.setAttribute('aria-labelledby', titleId);
+    modalBody.setAttribute('tabindex', '-1');
+    const focusable = () => Array.from(modalBody.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+    modalBody.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        AV.closeModal();
+        restoreFocus();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        modalBody.focus();
+        return;
+      }
+      const first = items[0], last = items[items.length - 1];
+      if (!modalBody.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    const modalRoot = document.querySelector('#gModal');
+    if (modalRoot) {
+      modalRoot._consultationFocusRestore = restoreFocus;
+      if (!modalRoot._consultationFocusListener) {
+        modalRoot._consultationFocusListener = (event) => {
+          if (event.target === modalRoot && modalRoot.querySelector('#consultDialogTitle, #consultBookingTitle')) {
+            modalRoot._consultationFocusRestore?.();
+          }
+        };
+        modalRoot.addEventListener('click', modalRoot._consultationFocusListener);
+      }
+    }
+    focusable()[0]?.focus();
+  };
+
+  AV.openConsultationBooking = () => {
+    const options = [];
+    let d = AV.addDays(new Date(), 1);
+    while (options.length < 6) {
+      if (d.getDay() !== 0 && d.getDay() !== 6) options.push(new Date(d));
+      d = AV.addDays(d, 1);
+    }
+    const body = AV.openModal('<div class="eyebrow">Konsultacje 1:1</div><h1 id="consultBookingTitle" style="font-size:26px;margin-top:6px">Zarezerwuj kolejną</h1><p class="mut" style="margin-top:8px;font-size:13.5px">Wybierz termin. Rezerwacja jest lokalna — w wersji produkcyjnej potwierdzi się w kalendarzu.</p><div class="grid" style="margin-top:14px;gap:8px" id="bookSlots">' +
+      options.map((x, i) => '<button class="btn g" data-slot="' + i + '" style="justify-content:flex-start">' + x.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · 18:00</button>').join('') + '</div>', {
+      maxWidth: '520px',
+      onMount: (modalBody) => AV.setupConsultationDialog(modalBody, 'consultBookingTitle')
+    });
+    body.querySelectorAll('#bookSlots [data-slot]').forEach((b) => b.onclick = () => {
+      const d2 = options[+b.dataset.slot];
+      AV.state.meta.consultation = { date: AV.dateKey(d2), time: '18:00', who: 'Marcin' };
+      AV.state.meta.consultationUsed = Math.min(3, (AV.state.meta.consultationUsed || 0) + 1);
+      AV.saveNow(); AV.closeModal();
+      AV.ui?.consultationPanelOpener?.focus();
+      AV.renderAcademy(); AV.renderUser();
+      AV.toast('Zarezerwowano: ' + d2.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ', 18:00');
+    });
+  };
+
+  AV.openConsultationPanel = () => {
+    AV.ui.consultationPanelOpener = document.activeElement;
+    const state = AV.state || {};
+    const data = AV.api.events || {};
+    const event = data.nextConsultation || null;
+    const savedConsultation = state.meta?.consultation || null;
+    const savedDate = typeof savedConsultation?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(savedConsultation.date)
+      ? AV.parseKey(savedConsultation.date)
+      : null;
+    const savedDateIsValid = savedDate && AV.dateKey(savedDate) === savedConsultation.date;
+    const savedTime = typeof savedConsultation?.time === 'string'
+      ? /^([01]\d|2[0-3]):([0-5]\d)$/.exec(savedConsultation.time)
+      : null;
+    const savedStart = savedDateIsValid && savedTime ? new Date(savedDate) : null;
+    if (savedStart) savedStart.setHours(Number(savedTime[1]), Number(savedTime[2]), 0, 0);
+    const localBooking = !event && savedStart && savedStart.getTime() > Date.now()
+      ? savedConsultation
+      : null;
+    const usedValue = Number(state.meta?.consultationUsed || 0);
+    const used = Number.isFinite(usedValue) ? usedValue : 0;
+    const barWidth = Math.min(100, Math.max(0, (used / 3) * 100));
+    const settings = state.settings || {};
+    let month = '';
+    const monthDate = event?.startAt ? new Date(event.startAt) : (localBooking ? savedDate : null);
+    if (monthDate && Number.isFinite(monthDate.getTime())) {
+      try {
+        month = new Intl.DateTimeFormat('pl-PL', { month: 'long', timeZone: 'Europe/Warsaw' }).format(monthDate);
+      } catch (e) {
+        month = '';
+      }
+    }
+    const eventBits = [];
+    if (event?.host) eventBits.push('z ' + event.host);
+    if (event?.durationMinutes !== null && event?.durationMinutes !== undefined) eventBits.push(event.durationMinutes + ' min');
+    if (event) eventBits.push('Discord');
+    if (localBooking?.who) eventBits.push('z ' + localBooking.who);
+    if (localBooking) eventBits.push('rezerwacja lokalna');
+    const localStartLabel = localBooking
+      ? AV.parseKey(localBooking.date).toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + (localBooking.time ? ' · ' + localBooking.time : '')
+      : '';
+    const nextEvent = event || localBooking
+      ? '<div class="ticket" style="margin-top:16px"><div class="lbl">' + (event ? 'Najbliższa' : 'Rezerwacja lokalna') + '</div><div style="font-weight:800;font-size:18px;margin-top:6px" id="nextConsult">' + AV.esc(event ? (event.startLabel || '') : localStartLabel) + '</div><div class="mut" style="font-size:13.5px;margin-top:2px" id="nextConsultWho">' + AV.esc(eventBits.join(' · ')) + '</div></div>'
+      : '';
+    const toggle = (key, label) => '<button type="button" class="toggle' + (settings[key] ? ' on' : '') + '" data-setting="' + key + '" role="switch" aria-label="' + label + '" aria-checked="' + String(!!settings[key]) + '" style="border:0;padding:0;appearance:none"></button>';
+    const body = AV.openModal(
+      '<div class="sech" style="margin:0"><h2 id="consultDialogTitle">Konsultacje 1:1</h2><span class="mono dim" style="font-size:12px" id="consultMonth">' + AV.esc(month) + '</span></div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:13.5px;margin-top:14px"><span class="mut">Wykorzystane</span><b id="consultUsed">' + used + ' z 3 h</b></div><div class="bar"><i id="consultBar" style="width:' + barWidth + '%;background:var(--alpha)"></i></div>' +
+      nextEvent +
+      '<div class="row" style="margin-top:14px"><div><b>Przypomnienie dzień wcześniej</b></div>' + toggle('remindDay', 'Przypomnienie dzień wcześniej') + '</div>' +
+      '<div class="row"><div><b>Przypomnienie 1 h przed</b></div>' + toggle('remindHour', 'Przypomnienie 1 godzinę przed') + '</div>' +
+      '<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap"><button type="button" class="btn p sm" id="bookBtn">Zarezerwuj kolejną</button><button type="button" class="btn g sm" id="shareTrade">Wyślij transakcję do omówienia</button></div>',
+      {
+        maxWidth: '520px',
+        onMount: (modalBody) => {
+          AV.setupConsultationDialog(modalBody, 'consultDialogTitle');
+          modalBody.querySelectorAll('[data-setting]').forEach((el) => el.addEventListener('click', () => {
+            AV.toggleSetting(el);
+            el.setAttribute('aria-checked', String(el.classList.contains('on')));
+          }));
+          modalBody.querySelector('#bookBtn')?.addEventListener('click', AV.openConsultationBooking);
+          modalBody.querySelector('#shareTrade')?.addEventListener('click', () => {
+            AV.closeModal();
+            AV.showView('trans');
+            AV.toast('Kliknij transakcję, którą chcesz omówić');
+          });
+        }
+      }
+    );
+    return body;
+  };
+
   AV.bindAcademy = () => {
+    $('#consultOpen')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      AV.openConsultationPanel();
+    });
     $('#liveRem')?.addEventListener('click', () => {
       AV.state.meta.liveReminder = !AV.state.meta.liveReminder;
       AV.saveNow();
@@ -1776,24 +1943,6 @@
     $('#glossaryOpen')?.addEventListener('click', AV.openGlossary);
     $('#alphaTestsOpen')?.addEventListener('click', AV.openAlphaTest);
     $('#goldenRulesOpen')?.addEventListener('click', AV.openGoldenRules);
-    $('#bookBtn')?.addEventListener('click', () => {
-      const options = [];
-      let d = AV.addDays(new Date(), 1);
-      while (options.length < 6) {
-        if (d.getDay() !== 0 && d.getDay() !== 6) options.push(new Date(d));
-        d = AV.addDays(d, 1);
-      }
-      const body = AV.openModal('<div class="eyebrow">Konsultacje 1:1</div><h1 style="font-size:26px;margin-top:6px">Zarezerwuj kolejną</h1><p class="mut" style="margin-top:8px;font-size:13.5px">Wybierz termin. Rezerwacja jest lokalna — w wersji produkcyjnej potwierdzi się w kalendarzu.</p><div class="grid" style="margin-top:14px;gap:8px" id="bookSlots">' +
-        options.map((x, i) => '<button class="btn g" data-slot="' + i + '" style="justify-content:flex-start">' + x.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · 18:00</button>').join('') + '</div>', { maxWidth: '520px' });
-      $$('#bookSlots [data-slot]', body).forEach((b) => b.onclick = () => {
-        const d2 = options[+b.dataset.slot];
-        AV.state.meta.consultation = { date: AV.dateKey(d2), time: '18:00', who: 'Marcin' };
-        AV.state.meta.consultationUsed = Math.min(3, (AV.state.meta.consultationUsed || 0) + 1);
-        AV.saveNow(); AV.closeModal(); AV.renderAcademy(); AV.renderUser();
-        AV.toast('Zarezerwowano: ' + d2.toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ', 18:00');
-      });
-    });
-    $('#shareTrade')?.addEventListener('click', () => { AV.showView('trans'); AV.toast('Kliknij transakcję, którą chcesz omówić'); });
     document.querySelector('#adminEvents')?.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-event-category]');
       if (!btn) return;

@@ -54,11 +54,11 @@ npm ci
 npm test                 # API: SL/source także przez kosz, data/closedAt, legacy close, fixture cleanup i no-op revision/updatedAt
 npm run test:prop        # silnik prop challenge: 27 scenariuszy
 npm run test:router      # adresy podstron (hash routing): 18 scenariuszy
-npm run test:ui          # UI: rozwijane konta, wiele planów i podsumowanie realizacji; niezapisany tekst przy statusie, reset statusu przy kopii z wczoraj, wymagany SL, błąd zapisu zamknięcia, API round-trip i fixture cleanup
+npm run test:ui          # UI: Akademia bez karty konsultacji (live pełnej szerokości), skrót pulpitu zachowuje wydarzenie, przypomnienia, rezerwację i Dziennik; wiele planów, statusy realizacji, wymagany SL, API round-trip i fixture cleanup
 npm run test:tax         # PIT-38: 8 scenariuszy (MySQL + UI)
 npm run test:isolation   # izolacja użytkowników: 9 scenariuszy
 npm run test:pwa         # PWA mobile: manifest, offline, brak przepełnienia 390/1024 px
-npm run test:ui:empty    # puste pola: 12 scenariuszy (osobny serwer)
+npm run test:ui:empty    # puste pola, wygasła rezerwacja ukryta i skrót konsultacji bez wydarzenia: 15 scenariuszy
 npm run test:events      # Discord DB/sync + DST: 24 scenariusze
 npm run test:macro       # makro DB/sync: FF, poprzedni pełny tydzień + TradingView +1…+3 także cold-start, priorytet FF, partial/error, retencja, API −14/+35 dni
 npm run test:quotes      # notowania rynkowe: 14 scenariuszy

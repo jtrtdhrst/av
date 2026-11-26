@@ -205,11 +205,11 @@ Limity liczone są z **zamkniętych** transakcji. Silnik nie zna ruchów śródd
 | Wydarzenia cykliczne | ✅ | wystąpienia z `recurrence_rule` (daily/weekly/monthly) są rozwijane do 31 dni wprzód z deduplikacją po nazwie i czasie; obsługiwany interwał, liczba wystąpień i data końca |
 | Najbliższy live (bez countdownu) | ✅ | wyłącznie z realnego wydarzenia `live`; karta ukryta, gdy brak wydarzenia |
 | Liczba zainteresowanych | ✅ | z `user_count`, jeśli Discord je zwróci; brak = pole puste |
-| Konsultacje 1:1 | ✅ | karta „Najbliższa” z wydarzenia `consultation`; prowadzący i czas trwania tylko z danych wydarzenia |
+| Konsultacje 1:1 | ✅ | szczegóły najbliższego wydarzenia `consultation` w panelu pulpitu; bez wydarzenia pokazuje wyłącznie poprawną przyszłą rezerwację lokalną, wygasła/błędna pozostaje ukryta; prowadzący i czas trwania z danych wydarzenia |
 | Ręczne przypisanie kategorii | ✅ | admin `live` / `consultation` / `unassigned`; pierwszeństwo nad regułami |
 | Puste pola | ✅ | brak tekstów zastępczych, brak domyślnego 20:00 |
 | Błąd synchronizacji | ✅ | ostatni dobry zestaw pozostaje; UI pokazuje stan „błąd synchronizacji” |
-| Rezerwacja konsultacji | ✅ | niezależna od synchronizacji, zapis w stanie |
+| Rezerwacja konsultacji | ✅ | wejście z panelu konsultacji na pulpicie; niezależna od synchronizacji, zapis w stanie |
 | Dołącz / przypomnienie | ✅ | „Dołącz” widoczne od 15 minut przed startem; przypomnienie z wyborem 5/15/30/60 min, raz na wydarzenie |
 | Nagrania | ✅ | biblioteka z `state.recordings` z fallbackiem do wbudowanej listy `AV.RECORDINGS`, kategorie (Poranna odprawa, Sesja NY, Warsztat, Q&A, Psychologia), filtr; brak linku = pole do wklejenia, link YouTube odtwarzany w panelu; empty-state zamiast pustej sekcji |
 | Postęp kursu i bootcampu | ✅ | postęp kursu liczony z `meta.courseDone` (12 lekcji), bootcamp z `meta.bootcampDone` (6 modułów); checklisty w modalach zapisują się i od razu aktualizują paski |

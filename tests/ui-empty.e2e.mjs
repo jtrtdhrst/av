@@ -55,11 +55,11 @@ try {
     who: document.querySelector('#liveWho')?.textContent.trim() || '',
     countdown: !!document.querySelector('#liveCd'),
     cardDisplay: document.querySelector('#liveCard') ? getComputedStyle(document.querySelector('#liveCard')).display : 'none',
-    next: document.querySelector('#nextConsult')?.textContent.trim() || '',
-    nextWho: document.querySelector('#nextConsultWho')?.textContent.trim() || '',
+    academyConsultControls: document.querySelectorAll('#akad #consultMonth, #akad #consultUsed, #akad #consultBar, #akad #nextConsult, #akad #nextConsultWho, #akad #bookBtn, #akad #shareTrade').length,
+    academyLiveGridColumns: document.querySelector('#liveCard')?.parentElement.style.gridTemplateColumns || '',
     top: document.querySelector('#liveTop')?.textContent.trim() || '',
     sepDisplay: document.querySelector('#liveSep') ? getComputedStyle(document.querySelector('#liveSep')).display : 'none',
-    consultTop: document.querySelector('#consultTopWrap')?.textContent.trim() || '',
+    consultShortcut: document.querySelector('#consultTopText')?.textContent.trim() || '',
     joinHref: document.querySelector('#liveJoin')?.getAttribute('href') || '',
     joinDisplay: document.querySelector('#liveJoin') ? getComputedStyle(document.querySelector('#liveJoin')).display : 'none',
     acadEvents: document.querySelectorAll('#acad b').length,
@@ -72,14 +72,33 @@ try {
   log('live host empty', state.who === '', state.who);
   log('live countdown removed', state.countdown === false);
   log('live card hidden', state.cardDisplay === 'none', state.cardDisplay);
-  log('consultation empty', state.next === '' && state.nextWho === '', state.next + ' / ' + state.nextWho);
+  log('karta konsultacji usunięta z Akademii', state.academyConsultControls === 0, String(state.academyConsultControls));
+  log('karta live ma pełną szerokość', state.academyLiveGridColumns === '1fr', state.academyLiveGridColumns);
   log('strip live empty', state.top === '', state.top);
   log('strip separator hidden', state.sepDisplay === 'none', state.sepDisplay);
-  log('strip consultation empty', state.consultTop === '', state.consultTop);
+  log('skrót konsultacji pozostaje dostępny', state.consultShortcut === 'Konsultacje', state.consultShortcut);
   log('join link hidden', state.joinDisplay === 'none' && !state.joinHref, state.joinDisplay + ' / ' + state.joinHref);
   log('week has 7 empty days', state.acadDays === 7 && state.acadEvents === 0, `${state.acadDays}/${state.acadEvents}`);
   log('API returned zero events', state.events === 0, String(state.events));
   log('sync status available', !!state.sync, state.sync?.status || 'none');
+
+  await page.click('.navg button[data-v="pulpit"]');
+  await page.evaluate(() => {
+    AV.state.meta.consultation = { date: '2000-01-01', time: '18:00', who: 'Stara rezerwacja' };
+  });
+  await page.click('#consultOpen');
+  const emptyConsultationModal = await page.evaluate(() => ({
+    hasNextEvent: !!document.querySelector('#gBody #nextConsult'),
+    hasNextEventWho: !!document.querySelector('#gBody #nextConsultWho'),
+    month: document.querySelector('#gBody #consultMonth')?.textContent.trim() || '',
+    controls: document.querySelectorAll('#gBody [data-setting="remindDay"], #gBody [data-setting="remindHour"], #gBody #bookBtn, #gBody #shareTrade').length,
+    text: document.querySelector('#gBody')?.textContent || ''
+  }));
+  log('brak wydarzenia nie pokazuje fikcyjnej ani wygasłej konsultacji',
+    !emptyConsultationModal.hasNextEvent && !emptyConsultationModal.hasNextEventWho && !emptyConsultationModal.month &&
+      !emptyConsultationModal.text.includes('Brak wydarzeń') && !emptyConsultationModal.text.includes('Stara rezerwacja'),
+    emptyConsultationModal.text.replace(/\s+/g, ' ').slice(0, 100));
+  log('akcje konsultacji pozostają dostępne bez wydarzenia', emptyConsultationModal.controls === 4, String(emptyConsultationModal.controls));
 } catch (err) {
   console.error('\nFAIL  test przerwany:', err.message);
   results.push({ name: 'test przerwany', ok: false, info: err.message });
