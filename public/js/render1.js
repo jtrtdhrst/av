@@ -303,7 +303,7 @@
     }
     $$('#planMarkets .chip').forEach((c) => c.classList.toggle('on', c.dataset.m === market));
   };
-  AV.renderPlan = () => {
+  AV.renderPlan = (force = false) => {
     const s = AV.state;
     const key = AV.planDate;
     if (!s.plans || typeof s.plans !== 'object') s.plans = {};
@@ -327,7 +327,7 @@
     const active = document.activeElement;
     const editing = !!(editor && active && active !== document.body && editor.contains(active) &&
       !['planSelect', 'addPlan'].includes(active.id));
-    if (!editing) {
+    if (force || !editing) {
       AV.syncPlanMarket(p);
       $$('#planBias .chip').forEach((c) => c.classList.toggle('on', c.dataset.b === p.bias));
       AV.setVal('#planWhy', p.why || '');
@@ -344,6 +344,7 @@
     AV.renderPlanSide();
     AV.renderPlanGlobal();
     AV.renderPlanHistory();
+    AV.renderPlanOutcome();
     AV.renderAdherence();
     const title = $('#planListTitle');
     if (title) title.textContent = key === 'global' ? 'Plany globalne' : 'Plany dla tej daty';
@@ -360,6 +361,7 @@
   };
 
   AV.readPlanForm = (opts = {}) => {
+    const existing = AV.planById(AV.state, AV.planId);
     const levels = $$('#lvls .lvl').map((row) => {
       const select = row.querySelector('select');
       const custom = row.querySelector('.lvl-type');
@@ -386,7 +388,8 @@
       ifAlt: $('#planIfAlt').value.trim(), thenAlt: $('#planThenAlt').value.trim(),
       risk: $('#planRisk').value.trim(), maxTrades: $('#planMaxTrades').value.trim(),
       until: $('#planUntil').value.trim(), notDo: $('#planNotDo').value.trim(),
-      approvedAt: (AV.planById(AV.state, AV.planId) || {}).approvedAt || null
+      approvedAt: existing?.approvedAt || null,
+      completionStatus: ['realized', 'unrealized'].includes(existing?.completionStatus) ? existing.completionStatus : null
     };
   };
 
@@ -439,6 +442,46 @@
       '<div class="kv"><span>Limity</span><b>ryzyko ' + AV.esc(p.risk || '—') + ' · max ' + AV.esc(p.maxTrades || '—') + ' transakcji</b></div>');
   };
 
+  AV.renderPlanOutcome = () => {
+    const card = $('#planOutcomeCard');
+    if (!card) return;
+    const isGlobal = AV.planDate === 'global';
+    card.style.display = isGlobal ? 'none' : '';
+    if (isGlobal) return;
+
+    const plans = AV.plansForDate(AV.state, AV.planDate).filter((plan) => !!plan.approvedAt);
+    const realized = plans.filter((plan) => plan.completionStatus === 'realized').length;
+    const unrealized = plans.filter((plan) => plan.completionStatus === 'unrealized').length;
+    const pending = plans.length - realized - unrealized;
+    AV.setText('#planOutcomeRealizedCount', String(realized));
+    AV.setText('#planOutcomeUnrealizedCount', String(unrealized));
+    AV.setText('#planOutcomePendingCount', String(pending));
+
+    const selected = AV.planById(AV.state, AV.planId);
+    const canMark = !!(selected && selected.date !== 'global' && selected.approvedAt && !AV.ui.planOutcomeSaving);
+    const status = canMark && ['realized', 'unrealized'].includes(selected.completionStatus) ? selected.completionStatus : null;
+    const realizedButton = $('#planOutcomeRealized');
+    const unrealizedButton = $('#planOutcomeUnrealized');
+    const clearButton = $('#planOutcomeClear');
+    [[realizedButton, 'realized'], [unrealizedButton, 'unrealized']].forEach(([button, value]) => {
+      if (!button) return;
+      const active = status === value;
+      button.disabled = !canMark;
+      button.classList.toggle('p', active);
+      button.classList.toggle('g', !active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    if (clearButton) {
+      clearButton.disabled = !canMark || !status;
+    }
+
+    AV.setText('#planOutcomeHint', !plans.length
+      ? 'Zatwierdź plan, aby rozpocząć podsumowanie dnia.'
+      : !canMark
+        ? selected ? 'Zatwierdź wybrany plan, aby oznaczyć jego realizację.' : 'Wybierz zatwierdzony plan, aby oznaczyć jego realizację.'
+        : 'Oznaczenie można zmienić lub wyczyścić. Podsumowanie obejmuje zatwierdzone plany tej daty.');
+  };
+
   AV.renderPlanHistory = () => {
     const card = $('#planHistoryCard');
     if (!card) return;
@@ -446,7 +489,10 @@
     card.style.display = showHist ? '' : 'none';
     if (!showHist) return;
     const plans = AV.allPlans(AV.state).filter((p) => p.date !== 'global').sort((a, b) => b.date.localeCompare(a.date) || String(a.market).localeCompare(String(b.market)) || String(a.id).localeCompare(String(b.id)));
-    AV.setHTML('#planHistory', plans.length ? plans.map((p) => '<div class="kv" style="cursor:pointer" data-plan-open="' + AV.attr(p.date) + '" data-plan-id="' + AV.attr(p.id) + '"><span>' + new Date(p.date + 'T12:00:00').toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · ' + AV.esc(p.market || '') + ' ' + AV.esc(p.bias || '') + '</span><b class="' + (p.approvedAt ? 'win' : 'dim') + '">' + (p.approvedAt ? '✓ zatwierdzony' : 'szkic') + '</b></div>').join('') : '<div class="dim">Brak zapisanych planów.</div>');
+    AV.setHTML('#planHistory', plans.length ? plans.map((p) => {
+      const outcome = p.completionStatus === 'realized' ? ' · zrealizowany' : p.completionStatus === 'unrealized' ? ' · niezrealizowany' : '';
+      return '<div class="kv" style="cursor:pointer" data-plan-open="' + AV.attr(p.date) + '" data-plan-id="' + AV.attr(p.id) + '"><span>' + new Date(p.date + 'T12:00:00').toLocaleDateString('pl-PL', { weekday: 'long', day: '2-digit', month: '2-digit' }) + ' · ' + AV.esc(p.market || '') + ' ' + AV.esc(p.bias || '') + '</span><b class="' + (p.approvedAt ? 'win' : 'dim') + '">' + (p.approvedAt ? '✓ zatwierdzony' : 'szkic') + AV.esc(outcome) + '</b></div>';
+    }).join('') : '<div class="dim">Brak zapisanych planów.</div>');
   };
 
   AV.renderAdherence = () => {
