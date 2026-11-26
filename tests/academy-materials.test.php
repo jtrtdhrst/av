@@ -69,6 +69,10 @@ function academySetAudit(\AlphaVault\Db $db, string $channelId): void
           WHERE channel_id = ?',
         [$channelId]
     );
+    $db->execute(
+        'UPDATE academy_material_messages SET last_audit_seen_at = NULL WHERE channel_id = ?',
+        [$channelId]
+    );
 }
 
 $GLOBALS['academy_failed'] = false;
@@ -665,7 +669,7 @@ try {
     $itemKeys = array_map(static fn (array $item): string => $item['channelId'] . ':' . $item['sourceMessageId'], $allItems);
     academyCheck(
         count($allItems) === count(array_unique($itemKeys))
-            && count($allItems) === 112
+            && count($allItems) === 113
             && $cursor === null
             && $cursorPages > 1,
         'API odczyt używa stabilnego keyset pagination bez duplikatów'
