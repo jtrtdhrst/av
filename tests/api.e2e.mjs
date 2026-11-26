@@ -80,6 +80,14 @@ async function main() {
   assert.equal(eventsAnon.res.status, 401);
   log('events bez sesji = 401', true);
 
+  const academyAnon = await req('/api/academy/materials');
+  assert.equal(academyAnon.res.status, 401);
+  assert.equal(academyAnon.json.error, 'unauthorized');
+  const academyWrite = await req('/api/academy/materials', { method: 'POST', body: '{}' });
+  assert.equal(academyWrite.res.status, 405);
+  assert.equal(academyWrite.res.headers.get('allow'), 'GET');
+  log('academy materials: anon = 401, metoda poza GET = 405', true);
+
   const macroAnon = await req('/api/macro-events');
   assert.equal(macroAnon.res.status, 401);
   log('macro-events bez sesji = 401', true);
@@ -118,6 +126,11 @@ async function main() {
   assert.equal(me.json.authenticated, true);
   assert.equal(me.json.user.isDemo, true);
   log('me z sesją', true, me.json.user.username);
+  const academyDemo = await req('/api/academy/materials');
+  assert.equal(academyDemo.res.status, 403);
+  assert.equal(academyDemo.json.error, 'forbidden');
+  assert.equal(academyDemo.json.items, undefined, 'konto demo nie może otrzymać materiałów Akademii');
+  log('academy materials: konto demo bez entitlementu = 403', true);
   fixtureUserId = Number(me.json.user.id);
   const baseline = await req('/api/state');
   assert.equal(baseline.res.status, 200, baseline.text);

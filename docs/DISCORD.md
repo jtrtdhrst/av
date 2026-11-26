@@ -6,7 +6,7 @@ Aplikacja używa **Authorization Code Grant** i dwóch scope'ów:
 identify guilds.members.read
 ```
 
-**Logowanie** sprawdza rolę tokenem zalogowanego użytkownika (scope `guilds.members.read`). **Cykliczna weryfikacja co 5 minut** używa bota (`DISCORD_BOT_TOKEN`) i endpointu pojedynczego członka — bez Privileged Gateway Intents:
+**Logowanie** sprawdza rolę tokenem zalogowanego użytkownika (scope `guilds.members.read`). **Cykliczna weryfikacja co 5 minut** używa bota (`DISCORD_BOT_TOKEN`) i endpointu pojedynczego członka — bez połączenia Gateway. Materiały Akademii czyta osobna integracja REST ograniczona do stałej allowlisty i wymaga `Message Content` dla pól treści.
 
 ```text
 GET https://discord.com/api/v10/users/@me/guilds/{DISCORD_GUILD_ID}/member
@@ -36,7 +36,7 @@ Szczegóły przepływu: [DOCUMENTATION.md §4](../DOCUMENTATION.md#4-uwierzyteln
 
 Stan redirect URI i sekretu klienta sprawdza workflow `Discord OAuth preflight` (`.github/workflows/discord-oauth-preflight.yml`): codziennie o 05:17 UTC i ręcznie przez `workflow_dispatch`. Workflow czyta `GET /applications/@me` i nie wypisuje sekretów. Czerwony run oznacza brak wpisu w Discord Developer Portal albo zły `DISCORD_CLIENT_SECRET`.
 
-Nie dodawaj scope'ów `email`, `guilds`, `messages` ani uprawnień do wysyłania wiadomości.
+Nie dodawaj scope'ów OAuth `email`, `guilds`, `messages` ani uprawnień do wysyłania wiadomości. Odczyt materiałów korzysta z tokenu bota i REST, nie z OAuth `messages`.
 
 ## 2. Serwer i rola
 
@@ -55,13 +55,44 @@ Bot jest potrzebny do:
 
 1. Discord Developer Portal → Bot → Add Bot.
 2. Skopiuj token → `DISCORD_BOT_TOKEN` (GitHub secret / ukryty `.app`).
-3. Uprawnienia: tylko **View Channels**. Bez Manage Events, bez Administratora.
-4. Nie włączaj Privileged Gateway Intents.
+3. Dla istniejącej synchronizacji wydarzeń/rechecku roli nie przyznawaj Manage Events ani Administratora.
+4. Nie otwieraj połączenia Gateway. Jedynym zatwierdzonym wyjątkiem od braku uprzywilejowanych intencji jest `Message Content` potrzebne REST do zwracania treści wiadomości Akademii; włącz tylko ten przełącznik, jeśli wymaga go aplikacja.
 5. Dodaj bota na serwer Alpha Moves.
 
 Synchronizacja i recheck roli są uruchamiane przez LH Cron co 5 minut (`cron/sync-discord-events.sh`). Jeśli token jest nieprawidłowy, wydarzenia w panelu pozostają ostatnim poprawnym zestawem, a `discord_sync_state.last_status=error`; recheck zapisuje `role_check_status=error` i nie odbiera dostępu.
 
-### 3a. Cykliczna weryfikacja roli (co 5 min)
+### 3a. Materiały Akademii — REST tylko do allowlisty
+
+Właściciel zatwierdził read-only import dokładnie 13 kanałów serwera `1186734786388176916`. Nie wyszukuj ani nie pobieraj wiadomości z innych kanałów.
+
+Pierwszych 11 kanałów musi należeć do kategorii `1186777064494338068`. Przed pobraniem historii sprawdź każdy z nich osobnym `GET /channels/{channel_id}` i wymagaj zgodnego `guild_id` oraz `parent_id`. Nie używaj `GET /guilds/{guild_id}/channels` ani nie rozszerzaj listy.
+
+| ID kanału | Nazwa | Filtr |
+| --- | --- | --- |
+| `1499560912611446784` | Materiały Forex | Forex |
+| `1499560977849384991` | Materiały Krypto | Krypto |
+| `1186973732925874217` | Nagrania | Nagrania |
+| `1186976565909794906` | Kalkulator | Narzędzia |
+| `1186978545902309456` | Przydatne strony | Narzędzia |
+| `1186979958187368468` | Dziennik tradingowy | Narzędzia |
+| `1499561028646600878` | Bootcamp Forex | Forex |
+| `1500905675960750151` | Bootcamp Krypto | Krypto |
+| `1501626207207292968` | Nagrania Mental | Mental |
+| `1542258755390152794` | Bonusowe wideo | Dodatkowe |
+| `1548026950961074216` | Nagrania Akademii | Nagrania |
+
+Te dwa wymagane kanały sprawdzaj niezależnie od ich kategorii:
+
+| ID kanału | Nazwa | Filtr |
+| --- | --- | --- |
+| `1499558305888997568` | Trade Recaps | Trade Recaps |
+| `1566742784596250624` | Poranne odprawy | Poranne odprawy |
+
+Bot potrzebuje `View Channel` i `Read Message History` wyłącznie w powyższych kanałach. REST wiadomości wymaga włączenia uprzywilejowanego `Message Content` w Developer Portal, aby Discord zwracał `content`, embeds i attachments; sam przełącznik nie otwiera połączenia Gateway. Nie włączaj innych intentów, nie przyznawaj Administratora ani uprawnień do wysyłania. OAuth nadal używa wyłącznie `identify guilds.members.read`.
+
+Synchronizacja korzysta z istniejącego LH Cron co 5 minut. Niezweryfikowana kategoria, brak dostępu lub brak potwierdzonego odczytu treści oznacza błąd kanału — nigdy sukces z pustą listą. Błąd jednego kanału nie może wyczyścić danych pozostałych. API materiałów wymaga zalogowanej sesji i pełnego dostępu do Akademii (`plan=full`); nie zwraca surowych payloadów ani adresów CDN/załączników. Link materiału jest budowany wyłącznie jako `https://discord.com/channels/{guild_id}/{channel_id}/{message_id}`.
+
+### 3b. Cykliczna weryfikacja roli (co 5 min)
 
 `bin/check-discord-roles.php` bierze aktywne sesje, których `users.role_checked_at` jest starsze niż `DISCORD_ROLE_RECHECK_SECONDS` (minimum 300 s), i sprawdza rolę botem.
 

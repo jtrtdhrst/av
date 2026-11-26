@@ -50,8 +50,9 @@ Apache + PHP 8.3 (LH.pl)
   └── MySQL/MariaDB      users, sessions, user_states, wydarzenia Discord
         ▲
         │  co 5 minut
-  LH Cron → bin/sync-discord-events.php → Discord REST API
-  LH Cron → bin/check-discord-roles.php → Discord guild member (recheck roli)
+LH Cron → bin/sync-discord-events.php → Discord REST API
+LH Cron → bin/check-discord-roles.php → Discord guild member (recheck roli)
+LH Cron → bin/sync-academy-materials.php → zatwierdzone kanały Discord → academy_* w MySQL
 ```
 
 ### 2.1. Macierz punktów styku
@@ -60,14 +61,14 @@ Apache + PHP 8.3 (LH.pl)
 | --- | --- | --- | --- | --- | --- |
 | P1 | UI aplikacji | przeglądarka → Apache/PHP | HTTPS | brak (strona publiczna) | [§3](#3-cykl-życia-żądania-http) |
 | P2 | Stan użytkownika | przeglądarka → `/api/state` | JSON/HTTPS | cookie sesji + Origin | wspólne reguły transakcji, CAS i semantyczny no-op; [§5](#5-stan-aplikacji) |
-| P3 | Wydarzenia | przeglądarka → `/api/events` | JSON/HTTPS | cookie sesji | [§6](#6-api--kontrakt-i-zachowanie) |
+| P3 | API użytkownika | przeglądarka → `/api/events`, `/api/academy/materials` | JSON/HTTPS | cookie sesji; Akademia wymaga `full` | [§6](#6-api--kontrakt-i-zachowanie) |
 | P4 | Start OAuth | przeglądarka → `/auth/discord` → Discord | 302 | cookie `av_oauth` + `state` | [§4](#4-uwierzytelnianie-sesje-i-csrf) |
 | P5 | Powrót OAuth | Discord → `/auth/discord/callback` | 302 + code | `state` w DB i cookie | [§4](#4-uwierzytelnianie-sesje-i-csrf) |
 | P6 | Profil i rola | PHP → Discord API | HTTPS | Bearer użytkownika | [§4](#4-uwierzytelnianie-sesje-i-csrf) |
 | P7 | Dane aplikacji | PHP → MySQL | PDO | dane z `config.json` | [§10](#10-baza-danych-i-transakcje) |
-| P8 | Uruchomienie sync | LH Cron → `bin/sync-discord-events.php` | CLI | użytkownik systemowy | [§9](#9-cron-i-niezawodność) |
-| P9 | Odczyt wydarzeń | sync → Discord REST | HTTPS | `Bot DISCORD_BOT_TOKEN` | [§7](#7-discord-scheduled-events--pełny-przepływ) |
-| P10 | Zapis i import danych | sync → MySQL | PDO + transakcja | dane z `config.json` | wydarzenia Discord i atomowy import per połączenie; [§7](#7-discord-scheduled-events--pełny-przepływ), [§6.2](#62-mcp-32---panel-zapis-propozycje-i-zgoda-w-rozmowie) |
+| P8 | Uruchomienie sync | LH Cron → `bin/sync-discord-events.php`, `bin/sync-academy-materials.php` | CLI | użytkownik systemowy | [§9](#9-cron-i-niezawodność) |
+| P9 | Odczyt Discord | sync → Discord REST | HTTPS | `Bot DISCORD_BOT_TOKEN` | scheduled events oraz wyłącznie metadane/historia zatwierdzonych kanałów; [§7](#7-discord-scheduled-events--pełny-przepływ), [§6.3](#63-materiały-akademii) |
+| P10 | Zapis i import danych | sync → MySQL | PDO + transakcja | dane z `config.json` | wydarzenia, materiały Akademii i atomowy import per połączenie; [§7](#7-discord-scheduled-events--pełny-przepływ), [§6.3](#63-materiały-akademii), [§6.2](#62-mcp-32---panel-zapis-propozycje-i-zgoda-w-rozmowie) |
 | P11 | Administracja | admin → `/api/admin/events*` | JSON/HTTPS | cookie + `ADMIN_DISCORD_IDS` | [§13](#13-administracja-wydarzeniami) |
 | P12 | Offline | przeglądarka → `localStorage` | JS | brak | [§11](#11-frontend--od-bootstrapu-do-renderu) |
 | P13 | Deploy | GitHub Actions / WSL → LH | SSH + rsync | klucz ED25519 | [§14](#14-deployment) |
@@ -212,6 +213,7 @@ Pełny kontrakt: [docs/API.md](docs/API.md). Specyfikacja: [docs/openapi.yaml](d
 | DELETE | `/api/account` | tak | usunięcie konta |
 | GET | `/api/me/export` | tak | eksport JSON |
 | GET | `/api/quotes` | nie | notowania rynkowe z cache i fallbackiem |
+| GET | `/api/academy/materials` | tak + aktywny `full` | filtrowane, stronicowane materiały z zatwierdzonych kanałów |
 | GET | `/api/events` | tak | wydarzenia, live, konsultacje, sync |
 | GET | `/api/macro-events` | tak | publikacje makro + sync |
 | GET | `/api/admin/events` | admin | wszystkie wydarzenia + sync |
@@ -230,6 +232,7 @@ Pełny kontrakt: [docs/API.md](docs/API.md). Specyfikacja: [docs/openapi.yaml](d
 - Odpowiedzi są JSON z `Content-Type: application/json; charset=utf-8`.
 - Błędy mają `{ error, message }`.
 - `/api/events` nie zwraca `raw_payload`.
+- `/api/academy/materials` wymaga sesji i aktualnego entitlementu `full`; synchronizację uruchamia wyłącznie cron, a endpoint zwraca kanoniczny link wiadomości źródłowej bez URL-i CDN i surowych payloadów.
 - `isAdmin` wynika wyłącznie z `ADMIN_DISCORD_IDS`.
 - `/api/wearables` nigdy nie zwraca tokenów dostawców ani `raw_payload`.
 
@@ -280,6 +283,14 @@ Odpowiedzi operacji zapisu, cache idempotencji, diffy i podglądy propozycji nie
 obrazów; zachowują hash i rozmiar. Jawny `get_trade_screenshots(includeImages=true)` pozostaje
 oddzielną ścieżką odczytu, z limitem 2 obrazów po maksymalnie 200 KB (łącznie 400 KB).
 Szczegóły: [docs/MCP.md](docs/MCP.md).
+
+### 6.3. Materiały Akademii
+
+`GET /api/academy/materials` odczytuje z indeksu MySQL i wymaga aktualnej sesji z `roleVerified=true`, planem `full`, bez trybu demo oraz niewygasłym `accessUntil`. Obsługuje kategorię z allowlisty, wyszukiwanie po tytule/opisie, limit 1–50 i podpisany keyset cursor. Pozostałe metody zwracają `405`; żądanie API nie uruchamia synchronizacji.
+
+Cron wykonuje tylko GET-y Discorda: bezpośrednie `/channels/{id}` dla stałej listy 13 źródeł, a historię `/channels/{id}/messages` dopiero po weryfikacji ID/guild/kategorii. Pierwszych 11 źródeł wymaga zatwierdzonego `parent_id`; dwa dodatkowe źródła nie są zależne od kategorii. Wiadomości normalizowane są do bezpiecznych pól (treść/tytuł, autor, UTC i oryginalne ISO, typ); surowy payload, załączniki i URL-e CDN nie są zapisywane ani zwracane.
+
+Pełny backfill i cotygodniowy audyt używają trwałych snowflake checkpointów. Postęp strony i zapis wiadomości są transakcyjne; API zachowuje ostatni dobry zestaw po błędzie, a brak wiadomości oznacza soft delete dopiero po kompletnym, treściowo zweryfikowanym audycie. Dostęp do historii i potwierdzenie treści są raportowane osobno. HTTP 200 z pustą historią lub wyłącznie pustymi polami nie daje `ready=true`; kanały bez potwierdzenia są ukryte.
 
 ## 7. Discord Scheduled Events — pełny przepływ
 
@@ -452,7 +463,7 @@ Panel LH.pl → Serwery → `serwer445119` → Cron / Harmonogram zadań:
 */5 * * * * /bin/bash /public_html/alphavault.pl/.app/cron/sync-discord-events.sh
 ```
 
-To jedyny wpis w LH Cron. Wrapper uruchamia kolejno `bin/sync-discord-events.php` (Discord events + worker integracji `syncDue`, realny import max co 25 min), `bin/check-discord-roles.php` (recheck roli co 5 min) oraz z throttle `bin/sync-macro-events.php` (co 15 min), `bin/sync-wearables.php` (co 30 min) i `bin/sync-demo-state.php` (co 60 min). Znaczniki czasu: `.app/.runtime/*.stamp`.
+To jedyny wpis w LH Cron. Wrapper uruchamia kolejno `bin/sync-discord-events.php` (Discord events + worker integracji `syncDue`, realny import max co 25 min), `bin/check-discord-roles.php` (recheck roli co 5 min) oraz z throttle `bin/sync-macro-events.php` (co 15 min), `bin/sync-wearables.php` (co 30 min), `bin/sync-demo-state.php` (co 60 min) i `bin/sync-academy-materials.php` (co 5 min). Znaczniki czasu: `.app/.runtime/*.stamp`.
 
 Ręcznie (bez panelu):
 
@@ -537,6 +548,10 @@ Monitoring nie zapisuje tokenów ani treści wydarzeń. `/api/health` udostępni
 | `discord_sync_runs` | historia sync (30 dni) | `id` |
 | `macro_events` | publikacje makro (FF/TradingView, UPSERT, soft delete) | `external_id` (UNIQUE) |
 | `macro_sync_state` | stan synchronizacji makro | `id=1` |
+| `academy_material_sync_state` | blokada i wynik globalnego syncu Akademii | `id=1` |
+| `academy_material_channel_state` | weryfikacja, dostęp i checkpointy dla 13 kanałów | `channel_id` |
+| `academy_material_messages` | znormalizowane wiadomości, relacje i stan soft delete | `(channel_id, message_id)` |
+| `academy_material_items` | indeks wyników API Akademii | `(channel_id, source_message_id)` |
 | `wearable_connections` | połączenie z urządzeniem, zaszyfrowane tokeny | `(user_id, provider)` |
 | `wearable_daily_metrics` | dzienne metryki zdrowotne | `(user_id, provider, metric_date)` |
 | `wearable_oauth_states` | jednorazowe stany OAuth2 urządzeń | `state` |
@@ -818,6 +833,8 @@ Plik: `.github/workflows/deploy-alphavault.yml`.
 
 Dodatkowo `/` musi zawierać „Alpha Vault”, a `/js/state.js` musi zwracać 200.
 
+`ACADEMY_RECAP_WINDOW_MINUTES` (1–240, domyślnie 30) ustawia okno fallbackowego łączenia krótkiej wiadomości tekstowej z materiałem. Wartość trafia do ukrytego `.app/config.json`; nie jest sekretem.
+
 ### 14.3. Deploy wyłącznie przez GitHub
 
 `deploy-alphavault.yml` jest jedyną ścieżką wdrożenia. Uruchamia się po zielonym CI na `main` (`workflow_run`), wymaga `DEPLOY_ENABLED=true` i przechodzi krok `Verify production E2E`. Lokalny deploy, SSH/rsync i `scripts/local-deploy.sh` nie są używane.
@@ -905,6 +922,7 @@ narzędzi (79/46). `revision` jest deklaracją commita, nie atestacją kryptogra
 | MCP panel | `tests/mcp-ui.e2e.mjs` | diff, kod do rozmowy, approve, reject, reload, trwałość | PASS |
 | Routing | `tests/router.unit.mjs` | slugi widoków, aliasy starych adresów, `viewFromHash`, `showView` | 18/18 PASS |
 | Notowania | `tests/quotes.test.php` | cache, TTL, fallback, cząstkowe pobranie, uszkodzony cache | 14/14 PASS |
+| Materiały Akademii | `tests/academy-materials.test.php` + `tests/api.e2e.mjs` | allowlista, kolejność weryfikacji, GET-only, backfill/checkpoint, status treści, keyset pagination, idempotencja, edycja, soft delete, błędy częściowe, entitlement demo/anon | CI po zmianie |
 | Daty demo | `tests/demo-state.test.php` | przesunięcie fixture na dziś, idempotencja, plany jako punkt zaczepienia, błędne dane | 15/15 PASS |
 | API | `tests/api.e2e.mjs` | health, sesja, CSRF, walidacja SL/źródła/daty/closedAt, blokada wstrzyknięcia wpisu przez kosz, no-op revision/updatedAt, zamknięcie legacy bez SL, stan, events, macro, admin, eksport, prop i cleanup fixture | CI po zmianie |
 | UI | `tests/ui.e2e.mjs` | 15 widoków, live na pełną szerokość, skrót i modal konsultacji z wydarzeniem/przypomnieniami/rezerwacją lokalną i focus trapem, przejście do Dziennika, prop, makro do +3 ze stanami partial/error/stale, wiele planów, poziomy i statusy realizacji z agregatem, zachowaniem niezapisanego tekstu przy natychmiastowym kliknięciu, resetem przy kopiowaniu z wczoraj, reloadem/autosave oraz wyłączeniem globalnych, saldo ręczne i kapitał obliczony, kalkulator, wymagany SL i przeliczanie wielkości, PnL wg dat realizacji, round-trip przez API i cleanup fixture, MCP status/fallback i odznaki | CI po zmianie |

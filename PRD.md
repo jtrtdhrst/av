@@ -273,6 +273,13 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 - Import zachowuje czas zamknięcia ze źródła i zapisuje `importedAt` w UTC.
 - Propozycja MCP `write_op` utrwala kompletny snapshot i podgląd; zatwierdzenie stosuje go tylko przy zgodnej rewizji, bez ponownego wykonania operacji ani rebase. Payloady obrazów są redagowane w odpowiedziach zapisu, diffach i propozycjach; jawny odczyt screenów pozostaje opt-in.
 
+### FR-23 — Synchronizacja i odczyt materiałów Akademii
+
+- Backend cyklicznie pobiera materiały wyłącznie z zatwierdzonej, stałej allowlisty 13 kanałów. Najpierw wykonuje bezpośrednie `GET /channels/{id}` i sprawdza `guild_id`; pierwsze 11 źródeł wymaga zatwierdzonego `parent_id`, dwa dodatkowe nie zależą od kategorii. Nie enumeruje kanałów serwera ani nie wykonuje mutacji Discord.
+- Backfill i audyt historii mają trwałe checkpointy, są idempotentne i izolują błędy per kanał. HTTP 200 z pustą historią nie potwierdza dostępu do treści. Dostęp do historii i uprzywilejowanej treści są przechowywane osobno; `ready` wymaga potwierdzenia treści i zakończenia backfillu we wszystkich źródłach.
+- Błąd synchronizacji zachowuje ostatni dobry zestaw; usunięcia są miękkie i wynikają wyłącznie z kompletnego audytu, w którym potwierdzono odczyt treści.
+- `GET /api/academy/materials` wymaga sesji, aktualnego potwierdzenia roli i entitlementu `full`; konta demo, solo oraz wygasłe są odrzucane. Endpoint oferuje filtrowanie i keyset pagination, nie wyzwala syncu i zwraca kanoniczne linki do wiadomości źródłowych bez surowych payloadów ani URL-i CDN/załączników.
+
 ## 7. Wymagania niefunkcjonalne
 
 | Obszar | Wymaganie |
@@ -316,6 +323,7 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | AC-21 | No-op nie podnosi rewizji ani `updatedAt`; batch 501 rekordów jest atomowy, ma markery i źródłowy czas zamknięcia oraz UTC `importedAt`; limit stron i brak kursora nie prowadzą do częściowego importu | API + integracje E2E w CI |
 | AC-22 | `write_op` stosuje zamrożony snapshot tylko przy zgodnej rewizji; obrazy nie wyciekają przez zapis, diff, preview ani replay | MCP unit/E2E w CI |
 | AC-23 | Zatwierdzone plany dnia można oznaczyć jako zrealizowane/niezrealizowane, a podsumowanie daty po reloadzie zgadza się ze stanem API; szkice i plany globalne są wyłączone, kopia z wczoraj startuje bez statusu | UI E2E w CI |
+| AC-24 | Synchronizacja Akademii ogranicza się do 13 zatwierdzonych źródeł, weryfikuje metadane przed historią, zachowuje checkpoint/ostatnie dobre dane i nie uznaje pustej treści za dostęp; chroniony GET zwraca stabilne strony bez payloadów i URL-i CDN | `tests/academy-materials.test.php` + `tests/api.e2e.mjs` w CI |
 
 ## 9. Metryki sukcesu
 
@@ -383,3 +391,4 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | FR-16 | [DOCUMENTATION.md §17](DOCUMENTATION.md#17-zarządzanie-dokumentacją), [AGENTS.md](AGENTS.md) |
 | FR-19 | [docs/PROP.md](docs/PROP.md), [docs/FUNKCJE.md](docs/FUNKCJE.md) |
 | FR-22 | [DOCUMENTATION.md §5](DOCUMENTATION.md#5-stan-aplikacji), [docs/API.md](docs/API.md), [docs/MCP.md](docs/MCP.md), [docs/TESTOWANIE.md](docs/TESTOWANIE.md) |
+| FR-23 | [DOCUMENTATION.md §6.3](DOCUMENTATION.md#63-materiały-akademii), [docs/API.md](docs/API.md), [docs/DISCORD.md](docs/DISCORD.md), [docs/BAZA-DANYCH.md](docs/BAZA-DANYCH.md), [docs/TESTOWANIE.md](docs/TESTOWANIE.md) |

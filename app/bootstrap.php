@@ -20,6 +20,7 @@ require_once $root . '/app/Discord.php';
 require_once $root . '/app/RoleGuard.php';
 require_once $root . '/app/DiscordApiException.php';
 require_once $root . '/app/DiscordEvents.php';
+require_once $root . '/app/AcademyMaterials.php';
 require_once $root . '/app/MacroEvents.php';
 require_once $root . '/app/Wearables.php';
 require_once $root . '/app/Quotes.php';

@@ -64,6 +64,7 @@ W `miloszspyrka-code/av` → Settings → Secrets and variables → Actions:
 | `WEARABLES_ENCRYPTION_KEY` | wymagany klucz AES-256-GCM tokenów urządzeń; bez niego integracje OAuth są nieaktywne (brak fallbacku na `SESSION_SECRET`) |
 | `WEARABLES_ENCRYPTION_KEY_PREVIOUS` | poprzedni klucz AES do odczytu starych tokenów w czasie rotacji |
 | `QUOTES_BASE`, `QUOTES_TTL`, `QUOTES_CACHE` | notowania rynkowe: URL dostawcy, TTL cache w sekundach (0–3600), plik cache |
+| `ACADEMY_RECAP_WINDOW_MINUTES` | opcjonalne okno łączenia krótkiego opisu z materiałem (1–240 min, domyślnie 30) |
 
 Zmienne repozytorium:
 
@@ -117,7 +118,7 @@ Panel LH.pl → Serwery → serwer445119 → Cron / Harmonogram zadań → zadan
 */5 * * * * /bin/bash /public_html/alphavault.pl/.app/cron/sync-discord-events.sh
 ```
 
-To **jedyny** wpis LH Cron. Skrypt uruchamia kolejno `bin/sync-discord-events.php` (Discord events + worker integracji `syncDue`, realny import max co 25 min), `bin/check-discord-roles.php` (recheck roli co 5 min) oraz z throttle `bin/sync-macro-events.php` (co 15 min), `bin/sync-wearables.php` (co 30 min) i `bin/sync-demo-state.php` (co 60 min). Znaczniki czasu: `.app/.runtime/*.stamp`.
+To **jedyny** wpis LH Cron. Skrypt uruchamia kolejno `bin/sync-discord-events.php` (Discord events + worker integracji `syncDue`, realny import max co 25 min), `bin/check-discord-roles.php` (recheck roli co 5 min) oraz z throttle `bin/sync-macro-events.php` (co 15 min), `bin/sync-wearables.php` (co 30 min), `bin/sync-demo-state.php` (co 60 min) i `bin/sync-academy-materials.php` (co 5 min). Znaczniki czasu: `.app/.runtime/*.stamp`.
 
 Ręcznie (bez panelu):
 
@@ -128,6 +129,10 @@ Ręcznie (bez panelu):
 ```
 
 `crontab` przez SSH nie jest dostępny (`/var/spool/cron` nie istnieje), więc harmonogram zmieniaj tylko w panelu LH.
+
+## 5c. Materiały Akademii
+
+Synchronizacja Akademii używa tego samego pięciominutowego wrappera i trwałych checkpointów w MySQL. `GET /api/academy/materials` jest wyłącznie odczytowy i nie wyzwala syncu. Status znajduje się w `GET /api/health` jako beztreściowe `academyMaterials`; `ready` wymaga kompletnego backfillu oraz potwierdzonego dostępu do historii i treści we wszystkich zatwierdzonych kanałach.
 
 ## 5a. Synchronizacja kalendarza makro (wrapper)
 

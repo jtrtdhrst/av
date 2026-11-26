@@ -20,6 +20,10 @@ Schemat: `db/schema.sql`. Migracja: `php app/db/migrate.php`.
 | `discord_sync_runs` | historia synchronizacji (30 dni) |
 | `macro_events` | publikacje makro z feedów (UPSERT, soft delete, źródło FF/TradingView) |
 | `macro_sync_state` | ostatnia próba/sukces synchronizacji makro, licznik, błąd |
+| `academy_material_sync_state` | globalna blokada, status i checkpoint synchronizacji Akademii |
+| `academy_material_channel_state` | weryfikacja źródła, stanu dostępu, backfillu i audytu per kanał |
+| `academy_material_messages` | znormalizowane wiadomości, referencje, oryginalne ISO 8601 oraz soft delete |
+| `academy_material_items` | indeks stronicowanego API: kategoria, tytuł/opis, źródłowe IDs i soft delete |
 | `wearable_connections` | jedno połączenie użytkownika z dostawcą; status, zaszyfrowane tokeny, `token_expires_at`, `refresh_token_expires_at`, token urządzenia Apple (hash), last sync |
 | `wearable_daily_metrics` | dzienne metryki zdrowotne: sen, HRV, tętno, Body Battery, wynik dostawcy, surowa odpowiedź |
 | `wearable_oauth_states` | jednorazowe stany OAuth2 dla Oura (10 min) wraz z `code_verifier` dla PKCE; Garmin/Whoop wyłączone |
@@ -53,6 +57,13 @@ Dokument zawiera m.in. `prop.challenges` (konfiguracje challenge'ów) i `prop.se
 - `impact`: 3 = ★★★, 2 = ★★. Publikacje Low/Holiday nie są zapisywane.
 - Brak wydarzenia w udanym feedzie → `is_deleted=1`; powrót → `is_deleted=0`.
 - `raw_payload` nie jest przechowywany.
+
+## Materiały Akademii
+
+- Allowlista 13 kanałów jest stała w `app/AcademyMaterials.php`; synchronizacja pobiera metadane kanału przez bezpośrednie GET, a historię dopiero po weryfikacji źródła.
+- `academy_material_channel_state` przechowuje osobno dostęp do historii i potwierdzenie treści, postęp backfillu oraz checkpoint audytu; pusty HTTP 200 nie oznacza gotowości.
+- Wiadomości i indeks materiałów przechowują UTC `DATETIME` oraz oryginalne ISO 8601. Surowy JSON Discord, treści załączników i URL-e CDN nie są utrwalane.
+- `academy_material_items` jest źródłem chronionego, keyset-paginated `GET /api/academy/materials`; nieobecne wiadomości są oznaczane soft delete po kompletnym, treściowo zweryfikowanym audycie.
 
 ## Dane zdrowotne
 

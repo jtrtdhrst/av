@@ -85,6 +85,13 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                 // Brak tabeli stanu nie może wywalić publicznego health checku.
                 $roleRecheck = null;
             }
+            $academyMaterials = null;
+            try {
+                $academyMaterials = (new AcademyMaterials($config, $db))->syncState();
+            } catch (\Throwable) {
+                // Brak migracji/stanu Akademii nie może wywrócić health checku.
+                $academyMaterials = null;
+            }
             Http::json([
                 'ok' => $health['ok'],
                 'service' => 'alpha-vault',
@@ -96,6 +103,7 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
                 'roleCheckConfigured' => $config->roleCheckConfigured,
                 'roleRecheckConfigured' => $config->roleRecheckConfigured,
                 'roleRecheck' => $roleRecheck,
+                'academyMaterials' => $academyMaterials,
                 'eventsConfigured' => $config->eventsConfigured,
                 'demoAllowed' => $config->allowDemoLogin,
                 'sync' => $sync,
@@ -136,6 +144,27 @@ function av_handle_api(Config $config, Db $db, Auth $auth, ?array $user, string 
             }
             $quotes = new Quotes($config->quotesCacheFile, $config->quotesBase, $config->quotesTtl);
             Http::json($quotes->get($requested));
+        }
+
+        if ($path === '/api/academy/materials') {
+            if (!AcademyMaterials::supportsMethod($method)) {
+                header('Allow: GET');
+                Http::json(['error' => 'method_not_allowed', 'message' => 'Dozwolona jest wyłącznie metoda GET.'], 405);
+            }
+            $current = $auth->requireAuth($user);
+            if (!AcademyMaterials::hasAcademyEntitlement($current)) {
+                Http::json(['error' => 'forbidden', 'message' => 'Brak dostępu do Akademii.'], 403);
+            }
+            $category = is_string($_GET['category'] ?? null) ? trim((string) $_GET['category']) : 'all';
+            if ($category === '') {
+                $category = 'all';
+            }
+            $query = is_string($_GET['q'] ?? null) ? (string) $_GET['q'] : '';
+            $rawLimit = $_GET['limit'] ?? 10;
+            $limit = is_scalar($rawLimit) && is_numeric((string) $rawLimit) ? (int) $rawLimit : 10;
+            $cursor = is_string($_GET['cursor'] ?? null) ? (string) $_GET['cursor'] : null;
+            $materials = new AcademyMaterials($config, $db);
+            Http::json($materials->listForApi($category, $query, $limit, $cursor));
         }
 
         if ($path === '/api/state' && $method === 'GET') {

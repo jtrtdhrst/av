@@ -77,6 +77,8 @@ npm run test:docs        # linki i spójność dokumentacji
 
 CI dodatkowo uruchamia `tests/mcp-migration-upgrade.test.php`, który odtwarza upgrade
 istniejącego schematu MCP sprzed migracji fingerprintów i sprawdza ponowne wykonanie migracji.
+CI uruchamia też `tests/academy-materials.test.php` na izolowanej bazie: allowlista Discord,
+backfill z checkpointami, weryfikacja treści, paginacja, audyt, soft delete i redakcja URL-i CDN.
 `tests/deploy-mcp-guard.test.mjs` w CI sprawdza, że workflow wdraża wyłącznie SHA
 z `main` z udanym CI dla dokładnego commita.
 
