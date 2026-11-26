@@ -704,33 +704,8 @@
       remBtn.innerHTML = '<svg class="i"><use href="#i-bell"/></svg>' + (s.meta.liveReminder ? 'Przypomnienie włączone · ' + remMins + ' min' : 'Przypomnij ' + remMins + ' min przed');
     }
 
-    const c = data.nextConsultation;
-    if (c) {
-      set('#nextConsult', c.startLabel || '');
-      const bits = [];
-      if (c.host) bits.push('z ' + c.host);
-      if (c.durationMinutes !== null && c.durationMinutes !== undefined) bits.push(c.durationMinutes + ' min');
-      bits.push('Discord');
-      set('#nextConsultWho', bits.join(' · '));
-      let month = '';
-      try {
-        month = new Intl.DateTimeFormat('pl-PL', { month: 'long', timeZone: 'Europe/Warsaw' }).format(new Date(c.startAt));
-      } catch (e) {
-        month = '';
-      }
-      set('#consultMonth', month);
-      AV.setHTML('#consultTopWrap', 'Twoja konsultacja: <b>' + AV.esc(c.startLabel || '') + '</b>' + (c.host ? ' z ' + AV.esc(c.host) : ''));
-    } else {
-      set('#nextConsult', '');
-      set('#nextConsultWho', '');
-      set('#consultMonth', '');
-      set('#consultTopWrap', '');
-    }
-
-    const used = Number(s.meta.consultationUsed || 0);
-    set('#consultUsed', used + ' z 3 h');
-    const bar = document.querySelector('#consultBar');
-    if (bar) bar.style.width = Math.min(100, (used / 3) * 100) + '%';
+    const consultation = data.nextConsultation;
+    AV.setText('#consultTopText', consultation?.startLabel ? 'Konsultacja · ' + consultation.startLabel : 'Konsultacje');
 
     const liveEvents = AV.expandAcadEvents(data.live || []).sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
     AV.renderAcadSchedule(liveEvents, todayKey);

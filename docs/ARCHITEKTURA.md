@@ -66,7 +66,7 @@ Schemat i indeksy: [BAZA-DANYCH.md](BAZA-DANYCH.md).
 Bez frameworka: `index.html`, `js/core.js`, `js/data.js`, `js/state.js`, `js/render1.js`, `js/render2.js`, `js/actions.js`.
 
 - `state.js` ładuje `/api/me`, `/api/state`, `/api/events`, `/api/wearables` i utrzymuje rewizję,
-- `render2.js` renderuje Akademię, konsultacje, harmonogram, urządzenia i panel admina,
+- `render2.js` renderuje kartę live i harmonogram Akademii oraz aktualizuje skrót konsultacji; szczegóły konsultacji otwiera modal w `actions.js`,
 - `actions.js` obsługuje timery, przypomnienia i interakcje.
 
 Puste pola i stany brzegowe: [DOCUMENTATION.md §12](../DOCUMENTATION.md#12-puste-pola-i-stany-brzegowe).

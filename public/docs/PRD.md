@@ -67,7 +67,7 @@ W wersji 3.0 backend został zmigrowany z Express/Node.js na PHP 8.3, a harmonog
 - zachowanie istniejącego UI i funkcji tradingowych,
 - synchronizacja Discord Scheduled Events do MySQL,
 - klasyfikacja wydarzeń i ręczne przypisanie przez administratora,
-- harmonogram live'ów i karta konsultacji 1:1 zasilane rzeczywistymi danymi,
+- harmonogram live'ów i panel konsultacji 1:1 zasilane rzeczywistymi danymi,
 - puste pola przy braku wydarzeń,
 - strefa `Europe/Warsaw` i DST,
 - LH Cron, blokada równoległych uruchomień, diagnostyka synchronizacji,
@@ -138,13 +138,14 @@ Każdy widok ma czytelny adres w hashu (`#/dziennik`, `#/akademia`, `#/podatki`,
 - godzina `HH:mm`, liczba zainteresowanych, jeśli dostępna,
 - brak wpisanych na stałe godzin i tytułów.
 
-### FR-06 — Karta konsultacji 1:1
+### FR-06 — Dostęp do konsultacji 1:1
 
-- „Najbliższa konsultacja” pokazuje wyłącznie wydarzenie sklasyfikowane jako `consultation`,
+- skrót na pulpicie otwiera panel konsultacji; szczegóły „Najbliższa konsultacja” pokazują wyłącznie wydarzenie sklasyfikowane jako `consultation`,
 - prowadzący tylko z wiarygodnego pola wydarzenia lub reguły (nie ze zgadywania),
 - czas trwania tylko gdy istnieje `scheduled_end_time`,
 - brak wydarzenia = puste pola,
-- rezerwacja, przypomnienia i rozliczenia działają niezależnie od synchronizacji.
+- karta konsultacji nie zajmuje miejsca w Akademii; sąsiadująca karta live wykorzystuje pełną szerokość,
+- rezerwacja, przypomnienia i rozliczenie wykorzystanych godzin pozostają dostępne z panelu i działają niezależnie od synchronizacji.
 
 ### FR-07 — Klasyfikacja i ręczne przypisanie
 
@@ -163,7 +164,7 @@ Wydarzenia `unassigned` są widoczne na liście administracyjnej; nie są ukrywa
 Po udanej synchronizacji z zerem wydarzeń:
 
 - karta live jest ukryta; tytuł, prowadzący i godzina pozostają puste,
-- karta konsultacji pozostaje pusta,
+- skrót konsultacji pozostaje dostępny, a panel nie pokazuje szczegółów wydarzenia ani miesiąca, jeśli brak nadchodzącej konsultacji,
 - brak tekstów „Brak wydarzeń”, „Niedostępne”, „--”, „Wkrótce”,
 - brak starych danych demo.
 
@@ -299,8 +300,8 @@ MCP na `mcp.alphavault.pl` udostępnia agentom AI dane właściciela tokenu OAut
 | AC-04 | Ponowne uruchomienia nie tworzą duplikatów | `LIVE_SYNC_UNIQUE == LIVE_SYNC_EVENTS` |
 | AC-05 | Zmiany i usunięcia są obsługiwane | test UPSERT + soft delete |
 | AC-06 | Panel pokazuje rzeczywiste wydarzenia | UI E2E |
-| AC-07 | Konsultacje i live'y trafiają do właściwych modułów | UI E2E + klasyfikacja |
-| AC-08 | Puste dane = puste pola | `ui-empty.e2e.mjs` 12/12 |
+| AC-07 | Live'y trafiają do harmonogramu, a konsultacje do panelu ze skrótu pulpitu | UI E2E + klasyfikacja |
+| AC-08 | Puste dane = puste pola, bez ukrywania skrótu konsultacji | `ui-empty.e2e.mjs` 15 scenariuszy |
 | AC-09 | Godziny poprawne w `Europe/Warsaw` | testy DST + UI |
 | AC-10 | Przejście czasu letni/zimowy przetestowane | 4 przypadki DST |
 | AC-11 | Token bota pozostaje bezpieczny | audyt sekretów i logów |
