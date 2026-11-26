@@ -1780,7 +1780,10 @@
         return;
       }
       const first = items[0], last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (!modalBody.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -1793,7 +1796,9 @@
       modalRoot._consultationFocusRestore = restoreFocus;
       if (!modalRoot._consultationFocusListener) {
         modalRoot._consultationFocusListener = (event) => {
-          if (event.target === modalRoot) modalRoot._consultationFocusRestore?.();
+          if (event.target === modalRoot && modalRoot.querySelector('#consultDialogTitle, #consultBookingTitle')) {
+            modalRoot._consultationFocusRestore?.();
+          }
         };
         modalRoot.addEventListener('click', modalRoot._consultationFocusListener);
       }

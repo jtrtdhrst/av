@@ -143,7 +143,8 @@ Każdy widok ma czytelny adres w hashu (`#/dziennik`, `#/akademia`, `#/podatki`,
 - skrót na pulpicie otwiera panel konsultacji; szczegóły „Najbliższa konsultacja” pokazują wyłącznie wydarzenie sklasyfikowane jako `consultation`,
 - prowadzący tylko z wiarygodnego pola wydarzenia lub reguły (nie ze zgadywania),
 - czas trwania tylko gdy istnieje `scheduled_end_time`,
-- brak wydarzenia = puste pola,
+- przy braku wydarzenia Discord można pokazać wyłącznie poprawną przyszłą rezerwację zapisaną lokalnie; data błędna lub przeszła pozostaje ukryta,
+- brak wydarzenia Discord i brak przyszłej rezerwacji lokalnej = puste pola, bez fikcyjnego miesiąca,
 - karta konsultacji nie zajmuje miejsca w Akademii; sąsiadująca karta live wykorzystuje pełną szerokość,
 - rezerwacja, przypomnienia i rozliczenie wykorzystanych godzin pozostają dostępne z panelu i działają niezależnie od synchronizacji.
 
@@ -164,7 +165,7 @@ Wydarzenia `unassigned` są widoczne na liście administracyjnej; nie są ukrywa
 Po udanej synchronizacji z zerem wydarzeń:
 
 - karta live jest ukryta; tytuł, prowadzący i godzina pozostają puste,
-- skrót konsultacji pozostaje dostępny, a panel nie pokazuje szczegółów wydarzenia ani miesiąca, jeśli brak nadchodzącej konsultacji,
+- skrót konsultacji pozostaje dostępny; bez wydarzenia Discord panel pokazuje szczegóły i miesiąc tylko dla poprawnej przyszłej rezerwacji lokalnej, a wygasłe lub błędne dane pomija,
 - brak tekstów „Brak wydarzeń”, „Niedostępne”, „--”, „Wkrótce”,
 - brak starych danych demo.
 

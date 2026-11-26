@@ -58,7 +58,7 @@ npm run test:ui          # UI: Akademia bez karty konsultacji (live pełnej szer
 npm run test:tax         # PIT-38: 8 scenariuszy (MySQL + UI)
 npm run test:isolation   # izolacja użytkowników: 9 scenariuszy
 npm run test:pwa         # PWA mobile: manifest, offline, brak przepełnienia 390/1024 px
-npm run test:ui:empty    # puste pola i skrót konsultacji bez wydarzenia: 15 scenariuszy (osobny serwer)
+npm run test:ui:empty    # puste pola, wygasła rezerwacja ukryta i skrót konsultacji bez wydarzenia: 15 scenariuszy
 npm run test:events      # Discord DB/sync + DST: 24 scenariusze
 npm run test:macro       # makro DB/sync: FF, poprzedni pełny tydzień + TradingView +1…+3 także cold-start, priorytet FF, partial/error, retencja, API −14/+35 dni
 npm run test:quotes      # notowania rynkowe: 14 scenariuszy

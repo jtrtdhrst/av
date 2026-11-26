@@ -155,6 +155,27 @@ try {
 
   await page.click('.navg button[data-v="pulpit"]');
   await page.click('#consultOpen');
+  const consultationDialog = await page.evaluate(() => {
+    const dialog = document.querySelector('#gBody');
+    const labelledBy = dialog?.getAttribute('aria-labelledby') || '';
+    return {
+      labelled: dialog?.getAttribute('role') === 'dialog' && dialog?.getAttribute('aria-modal') === 'true' &&
+        !!labelledBy && !!document.getElementById(labelledBy),
+      focused: !!dialog?.contains(document.activeElement)
+    };
+  });
+  await page.keyboard.press('Shift+Tab');
+  const shiftTabTrapped = await page.evaluate(() => document.activeElement?.id === 'shareTrade');
+  await page.keyboard.press('Tab');
+  const tabTrapped = await page.evaluate(() => document.activeElement?.hasAttribute('data-gclose'));
+  await page.keyboard.press('Escape');
+  const focusRestored = await page.evaluate(() =>
+    !document.querySelector('#gModal')?.classList.contains('on') && document.activeElement?.id === 'consultOpen'
+  );
+  log('modal konsultacji ma etykietę, focus trap i zwrot fokusu',
+    consultationDialog.labelled && consultationDialog.focused && shiftTabTrapped && tabTrapped && focusRestored,
+    JSON.stringify({ ...consultationDialog, shiftTabTrapped, tabTrapped, focusRestored }));
+  await page.click('#consultOpen');
   const consultationBefore = await page.evaluate(() => ({
     consultation: AV.state.meta?.consultation || null,
     consultationUsed: AV.state.meta?.consultationUsed || 0,

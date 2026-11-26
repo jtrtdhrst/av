@@ -83,6 +83,9 @@ try {
   log('sync status available', !!state.sync, state.sync?.status || 'none');
 
   await page.click('.navg button[data-v="pulpit"]');
+  await page.evaluate(() => {
+    AV.state.meta.consultation = { date: '2000-01-01', time: '18:00', who: 'Stara rezerwacja' };
+  });
   await page.click('#consultOpen');
   const emptyConsultationModal = await page.evaluate(() => ({
     hasNextEvent: !!document.querySelector('#gBody #nextConsult'),
@@ -91,7 +94,10 @@ try {
     controls: document.querySelectorAll('#gBody [data-setting="remindDay"], #gBody [data-setting="remindHour"], #gBody #bookBtn, #gBody #shareTrade').length,
     text: document.querySelector('#gBody')?.textContent || ''
   }));
-  log('brak wydarzenia nie tworzy fikcyjnej konsultacji', !emptyConsultationModal.hasNextEvent && !emptyConsultationModal.hasNextEventWho && !emptyConsultationModal.month && !emptyConsultationModal.text.includes('Brak wydarzeń'), emptyConsultationModal.text.replace(/\s+/g, ' ').slice(0, 100));
+  log('brak wydarzenia nie pokazuje fikcyjnej ani wygasłej konsultacji',
+    !emptyConsultationModal.hasNextEvent && !emptyConsultationModal.hasNextEventWho && !emptyConsultationModal.month &&
+      !emptyConsultationModal.text.includes('Brak wydarzeń') && !emptyConsultationModal.text.includes('Stara rezerwacja'),
+    emptyConsultationModal.text.replace(/\s+/g, ' ').slice(0, 100));
   log('akcje konsultacji pozostają dostępne bez wydarzenia', emptyConsultationModal.controls === 4, String(emptyConsultationModal.controls));
 } catch (err) {
   console.error('\nFAIL  test przerwany:', err.message);
