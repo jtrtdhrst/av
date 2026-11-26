@@ -975,7 +975,7 @@ final class AcademyMaterials
                         $complete ? 0 : 1,
                         $auditContentVerified ? 1 : 0,
                         $cleanupPending,
-                        $complete ? 0 : 1,
+                        (!$complete || $cleanupPending === 1) ? 1 : 0,
                         $complete ? 1 : 0,
                         $complete ? ($cleanupPending === 1 ? 'audit_cleanup' : 'content_unverified') : $phaseStatus,
                         $nextWorkOrder,
