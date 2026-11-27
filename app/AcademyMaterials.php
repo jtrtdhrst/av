@@ -1362,8 +1362,8 @@ final class AcademyMaterials
                         sync_status = "success", audit_content_verified = 1,
                         grouping_version = IF(
                             verified = 1 AND backfill_complete = 1
-                            AND message_access_status = 'verified'
-                            AND content_access_status = 'verified',
+                            AND message_access_status = \'verified\'
+                            AND content_access_status = \'verified\',
                             " . self::GROUPING_VERSION . ",
                             grouping_version
                         )
