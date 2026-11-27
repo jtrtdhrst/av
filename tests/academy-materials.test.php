@@ -9,11 +9,18 @@ require_once __DIR__ . '/mcp-test-environment.php';
 mcpLoadIsolatedCiConfig($root);
 [$config, $db] = require $root . '/app/bootstrap.php';
 
-function academyCheck(bool $condition, string $label): void
+function academyCheck(bool $condition, string $label, mixed $diagnostic = null): void
 {
     echo ($condition ? 'PASS' : 'FAIL') . '  ' . $label . "\n";
     if (!$condition) {
         $GLOBALS['academy_failed'] = true;
+        if ($diagnostic !== null) {
+            $encodedDiagnostic = json_encode(
+                $diagnostic,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR
+            );
+            echo '      DIAG ' . ($encodedDiagnostic === false ? '[unavailable]' : $encodedDiagnostic) . "\n";
+        }
     }
 }
 
@@ -88,7 +95,9 @@ foreach ($channels as $channel) {
     $channelMap[$channel['channelId']] = $channel;
 }
 $academyChannel = '1499560912611446784';
-$pagedChannel = '1499560977849384991';
+$recapChannel = '1499558305888997568';
+$morningChannel = '1566742784596250624';
+$pagedChannel = $recapChannel;
 $emptyChannel = '1186973732925874217';
 $contentHiddenChannel = '1186976565909794906';
 $permissionChannel = '1186978545902309456';
@@ -96,6 +105,7 @@ $categoryFailureChannel = '1186979958187368468';
 $sourceOneId = '600000000000000001';
 $sourceTwoId = '600000000000000002';
 $captionId = '600000000000000003';
+$marcinId = '333333333333333333';
 $pagedBase = 700000000000000000;
 $pagedIds = [];
 for ($index = 0; $index < 100; $index++) {
@@ -267,8 +277,8 @@ $requester = static function (string $method, string $path, array $query) use (
                     'body' => [academyMessage(
                         $pagedOldId,
                         $pagedChannel,
-                        '2026-11-20T10:00:00Z',
-                        'Oldest page checkpoint fixture.'
+                        '2026-11-22T09:59:00Z',
+                        'Opisuje strefę NYC i ryzyko przed sesją nowojorską, dołączone do późniejszego nagrania.'
                     )],
                 ];
             }
@@ -290,11 +300,20 @@ $requester = static function (string $method, string $path, array $query) use (
         }
         $page = [];
         foreach (array_reverse($pagedIds) as $index => $id) {
+            $isPageBoundaryVideo = $id === $pagedIds[0];
             $page[] = academyMessage(
                 $id,
                 $pagedChannel,
-                '2026-11-22T10:00:00Z',
-                'Paged material fixture ' . $index
+                $isPageBoundaryVideo ? '2026-11-22T10:00:00Z' : '2026-11-22T10:01:00Z',
+                $isPageBoundaryVideo ? 'Nagranie sesji NYC' : 'Paged material fixture ' . $index,
+                '333333333333333333',
+                $isPageBoundaryVideo ? [
+                    'attachments' => [[
+                        'id' => '899999999999999999',
+                        'filename' => 'nyc-session.mp4',
+                        'content_type' => 'video/mp4',
+                    ]],
+                ] : []
             );
         }
         return ['status' => 200, 'body' => $page];
@@ -358,6 +377,14 @@ $academyConfig = new \AlphaVault\Config(
     version: $config->version,
 );
 $materials = new AcademyMaterials($academyConfig, $db, $requester, $sleeper, 30);
+$syncSelectedChannel = static function (string $channelId) use ($db, $materials): array {
+    $db->execute(
+        'UPDATE academy_material_channel_state
+            SET work_order = CASE WHEN channel_id = ? THEN 0 ELSE 1000000 END',
+        [$channelId]
+    );
+    return $materials->sync();
+};
 
 try {
     $expectedIds = [
@@ -411,28 +438,120 @@ try {
         'accessUntil jest sprawdzany względem czasu UTC'
     );
 
-    $normalizedSource = AcademyMaterials::normalizeMessage($sourceOne, $academyChannel);
-    $normalizedCaption = AcademyMaterials::normalizeMessage($caption, $academyChannel);
-    academyCheck(
+$normalizedSource = AcademyMaterials::normalizeMessage($sourceOne, $academyChannel);
+$normalizedCaption = AcademyMaterials::normalizeMessage($caption, $academyChannel);
+$cdnEmojiMessage = AcademyMaterials::normalizeMessage(
+    academyMessage(
+        '600000000000000034',
+        $academyChannel,
+        '2026-11-24T09:00:00Z',
+        'Emoji https://cdn.discordapp.com/emojis/123456789012345678.png and preview https://images-ext-1.discordapp.net/external/1234567890/example.png?width=64'
+    ),
+    $academyChannel
+);
+academyCheck(
         is_array($normalizedSource)
             && $normalizedSource['material_type'] === 'video'
             && $normalizedSource['title'] === 'Lekcja o wybiciu'
             && is_array($normalizedCaption)
-            && $normalizedCaption['description'] === 'Academyneedle — opis materiału i kontekst dla uczestników.'
+            && $normalizedCaption['title'] === 'Academyneedle — opis materiału i kontekst dla uczestników.'
+            && $normalizedCaption['description'] === null
             && $normalizedCaption['is_caption_candidate'] === 1,
-        'normalizacja zachowuje materiał medialny i edukacyjny tekst bez surowego payloadu'
+        'normalizacja rozdziela tytuł od opisu i zachowuje materiał bez surowego payloadu'
     );
-    academyCheck(
-        !str_contains(json_encode([$normalizedSource, $normalizedCaption], JSON_THROW_ON_ERROR), 'discordapp.com')
-            && !str_contains(json_encode([$normalizedSource, $normalizedCaption], JSON_THROW_ON_ERROR), 'private-fixture-marker'),
+academyCheck(
+    !str_contains(json_encode([$normalizedSource, $normalizedCaption, $cdnEmojiMessage], JSON_THROW_ON_ERROR), 'discordapp.com')
+        && !str_contains(json_encode([$normalizedSource, $normalizedCaption, $cdnEmojiMessage], JSON_THROW_ON_ERROR), 'discordapp.net')
+        && !str_contains(json_encode([$normalizedSource, $normalizedCaption, $cdnEmojiMessage], JSON_THROW_ON_ERROR), 'private-fixture-marker'),
         'normalizacja nie zapisuje URL-i CDN ani załączników'
     );
+    $educationOnly = AcademyMaterials::normalizeMessage(
+        academyMessage('600000000000000010', $academyChannel, '2026-11-24T10:00:00Z', 'Treść edukacyjna bez mediów.'),
+        $academyChannel
+    );
     academyCheck(
-        AcademyMaterials::normalizeMessage(
-            academyMessage('600000000000000010', $academyChannel, '2026-11-24T10:00:00Z', 'Treść edukacyjna bez mediów.'),
-            $academyChannel
-        )['description'] === 'Treść edukacyjna bez mediów.',
-        'krótki tekst edukacyjny bez mediów nie jest odrzucany'
+        is_array($educationOnly)
+            && $educationOnly['title'] === 'Treść edukacyjna bez mediów.'
+            && $educationOnly['description'] === null,
+        'krótki tekst edukacyjny bez mediów jest zachowany jako tytuł, bez duplikowania go w opisie'
+    );
+    $educationalLink = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            '600000000000000012',
+            $academyChannel,
+            '2026-11-24T10:00:00Z',
+            'Raport o zarządzaniu ryzykiem: https://example.org/academy/risk'
+        ),
+        $academyChannel
+    );
+    academyCheck(
+        is_array($educationalLink)
+            && str_contains((string) $educationalLink['content_text'], 'https://example.org/academy/risk')
+            && str_contains((string) $educationalLink['title'], 'https://example.org/academy/risk'),
+        'edukacyjne adresy URL pozostają zwykłym, przeszukiwalnym tekstem'
+    );
+    $bodyAndEmbed = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            '600000000000000015',
+            $academyChannel,
+            '2026-11-24T10:00:00Z',
+            "Pierwsza linia wiadomości\nDruga linia opisu.",
+            '333333333333333333',
+            ['embeds' => [[
+                'title' => 'Tytuł karty',
+                'description' => 'Opis karty.',
+            ]]]
+        ),
+        $academyChannel
+    );
+    academyCheck(
+        is_array($bodyAndEmbed)
+            && $bodyAndEmbed['title'] === 'Pierwsza linia wiadomości'
+            && str_contains((string) $bodyAndEmbed['description'], 'Druga linia opisu.')
+            && str_contains((string) $bodyAndEmbed['description'], 'Tytuł karty')
+            && str_contains((string) $bodyAndEmbed['description'], 'Opis karty.'),
+        'pierwsza linia wiadomości pozostaje tytułem, a treść osadzenia zostaje w opisie'
+    );
+    $filenameFallback = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            '600000000000000013',
+            $academyChannel,
+            '2026-11-24T10:00:00Z',
+            '',
+            '333333333333333333',
+            ['attachments' => [[
+                'id' => '800000000000000013',
+                'filename' => '../../bootcamp-forex.mp4',
+                'content_type' => 'video/mp4',
+                'url' => 'https://cdn.discordapp.com/attachments/filename-fixture',
+            ]]]
+        ),
+        $academyChannel
+    );
+    $neutralFallback = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            '600000000000000014',
+            $academyChannel,
+            '2026-11-24T10:00:00Z',
+            '',
+            '333333333333333333',
+            ['attachments' => [[
+                'id' => '800000000000000014',
+                'filename' => '',
+                'content_type' => 'video/mp4',
+                'url' => 'https://cdn.discordapp.com/attachments/neutral-fixture',
+            ]]]
+        ),
+        $academyChannel
+    );
+    academyCheck(
+        is_array($filenameFallback)
+            && $filenameFallback['title'] === 'bootcamp-forex.mp4'
+            && $filenameFallback['attachment_filename'] === 'bootcamp-forex.mp4'
+            && $filenameFallback['material_type'] === 'video'
+            && is_array($neutralFallback)
+            && $neutralFallback['title'] === 'Nagranie wideo · 24.11.2026',
+        'brak tekstu używa bezpiecznej nazwy pliku, a potem neutralnego typu i daty'
     );
     academyCheck(
         AcademyMaterials::normalizeMessage(
@@ -440,6 +559,17 @@ try {
             $academyChannel
         ) === null,
         'wiadomości systemowe są filtrowane'
+    );
+    academyCheck(
+        AcademyMaterials::normalizeMessage(
+            academyMessage('600000000000000015', $academyChannel, '2026-11-24T10:00:00Z', '<@&333333333333333333>'),
+            $academyChannel
+        ) === null
+            && AcademyMaterials::normalizeMessage(
+                academyMessage('600000000000000016', $academyChannel, '2026-11-24T10:00:00Z', 'Spotkanie odwołane.'),
+                $academyChannel
+            ) === null,
+        'wiadomości zawierające wyłącznie wzmiankę lub administracyjny komunikat nie są materiałami'
     );
     $invalidSourceRejected = false;
     try {
@@ -460,7 +590,7 @@ try {
     );
     $fallbackMedia = [
         'message_id' => '600000000000000020',
-        'channel_id' => $academyChannel,
+        'channel_id' => $recapChannel,
         'created_at_utc' => '2026-11-24 09:00:00',
         'author_id' => '333333333333333333',
         'has_media' => 1,
@@ -468,23 +598,147 @@ try {
     ];
     $fallbackCaption = [
         'message_id' => '600000000000000021',
-        'channel_id' => $academyChannel,
+        'channel_id' => $recapChannel,
         'created_at_utc' => '2026-11-24 09:29:00',
         'author_id' => '333333333333333333',
         'has_media' => 0,
         'is_caption_candidate' => 1,
-        'description' => 'Fallback caption',
+        'is_recording_caption' => 1,
+        'title' => 'Nagranie sesji NYC',
+        'content_text' => 'Nagranie sesji NYC',
     ];
     $lateCaption = [...$fallbackCaption, 'message_id' => '600000000000000022', 'created_at_utc' => '2026-11-24 09:31:00'];
     $nextWarsawDayCaption = [...$fallbackCaption, 'message_id' => '600000000000000023', 'created_at_utc' => '2026-11-24 23:05:00'];
     academyCheck(
         count(AcademyMaterials::groupMessages([$fallbackMedia, $fallbackCaption], 30)) === 1
             && count(AcademyMaterials::groupMessages([$fallbackMedia, $lateCaption], 30)) === 2
+            && count(AcademyMaterials::groupMessages([$fallbackMedia, $lateCaption], 240)) === 2
             && count(AcademyMaterials::groupMessages([
                 [...$fallbackMedia, 'created_at_utc' => '2026-11-24 22:55:00'],
                 $nextWarsawDayCaption,
             ], 30)) === 2,
         'fallback respektuje 30 minut, a para nigdy nie przekracza dnia Europe/Warsaw'
+    );
+    $differentAuthorInterruption = [
+        ...$fallbackCaption,
+        'message_id' => '600000000000000024',
+        'created_at_utc' => '2026-11-24 09:01:00',
+        'author_id' => '444444444444444444',
+        'is_caption_candidate' => 0,
+        'is_recording_caption' => 0,
+        'title' => 'Dzięki za komentarz.',
+        'content_text' => 'Dzięki za komentarz.',
+    ];
+    $afterInterruptionCaption = [
+        ...$fallbackCaption,
+        'message_id' => '600000000000000025',
+        'created_at_utc' => '2026-11-24 09:02:00',
+    ];
+    $interruptedItems = AcademyMaterials::groupMessages([
+        $fallbackMedia,
+        $differentAuthorInterruption,
+        $afterInterruptionCaption,
+    ]);
+    academyCheck(
+        count($interruptedItems) === 3
+            && count(array_filter(
+                $interruptedItems,
+                static fn (array $item): bool => $item['descriptionMessageId'] !== null
+            )) === 0,
+        'inna osoba w bezpośrednio poprzedzającej wiadomości blokuje niejednoznaczne grupowanie'
+    );
+    $otherChannelInterruption = [
+        'message_id' => '600000000000000026',
+        'channel_id' => $academyChannel,
+        'created_at_utc' => '2026-11-24 09:01:00',
+        'author_id' => '333333333333333333',
+        'has_media' => 0,
+        'title' => 'Osobny materiał innego kanału.',
+        'content_text' => 'Osobny materiał innego kanału.',
+    ];
+    $crossChannelItems = AcademyMaterials::groupMessages([
+        $fallbackMedia,
+        $otherChannelInterruption,
+        $fallbackCaption,
+    ]);
+    $crossChannelRoot = array_values(array_filter(
+        $crossChannelItems,
+        static fn (array $item): bool => $item['sourceMessageId'] === '600000000000000020'
+    ))[0] ?? [];
+    academyCheck(
+        count($crossChannelItems) === 2
+            && ($crossChannelRoot['descriptionMessageId'] ?? null) === '600000000000000021',
+        'wiadomość z innego kanału nie przerywa bezpośredniej pary w źródle'
+    );
+    $documentMessage = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            '600000000000000027',
+            $recapChannel,
+            '2026-11-24T09:01:00Z',
+            '',
+            '333333333333333333',
+            ['attachments' => [[
+                'id' => '800000000000000027',
+                'filename' => 'slownik.pdf',
+                'content_type' => 'application/pdf',
+                'url' => 'https://cdn.discordapp.com/attachments/document-fixture',
+            ]]]
+        ),
+        $recapChannel
+    );
+    $documentSequence = AcademyMaterials::groupMessages([
+        $fallbackMedia,
+        $documentMessage ?? [],
+        $fallbackCaption,
+    ]);
+    academyCheck(
+        count($documentSequence) === 3
+            && ($documentMessage['material_type'] ?? null) === 'file'
+            && ($documentMessage['title'] ?? null) === 'slownik.pdf',
+        'dokument PDF pozostaje samodzielnym materiałem i nie przejmuje podpisu nagrania'
+    );
+    $chartDescription = [
+        'message_id' => '600000000000000028',
+        'channel_id' => $recapChannel,
+        'created_at_utc' => '2026-11-24 10:00:00',
+        'author_id' => $marcinId,
+        'has_media' => 1,
+        'material_type' => 'image',
+        'title' => 'Strefa oporu BTC',
+        'content_text' => 'Wykres pokazuje ważną strefę oporu przed otwarciem sesji nowojorskiej.',
+    ];
+    $chartVideo = [
+        ...$fallbackCaption,
+        'message_id' => '600000000000000029',
+        'created_at_utc' => '2026-11-24 10:01:00',
+        'has_media' => 1,
+        'material_type' => 'video',
+        'title' => 'Nagranie sesji BTC',
+        'content_text' => 'Nagranie sesji BTC',
+        'attachment_filename' => 'nyc-session.mp4',
+    ];
+    $chartItems = AcademyMaterials::groupMessages([$chartVideo, $chartDescription]);
+    $weakChart = [...$chartDescription, 'message_id' => '600000000000000032', 'title' => 'NYC', 'content_text' => 'NYC'];
+    $weakChartItems = AcademyMaterials::groupMessages([$chartVideo, $weakChart]);
+    academyCheck(
+        count($chartItems) === 1
+            && ($chartItems[0]['sourceMessageId'] ?? null) === '600000000000000029'
+            && ($chartItems[0]['descriptionMessageId'] ?? null) === '600000000000000028'
+            && count($weakChartItems) === 2,
+        'opisowy wykres może opisać nagranie, ale krótki komentarz do obrazu nie jest scalany'
+    );
+    $unrelatedProse = [
+        'message_id' => '600000000000000033',
+        'channel_id' => $recapChannel,
+        'created_at_utc' => '2026-11-24 10:00:00',
+        'author_id' => $marcinId,
+        'has_media' => 0,
+        'title' => 'Plan tygodnia',
+        'content_text' => 'W przyszłym tygodniu odbędzie się spotkanie organizacyjne dla wszystkich członków zespołu; w notatce wspomniano btc.',
+    ];
+    academyCheck(
+        count(AcademyMaterials::groupMessages([$unrelatedProse, $chartVideo])) === 2,
+        'długi niezwiązany tekst nie jest łączony z podpisem nagrania'
     );
     $warsawRangeMethod = new ReflectionMethod(AcademyMaterials::class, 'localDayUtcRange');
     $warsawRange = $warsawRangeMethod->invoke(null, '2026-10-25 12:00:00');
@@ -494,7 +748,7 @@ try {
     );
     $textRoot = [
         'message_id' => '600000000000000030',
-        'channel_id' => $academyChannel,
+        'channel_id' => $recapChannel,
         'created_at_utc' => '2026-11-24 09:00:00',
         'author_id' => '333333333333333333',
         'has_media' => 0,
@@ -503,6 +757,258 @@ try {
     academyCheck(
         count(AcademyMaterials::groupMessages([$textRoot, $referencedText])) === 2,
         'jawna referencja nie łączy dwóch wiadomości tekstowych bez źródła medialnego'
+    );
+
+    $marcinProfile = [
+        'author' => [
+            'id' => $marcinId,
+            'username' => 'marcin-b',
+            'global_name' => 'Marcin B',
+            'bot' => false,
+        ],
+        'member' => ['nick' => 'Marcin B'],
+    ];
+    $recapDescriptionId = '1554908231938220102';
+    $recapVideoId = '1554908231938220103';
+    $recapDescription = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            $recapDescriptionId,
+            $recapChannel,
+            '2026-09-30T17:29:00Z',
+            "Dzis SL na NYC sesji.\n\nRyzykowne zagranie przed Open i szybko poszli po SL",
+            $marcinId,
+            $marcinProfile
+        ),
+        $recapChannel
+    );
+    $recapVideo = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            $recapVideoId,
+            $recapChannel,
+            '2026-09-30T17:30:00Z',
+            'Nagranie sesji NYC',
+            $marcinId,
+            [
+                ...$marcinProfile,
+                'attachments' => [[
+                    'id' => '810000000000000001',
+                    'filename' => 'sesja-nyc.mp4',
+                    'content_type' => 'video/mp4',
+                    'url' => 'https://cdn.discordapp.com/attachments/recap-fixture',
+                ]],
+            ]
+        ),
+        $recapChannel
+    );
+    $recapItems = AcademyMaterials::groupMessages([$recapVideo ?? [], $recapDescription ?? []]);
+    $recapItem = $recapItems[0] ?? [];
+    academyCheck(
+        count($recapItems) === 1
+            && ($recapItem['sourceMessageId'] ?? null) === $recapVideoId
+            && ($recapItem['descriptionMessageId'] ?? null) === $recapDescriptionId
+            && ($recapItem['category'] ?? null) === 'Trade Recaps'
+            && ($recapItem['title'] ?? null) === 'Dzis SL na NYC sesji.'
+            && ($recapItem['description'] ?? null) === 'Ryzykowne zagranie przed Open i szybko poszli po SL'
+            && ($recapItem['authorName'] ?? null) === 'Marcin B'
+            && ($recapItem['publishedAt'] ?? null) === '2026-09-30T17:30:00Z'
+            && ($recapItem['materialType'] ?? null) === 'video'
+            && ($recapItem['discordUrl'] ?? null)
+                === 'https://discord.com/channels/1186734786388176916/' . $recapChannel . '/' . $recapVideoId,
+        'recap 30.09 grupuje opis przed MP4, zachowuje autora i linkuje do źródłowego nagrania'
+    );
+
+    $recapWindowCases = [
+        [
+            'descriptionId' => '610000000000000028',
+            'videoId' => '610000000000000128',
+            'descriptionAt' => '2026-09-28T13:51:00Z',
+            'videoAt' => '2026-09-28T14:00:00Z',
+        ],
+        [
+            'descriptionId' => '610000000000000029',
+            'videoId' => '610000000000000129',
+            'descriptionAt' => '2026-09-29T13:38:00Z',
+            'videoAt' => '2026-09-29T13:41:00Z',
+        ],
+    ];
+    $recapWindowsPass = true;
+    foreach ($recapWindowCases as $case) {
+        $descriptionMessage = AcademyMaterials::normalizeMessage(
+            academyMessage(
+                $case['descriptionId'],
+                $recapChannel,
+                $case['descriptionAt'],
+                "Dzis SL na NYC sesji.\n\nRyzykowne zagranie przed Open i szybko poszli po SL",
+                $marcinId,
+                $marcinProfile
+            ),
+            $recapChannel
+        );
+        $videoMessage = AcademyMaterials::normalizeMessage(
+            academyMessage(
+                $case['videoId'],
+                $recapChannel,
+                $case['videoAt'],
+                'Nagranie sesji NYC',
+                $marcinId,
+                [
+                    ...$marcinProfile,
+                    'attachments' => [[
+                        'id' => '810000000000000002',
+                        'filename' => 'sesja.mp4',
+                        'content_type' => 'video/mp4',
+                        'url' => 'https://cdn.discordapp.com/attachments/window-fixture',
+                    ]],
+                ]
+            ),
+            $recapChannel
+        );
+        $windowItems = AcademyMaterials::groupMessages([$videoMessage ?? [], $descriptionMessage ?? []], 30);
+        $recapWindowsPass = $recapWindowsPass
+            && count($windowItems) === 1
+            && ($windowItems[0]['sourceMessageId'] ?? null) === $case['videoId']
+            && ($windowItems[0]['descriptionMessageId'] ?? null) === $case['descriptionId'];
+    }
+    academyCheck($recapWindowsPass, 'recapy 28.09 i 29.09 grupują opis z nagraniem w oknie 30 minut');
+
+    $morning24Id = '620000000000000024';
+    $morning24 = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            $morning24Id,
+            $morningChannel,
+            '2026-11-24T07:55:00Z',
+            "Poranna odprawa — 24.11.2026\n\nOmówienie setupów porannych.",
+            $marcinId,
+            [
+                ...$marcinProfile,
+                'attachments' => [[
+                    'id' => '820000000000000024',
+                    'filename' => 'odprawa-24.mp4',
+                    'content_type' => 'video/mp4',
+                    'url' => 'https://cdn.discordapp.com/attachments/morning-24-fixture',
+                ]],
+            ]
+        ),
+        $morningChannel
+    );
+    $morning26Id = '620000000000000026';
+    $morning26 = AcademyMaterials::normalizeMessage(
+        academyMessage(
+            $morning26Id,
+            $morningChannel,
+            '2026-11-26T07:57:00Z',
+            "Dzisiejsza poranna odprawa !\n\nOmówienie kluczowych setupów i stref",
+            $marcinId,
+            [
+                ...$marcinProfile,
+                'attachments' => [[
+                    'id' => '820000000000000026',
+                    'filename' => 'odprawa-26.mp4',
+                    'content_type' => 'video/mp4',
+                    'url' => 'https://cdn.discordapp.com/attachments/morning-26-fixture',
+                ]],
+            ]
+        ),
+        $morningChannel
+    );
+    $morningItems = [
+        AcademyMaterials::groupMessages([$morning24 ?? []])[0] ?? [],
+        AcademyMaterials::groupMessages([$morning26 ?? []])[0] ?? [],
+    ];
+    academyCheck(
+        ($morningItems[0]['category'] ?? null) === 'Poranne odprawy'
+            && ($morningItems[0]['publishedAt'] ?? null) === '2026-11-24T07:55:00Z'
+            && ($morningItems[1]['title'] ?? null) === 'Dzisiejsza poranna odprawa !'
+            && ($morningItems[1]['description'] ?? null) === 'Omówienie kluczowych setupów i stref'
+            && ($morningItems[1]['authorName'] ?? null) === 'Marcin B'
+            && ($morningItems[1]['publishedAt'] ?? null) === '2026-11-26T07:57:00Z'
+            && ($morningItems[1]['materialType'] ?? null) === 'video'
+            && ($morningItems[1]['descriptionMessageId'] ?? null) === null,
+        'odprawy 24.11 i 26.11 zachowują treść, autora, czas i typ MP4'
+    );
+
+    $ambiguousSource = [
+        'message_id' => '630000000000000001',
+        'channel_id' => $recapChannel,
+        'created_at_utc' => '2026-11-24 09:00:00',
+        'author_id' => $marcinId,
+        'has_media' => 1,
+        'material_type' => 'video',
+        'title' => 'Nagranie sesji NYC',
+    ];
+    $ambiguousCaptionA = [
+        ...$fallbackCaption,
+        'message_id' => '630000000000000002',
+        'created_at_utc' => '2026-11-24 09:01:00',
+        'reference_message_id' => $ambiguousSource['message_id'],
+    ];
+    $ambiguousCaptionB = [
+        ...$fallbackCaption,
+        'message_id' => '630000000000000003',
+        'created_at_utc' => '2026-11-24 09:02:00',
+        'reference_message_id' => $ambiguousSource['message_id'],
+        'content_text' => 'Nagranie sesji London',
+        'title' => 'Nagranie sesji London',
+    ];
+    $ambiguousItems = AcademyMaterials::groupMessages([
+        $ambiguousSource,
+        $ambiguousCaptionA,
+        $ambiguousCaptionB,
+    ]);
+    academyCheck(
+        count($ambiguousItems) === 3
+            && count(array_filter(
+                $ambiguousItems,
+                static fn (array $item): bool => $item['descriptionMessageId'] !== null
+            )) === 0,
+        'dwie jawne referencje do jednego źródła pozostają rozdzielone przy niejednoznaczności'
+    );
+
+    $crossDayTargetId = '630000000000000004';
+    $crossDayMediaId = '630000000000000005';
+    $crossDayCaptionId = '630000000000000006';
+    $crossDayTarget = [
+        'message_id' => $crossDayTargetId,
+        'channel_id' => $recapChannel,
+        'created_at_utc' => '2026-11-23 09:00:00',
+        'author_id' => $marcinId,
+        'has_media' => 1,
+        'material_type' => 'video',
+        'title' => 'Nagranie NYC z poprzedniego dnia',
+        'content_text' => 'Nagranie NYC z poprzedniego dnia',
+    ];
+    $crossDayMedia = [
+        'message_id' => $crossDayMediaId,
+        'channel_id' => $recapChannel,
+        'created_at_utc' => '2026-11-24 09:00:00',
+        'author_id' => $marcinId,
+        'has_media' => 1,
+        'material_type' => 'video',
+        'title' => 'Sesja NYC',
+        'content_text' => 'Sesja NYC',
+    ];
+    $crossDayCaption = [
+        ...$fallbackCaption,
+        'message_id' => $crossDayCaptionId,
+        'created_at_utc' => '2026-11-24 09:01:00',
+        'reference_message_id' => $crossDayTargetId,
+    ];
+    $crossDayItems = AcademyMaterials::groupMessages([
+        $crossDayCaption,
+        $crossDayTarget,
+        $crossDayMedia,
+    ]);
+    $crossDaySources = array_column($crossDayItems, 'sourceMessageId');
+    sort($crossDaySources, SORT_STRING);
+    academyCheck(
+        count($crossDayItems) === 3
+            && $crossDaySources === [$crossDayTargetId, $crossDayMediaId, $crossDayCaptionId]
+            && count(array_filter(
+                $crossDayItems,
+                static fn (array $item): bool => $item['descriptionMessageId'] !== null
+            )) === 0,
+        'jawna referencja do poprzedniego dnia nie uruchamia fallbacku do sąsiedniego nagrania',
+        ['sources' => $crossDaySources, 'items' => $crossDayItems]
     );
 
     $blankProbe = [];
@@ -596,6 +1102,29 @@ try {
         'granica strony 100 pobiera starszą stronę po snowflake checkpoint'
     );
     academyCheck(academyAllBackfillsComplete($db, $channelIds), 'backfill obejmuje wszystkie 13 źródeł');
+    $pageBoundaryItem = $db->queryOne(
+        'SELECT source_message_id, description_message_id
+           FROM academy_material_items
+          WHERE channel_id = ? AND source_message_id = ? AND is_deleted = 0',
+        [$pagedChannel, $pagedIds[0]]
+    );
+    $pageBoundaryDescription = $db->queryOne(
+        'SELECT target_source_message_id
+           FROM academy_material_messages
+          WHERE channel_id = ? AND message_id = ? AND is_deleted = 0',
+        [$pagedChannel, $pagedOldId]
+    );
+    $pageBoundaryItemCount = (int) ($db->queryOne(
+        'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
+        [$pagedChannel]
+    )['c'] ?? 0);
+    academyCheck(
+        ($pageBoundaryItem['source_message_id'] ?? null) === $pagedIds[0]
+            && ($pageBoundaryItem['description_message_id'] ?? null) === $pagedOldId
+            && ($pageBoundaryDescription['target_source_message_id'] ?? null) === $pagedIds[0]
+            && $pageBoundaryItemCount === 100,
+        'opis ze starszej strony zostaje połączony z późniejszym nagraniem po odbudowie dnia'
+    );
     $additionalChannelsVerified = $db->query(
         'SELECT channel_id, verified FROM academy_material_channel_state WHERE channel_id IN (?, ?)',
         ['1499558305888997568', '1566742784596250624']
@@ -648,12 +1177,140 @@ try {
             && (int) ($emptyState['backfill_complete'] ?? 0) === 1
             && empty($stateView['ready'])
             && ($stateView['status'] ?? '') === 'content_unverified',
-        'HTTP 200 z pustą historią nie przedstawia pozornego sukcesu ani ready'
+        'HTTP 200 z pustą historią nie przedstawia pozornego sukcesu ani ready',
+        ['emptyState' => $emptyState, 'state' => $stateView]
     );
     academyCheck(
         ($blankState['content_access_status'] ?? null) === 'suspected_missing'
             && ($blankState['content_access_error_code'] ?? null) === 'message_content_access_missing',
         'pola treści puste przy wiadomościach użytkowników sygnalizują brak dostępu Message Content'
+    );
+
+    $db->execute(
+        'UPDATE academy_material_channel_state
+            SET grouping_version = 1, last_audit_at = UTC_TIMESTAMP(),
+                audit_running = 0, audit_cleanup_pending = 0,
+                audit_started_at = NULL, audit_before_message_id = NULL,
+                audit_content_verified = 0
+          WHERE backfill_complete = 1'
+    );
+    $staleGroupingPage = $materials->listForApi('all', '', 10);
+    academyCheck(
+        $staleGroupingPage['items'] === [],
+        'API ukrywa dane z indeksu wymagającego pełnego ponownego grupowania'
+    );
+    $db->execute(
+        "UPDATE academy_material_channel_state
+            SET grouping_version = 2, last_audit_at = UTC_TIMESTAMP(),
+                audit_running = 0, audit_cleanup_pending = 0,
+                audit_started_at = NULL, audit_before_message_id = NULL,
+                audit_content_verified = 0
+          WHERE verified = 1 AND backfill_complete = 1
+            AND message_access_status = 'verified'
+            AND content_access_status = 'verified'"
+    );
+    $groupingState = $materials->syncState();
+    $staleChannelState = array_values(array_filter(
+        $groupingState['channels'],
+        static fn (array $channel): bool => $channel['channelId'] === $emptyChannel
+    ))[0] ?? [];
+    academyCheck(
+        ($groupingState['ready'] ?? true) === false
+            && ($staleChannelState['groupingReady'] ?? true) === false,
+        'content-unverified source blijft niet-ready ondanks zaktualizowane grupowanie pozostałych kanałów'
+    );
+    $targetGroupingState = array_values(array_filter(
+        $groupingState['channels'],
+        static fn (array $channel): bool => $channel['channelId'] === $pagedChannel
+    ))[0] ?? [];
+    $targetVisiblePage = $materials->listForApi('Trade Recaps', '', 50);
+    academyCheck(
+        ($targetGroupingState['groupingReady'] ?? false) === true
+            && ($targetGroupingState['available'] ?? false) === true
+            && ($targetGroupingState['importedCount'] ?? 0) === 100
+            && count($targetVisiblePage['items']) === 50,
+        'aktualny indeks grupowania udostępnia gotowy kanał Trade Recaps',
+        ['channel' => $targetGroupingState, 'visibleCount' => count($targetVisiblePage['items'])]
+    );
+
+    $db->execute(
+        'UPDATE academy_material_channel_state
+            SET grouping_version = 1, last_audit_at = UTC_TIMESTAMP(),
+                audit_running = 0, audit_cleanup_pending = 0,
+                audit_started_at = NULL, audit_before_message_id = NULL,
+                audit_content_verified = 0
+          WHERE channel_id = ?',
+        [$pagedChannel]
+    );
+    $staleTargetState = array_values(array_filter(
+        $materials->syncState()['channels'],
+        static fn (array $channel): bool => $channel['channelId'] === $pagedChannel
+    ))[0] ?? [];
+    $hiddenTargetPage = $materials->listForApi('Trade Recaps', '', 50);
+    academyCheck(
+        ($staleTargetState['groupingReady'] ?? true) === false
+            && ($staleTargetState['available'] ?? true) === false
+            && ($staleTargetState['importedCount'] ?? -1) === 0
+            && $hiddenTargetPage['items'] === [],
+        'stara wersja grupowania ukrywa tylko kanał wymagający audytu'
+    );
+
+    $syncSelectedChannel($pagedChannel);
+    $auditAfterFirstPage = $db->queryOne(
+        'SELECT grouping_version, audit_running, audit_cleanup_pending
+           FROM academy_material_channel_state WHERE channel_id = ?',
+        [$pagedChannel]
+    );
+    academyCheck(
+        (int) ($auditAfterFirstPage['grouping_version'] ?? 0) === 1
+            && (int) ($auditAfterFirstPage['audit_running'] ?? 0) === 1
+            && (int) ($auditAfterFirstPage['audit_cleanup_pending'] ?? 0) === 0
+            && $materials->listForApi('Trade Recaps', '', 50)['items'] === [],
+        'pierwsza strona pełnego audytu nie ujawnia starego indeksu'
+    );
+
+    $syncSelectedChannel($pagedChannel);
+    $auditAfterHistory = $db->queryOne(
+        'SELECT grouping_version, audit_running, audit_cleanup_pending
+           FROM academy_material_channel_state WHERE channel_id = ?',
+        [$pagedChannel]
+    );
+    academyCheck(
+        (int) ($auditAfterHistory['grouping_version'] ?? 0) === 1
+            && (int) ($auditAfterHistory['audit_cleanup_pending'] ?? 0) === 1
+            && $materials->listForApi('Trade Recaps', '', 50)['items'] === [],
+        'pełny wielostronicowy audyt czeka na cleanup, a materiały pozostają ukryte',
+        [
+            'auditState' => $auditAfterHistory,
+            'visibleCount' => count($materials->listForApi('Trade Recaps', '', 50)['items']),
+        ]
+    );
+
+    $syncSelectedChannel($pagedChannel);
+    $auditAfterCleanup = $db->queryOne(
+        'SELECT grouping_version, audit_running, audit_cleanup_pending
+           FROM academy_material_channel_state WHERE channel_id = ?',
+        [$pagedChannel]
+    );
+    $readyAfterAudit = array_values(array_filter(
+        $materials->syncState()['channels'],
+        static fn (array $channel): bool => $channel['channelId'] === $pagedChannel
+    ))[0] ?? [];
+    $visibleAfterAudit = $materials->listForApi('Trade Recaps', '', 50);
+    academyCheck(
+        (int) ($auditAfterCleanup['grouping_version'] ?? 0) === 2
+            && (int) ($auditAfterCleanup['audit_running'] ?? 1) === 0
+            && (int) ($auditAfterCleanup['audit_cleanup_pending'] ?? 1) === 0
+            && ($readyAfterAudit['groupingReady'] ?? false) === true
+            && ($readyAfterAudit['available'] ?? false) === true
+            && ($readyAfterAudit['importedCount'] ?? 0) === 100
+            && count($visibleAfterAudit['items']) === 50,
+        'audyt i cleanup automatycznie promują wersję grupowania i przywracają widoczność',
+        [
+            'auditState' => $auditAfterCleanup,
+            'channel' => $readyAfterAudit,
+            'visibleCount' => count($visibleAfterAudit['items']),
+        ]
     );
 
     $firstPage = $materials->listForApi('all', '', 25);
@@ -669,10 +1326,17 @@ try {
     $itemKeys = array_map(static fn (array $item): string => $item['channelId'] . ':' . $item['sourceMessageId'], $allItems);
     academyCheck(
         count($allItems) === count(array_unique($itemKeys))
-            && count($allItems) === 113
+            && count($allItems) === 111
             && $cursor === null
             && $cursorPages > 1,
-        'API odczyt używa stabilnego keyset pagination bez duplikatów'
+        'API odczyt używa stabilnego keyset pagination bez duplikatów',
+        [
+            'itemCount' => count($allItems),
+            'uniqueKeyCount' => count(array_unique($itemKeys)),
+            'cursorRemaining' => $cursor,
+            'pages' => $cursorPages,
+            'firstKeys' => array_slice($itemKeys, 0, 5),
+        ]
     );
     $needlePage = $materials->listForApi('Forex', 'Academyneedle', 10);
     academyCheck(
@@ -728,19 +1392,18 @@ try {
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$academyChannel]
     )['c'] ?? 0);
-    $db->execute(
-        'UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?',
-        [$academyChannel]
-    );
-    $materials->sync();
+    $syncSelectedChannel($academyChannel);
     $countAfterIdempotency = (int) ($db->queryOne(
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$academyChannel]
     )['c'] ?? 0);
-    academyCheck($countBeforeIdempotency === 2 && $countAfterIdempotency === 2, 'powtórny incremental sync jest idempotentny');
+    academyCheck(
+        $countBeforeIdempotency === 2 && $countAfterIdempotency === 2,
+        'powtórny incremental sync jest idempotentny',
+        ['before' => $countBeforeIdempotency, 'after' => $countAfterIdempotency]
+    );
 
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$pagedChannel]);
-    $materials->sync();
+    $syncSelectedChannel($pagedChannel);
     $incrementalRow = $db->queryOne(
         'SELECT message_id FROM academy_material_messages WHERE channel_id = ? AND message_id = ? AND is_deleted = 0',
         [$pagedChannel, $pagedNewId]
@@ -750,23 +1413,27 @@ try {
         [$pagedChannel]
     )['c'] ?? 0);
     academyCheck(
-        ($incrementalRow['message_id'] ?? null) === $pagedNewId && $pagedCountAfterIncremental === 102,
-        'incremental sync używa after snowflake i zapisuje nowe rekordy'
+        ($incrementalRow['message_id'] ?? null) === $pagedNewId && $pagedCountAfterIncremental === 101,
+        'incremental sync używa after snowflake i zapisuje nowe rekordy',
+        ['row' => $incrementalRow, 'itemCount' => $pagedCountAfterIncremental]
     );
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$pagedChannel]);
-    $materials->sync();
+    $syncSelectedChannel($pagedChannel);
     $pagedCountAfterRepeat = (int) ($db->queryOne(
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$pagedChannel]
     )['c'] ?? 0);
-    academyCheck($pagedCountAfterRepeat === 102, 'powtórny incremental nie duplikuje nowego rekordu');
+    academyCheck(
+        $pagedCountAfterRepeat === 101,
+        'powtórny incremental nie duplikuje nowego rekordu',
+        ['itemCount' => $pagedCountAfterRepeat]
+    );
 
     $editedCaption = [...$caption, 'content' => 'Academyneedle — edytowany opis przeniesiony do drugiego źródła.'];
     $editedCaption['message_reference']['message_id'] = $sourceTwoId;
     $editedCaption['edited_timestamp'] = '2026-11-26T09:07:00.000Z';
     $auditDatasetA = [$sourceOne, $sourceTwo, $editedCaption];
     academySetAudit($db, $academyChannel);
-    $materials->sync();
+    $syncSelectedChannel($academyChannel);
     for ($iteration = 0; $iteration < 3; $iteration++) {
         $auditState = $db->queryOne(
             'SELECT audit_cleanup_pending FROM academy_material_channel_state WHERE channel_id = ?',
@@ -775,10 +1442,10 @@ try {
         if ((int) ($auditState['audit_cleanup_pending'] ?? 0) === 0) {
             break;
         }
-        $materials->sync();
+        $syncSelectedChannel($academyChannel);
     }
     $editedItems = $db->query(
-        'SELECT source_message_id, description_message_id, description, is_deleted
+        'SELECT source_message_id, description_message_id, title, description, is_deleted
            FROM academy_material_items WHERE channel_id = ? ORDER BY source_message_id',
         [$academyChannel]
     );
@@ -787,15 +1454,17 @@ try {
         $editedById[(string) $item['source_message_id']] = $item;
     }
     academyCheck(
-        ($editedById[$sourceTwoId]['description'] ?? null) === 'Academyneedle — edytowany opis przeniesiony do drugiego źródła.'
+        ($editedById[$sourceTwoId]['title'] ?? null) === 'Academyneedle — edytowany opis przeniesiony do drugiego źródła.'
+            && ($editedById[$sourceTwoId]['description'] ?? null) === null
             && ($editedById[$sourceTwoId]['description_message_id'] ?? null) === $captionId
             && ($editedById[$sourceOneId]['description'] ?? null) === null,
-        'audit wykrywa edycję opisu i deterministycznie reassocjuje referencję'
+        'audit wykrywa edycję, deterministycznie reassocjuje referencję i nie duplikuje jednolinijkowego tekstu',
+        ['items' => $editedById]
     );
 
     $auditDatasetA = [$sourceOne, $editedCaption];
     academySetAudit($db, $academyChannel);
-    $materials->sync();
+    $syncSelectedChannel($academyChannel);
     for ($iteration = 0; $iteration < 4; $iteration++) {
         $auditState = $db->queryOne(
             'SELECT audit_cleanup_pending FROM academy_material_channel_state WHERE channel_id = ?',
@@ -804,7 +1473,7 @@ try {
         if ((int) ($auditState['audit_cleanup_pending'] ?? 0) === 0) {
             break;
         }
-        $materials->sync();
+        $syncSelectedChannel($academyChannel);
     }
     $deletedSource = $db->queryOne(
         'SELECT is_deleted FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
@@ -822,19 +1491,32 @@ try {
         'SELECT description_message_id, description FROM academy_material_items WHERE channel_id = ? AND source_message_id = ?',
         [$academyChannel, $sourceOneId]
     );
+    $standaloneCaption = $db->queryOne(
+        'SELECT title, description, description_message_id
+           FROM academy_material_items WHERE channel_id = ? AND source_message_id = ? AND is_deleted = 0',
+        [$academyChannel, $captionId]
+    );
     academyCheck(
         (int) ($deletedSource['is_deleted'] ?? 0) === 1
             && (int) ($deletedItem['is_deleted'] ?? 0) === 1
-            && ($reassociatedCaption['target_source_message_id'] ?? null) === $sourceOneId
-            && ($restoredRoot['description_message_id'] ?? null) === $captionId
-            && str_contains((string) ($restoredRoot['description'] ?? ''), 'edytowany opis'),
-        'audyt miękko usuwa brakujące źródło i przepina caption do pozostałego materiału'
+            && ($reassociatedCaption['target_source_message_id'] ?? null) === null
+            && ($restoredRoot['description_message_id'] ?? null) === null
+            && ($standaloneCaption['title'] ?? null) === 'Academyneedle — edytowany opis przeniesiony do drugiego źródła.'
+            && ($standaloneCaption['description'] ?? null) === null
+            && ($standaloneCaption['description_message_id'] ?? null) === null,
+        'audyt miękko usuwa brakujące źródło i nie przepina jawnej referencji do niezwiązanego materiału',
+        [
+            'deletedSource' => $deletedSource,
+            'deletedItem' => $deletedItem,
+            'caption' => $reassociatedCaption,
+            'restoredRoot' => $restoredRoot,
+            'standaloneCaption' => $standaloneCaption,
+        ]
     );
 
     $failMessageChannel = $permissionChannel;
     $failMessageStatus = 503;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
-    $transientResult = $materials->sync();
+    $transientResult = $syncSelectedChannel($permissionChannel);
     $transientState = $materials->syncState();
     $transientChannel = array_values(array_filter(
         $transientState['channels'],
@@ -852,8 +1534,7 @@ try {
     );
 
     $failMessageStatus = 403;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
-    $materials->sync();
+    $syncSelectedChannel($permissionChannel);
     $deniedState = $materials->syncState();
     $deniedChannel = array_values(array_filter(
         $deniedState['channels'],
@@ -864,12 +1545,12 @@ try {
             && ($deniedChannel['messageAccessErrorCode'] ?? '') === 'http_403'
             && ($deniedChannel['available'] ?? true) === false
             && (int) ($deniedChannel['importedCount'] ?? -1) === 0,
-        'utrata Read Message History ukrywa dane i pokazuje jawny status zamiast pustego sukcesu'
+        'utrata Read Message History ukrywa dane i pokazuje jawny status zamiast pustego sukcesu',
+        ['channel' => $deniedChannel]
     );
 
     $failMessageStatus = null;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
-    $materials->sync();
+    $syncSelectedChannel($permissionChannel);
     $recoveredState = $materials->syncState();
     $recoveredChannel = array_values(array_filter(
         $recoveredState['channels'],
@@ -879,9 +1560,8 @@ try {
 
     $failMetadataChannel = $permissionChannel;
     $failMetadataStatus = 503;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
     $metadataRequestOffset = count($requests);
-    $metadataTransientResult = $materials->sync();
+    $metadataTransientResult = $syncSelectedChannel($permissionChannel);
     $metadataTransientState = $materials->syncState();
     $metadataTransientChannel = array_values(array_filter(
         $metadataTransientState['channels'],
@@ -901,8 +1581,7 @@ try {
     $failMetadataStatus = null;
 
     $badMetadataChannel = $categoryFailureChannel;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$categoryFailureChannel]);
-    $materials->sync();
+    $syncSelectedChannel($categoryFailureChannel);
     $mismatchState = $materials->syncState();
     $mismatchChannel = array_values(array_filter(
         $mismatchState['channels'],
@@ -915,8 +1594,7 @@ try {
         'zmiana parent category unieważnia konkretny kanał i jego widoczność'
     );
     $badMetadataChannel = null;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$categoryFailureChannel]);
-    $materials->sync();
+    $syncSelectedChannel($categoryFailureChannel);
 
     $db->execute('DELETE FROM academy_material_items');
     $db->execute('DELETE FROM academy_material_messages');

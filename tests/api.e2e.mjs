@@ -12,19 +12,54 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.APP_URL || 'http://127.0.0.1:4173';
 const ORIGIN = new URL(BASE).origin;
+const isLocal = /^http:\/\/(127\.0\.0\.1|localhost)(:|\/)/.test(BASE);
 let cookie = '';
 const results = [];
 let fixtureUserId = 0;
 let fixtureBackup = null;
+let fixtureEntitlementBackup = null;
+
+function academyEntitlementFixture(action, payload = {}) {
+  if (!isLocal || !fixtureUserId) {
+    throw new Error('academy_entitlement_fixture_requires_local_api');
+  }
+  const output = execFileSync(
+    'php',
+    [path.join(ROOT, 'tests', 'academy-entitlement-fixture.php'), String(fixtureUserId)],
+    {
+      env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+      input: JSON.stringify({ action, ...payload }),
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    }
+  ).trim();
+  return output ? JSON.parse(output) : null;
+}
 
 function restoreDemoFixture() {
-  if (!fixtureUserId || !fixtureBackup) return;
-  execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
-    env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
-    input: JSON.stringify({ state: fixtureBackup }),
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
-  fixtureBackup = null;
+  if (!fixtureUserId) return;
+  const errors = [];
+  if (fixtureEntitlementBackup) {
+    try {
+      academyEntitlementFixture('restore', { backup: fixtureEntitlementBackup });
+      fixtureEntitlementBackup = null;
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+  if (fixtureBackup) {
+    try {
+      execFileSync('php', [path.join(ROOT, 'tests', 'restore-api-fixture.php'), String(fixtureUserId)], {
+        env: { ...process.env, ALPHA_VAULT_CONFIG: process.env.ALPHA_VAULT_CONFIG || 'tests/config.test.json' },
+        input: JSON.stringify({ state: fixtureBackup }),
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      fixtureBackup = null;
+    } catch (err) {
+      errors.push(err);
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, 'Nie udało się w pełni odtworzyć fixture demo.');
 }
 
 function log(name, ok, info = '') {
@@ -137,6 +172,25 @@ async function main() {
   assert.ok(baseline.json.state, 'brak bazowego stanu demo do odtworzenia');
   fixtureBackup = JSON.parse(JSON.stringify(baseline.json.state));
 
+  if (isLocal) {
+    fixtureEntitlementBackup = academyEntitlementFixture('backup');
+    try {
+      for (const scenario of ['solo', 'expired', 'role_unverified']) {
+        academyEntitlementFixture('set', { scenario });
+        const deniedMaterials = await req('/api/academy/materials');
+        assert.equal(deniedMaterials.res.status, 403, `${scenario}: ${deniedMaterials.text}`);
+        assert.equal(deniedMaterials.json.error, 'forbidden', `${scenario}: error code`);
+        assert.equal(deniedMaterials.json.items, undefined, `${scenario}: no material payload`);
+        log(`academy materials: ${scenario} entitlement = 403`, true);
+      }
+    } finally {
+      if (fixtureEntitlementBackup) {
+        academyEntitlementFixture('restore', { backup: fixtureEntitlementBackup });
+        fixtureEntitlementBackup = null;
+      }
+    }
+  }
+
   const events = await req('/api/events');
   assert.equal(events.res.status, 200, events.text);
   assert.ok(Array.isArray(events.json.events));
@@ -162,7 +216,6 @@ async function main() {
   assert.equal(adminEvents.res.status, 403);
   log('admin events bez uprawnień = 403', true);
 
-  const isLocal = /^http:\/\/(127\.0\.0\.1|localhost)(:|\/)/.test(BASE);
   if (isLocal) {
     try {
       execFileSync('php', [path.join(ROOT, 'tests', 'seed-corrupt-state.php'), String(me.json.user.id)], {

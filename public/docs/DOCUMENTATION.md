@@ -551,9 +551,9 @@ Monitoring nie zapisuje tokenów ani treści wydarzeń. `/api/health` udostępni
 | `macro_events` | publikacje makro (FF/TradingView, UPSERT, soft delete) | `external_id` (UNIQUE) |
 | `macro_sync_state` | stan synchronizacji makro | `id=1` |
 | `academy_material_sync_state` | blokada i wynik globalnego syncu Akademii | `id=1` |
-| `academy_material_channel_state` | weryfikacja, dostęp i checkpointy dla 13 kanałów | `channel_id` |
-| `academy_material_messages` | znormalizowane wiadomości, relacje i stan soft delete | `(channel_id, message_id)` |
-| `academy_material_items` | indeks wyników API Akademii | `(channel_id, source_message_id)` |
+| `academy_material_channel_state` | weryfikacja, dostęp, checkpointy i `grouping_version` dla 13 kanałów | `channel_id` |
+| `academy_material_messages` | znormalizowane wiadomości, `attachment_filename`, `is_recording_caption`, relacje i stan soft delete | `(channel_id, message_id)` |
+| `academy_material_items` | indeks wyników API Akademii; `description_message_id` może być `NULL` | `(channel_id, source_message_id)` |
 | `wearable_connections` | połączenie z urządzeniem, zaszyfrowane tokeny | `(user_id, provider)` |
 | `wearable_daily_metrics` | dzienne metryki zdrowotne | `(user_id, provider, metric_date)` |
 | `wearable_oauth_states` | jednorazowe stany OAuth2 urządzeń | `state` |
@@ -568,6 +568,8 @@ Monitoring nie zapisuje tokenów ani treści wydarzeń. `/api/health` udostępni
 | `mcp_audit` | audyt agenta i użytkownika | `id`, `proposal_id` |
 | `mcp_idempotency` | fingerprint payloadu i odpowiedzi operacji bezpośrednich na 24 h | `(user_id, idem_key)` |
 | `schema_migrations` | wersje migracji | `version` |
+
+Migracja `20261126_academy_materials_grouping.sql` dodaje wersję deterministycznego grupowania oraz pola nazwy pliku i podpisu nagrania. Nieaktualny `grouping_version` ukrywa kanał w API do czasu pełnego, zweryfikowanego audytu; `description_message_id` jest nullable dla materiałów bez osobnej wiadomości opisu.
 
 ### 10.2. Indeksy wydarzeń
 
@@ -835,7 +837,7 @@ Plik: `.github/workflows/deploy-alphavault.yml`.
 
 Dodatkowo `/` musi zawierać „Alpha Vault”, a `/js/state.js` musi zwracać 200.
 
-`ACADEMY_RECAP_WINDOW_MINUTES` (1–240, domyślnie 30) ustawia okno fallbackowego łączenia krótkiej wiadomości tekstowej z materiałem. Wartość trafia do ukrytego `.app/config.json`; nie jest sekretem.
+`ACADEMY_RECAP_WINDOW_MINUTES` (1–30, domyślnie 30) ustawia okno fallbackowego łączenia krótkiej wiadomości tekstowej z materiałem. Wartość trafia do ukrytego `.app/config.json`; nie jest sekretem.
 
 ### 14.3. Deploy wyłącznie przez GitHub
 

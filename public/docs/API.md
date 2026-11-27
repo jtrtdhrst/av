@@ -579,10 +579,11 @@ Odczyt materiałów z lokalnej bazy. Synchronizację uruchamia wyłącznie istni
 - Wyłącznie metoda `GET`; inne metody zwracają `405` i `Allow: GET`.
 - Parametry: `category` (`all` albo zatwierdzona kategoria), `q` (wyszukiwanie po tytule/opisie), `limit` (1–50, domyślnie 10), `cursor` (podpisany, nieprzezroczysty kursor keyset).
 - Odpowiedź zawiera `items`, `nextCursor` i beztreściowy `sync`. IDs Discord są stringami; `discordUrl` jest kanonicznym linkiem do prawdziwej wiadomości źródłowej. Załączniki, URL-e CDN i pełne payloady Discord nie są zwracane.
+- `descriptionMessageId` jest stringiem albo `null`, gdy materiał nie ma osobnej wiadomości opisu. `sync` zawiera globalny status, checkpointy i stany wszystkich 13 zatwierdzonych kanałów, w tym potwierdzenie dostępu, licznik importu i wersję grupowania; nie zawiera treści wiadomości.
 - Wyniki ukrywają się dla kanału bez potwierdzonego źródła, dostępu do historii lub treści. HTTP 200 z pustą historią nie oznacza zweryfikowania treści ani `ready=true`.
 - Błędy: `401` bez sesji, `403` bez entitlementu, `400 invalid_category` / `invalid_cursor`, `405 method_not_allowed`.
 
-Przykład odpowiedzi:
+Skrócony przykład odpowiedzi (pełne `sync.channels` zawiera wszystkie 13 kanałów):
 
 ```json
 {
@@ -590,7 +591,7 @@ Przykład odpowiedzi:
     "guildId": "1186734786388176916",
     "channelId": "1499560912611446784",
     "sourceMessageId": "600000000000000001",
-    "descriptionMessageId": "600000000000000003",
+    "descriptionMessageId": null,
     "category": "Forex",
     "title": "Lekcja",
     "description": null,
@@ -641,7 +642,7 @@ Przykład odpowiedzi:
 | `QUOTES_BASE` | bazowy URL dostawcy notowań (domyślnie Yahoo Finance) |
 | `QUOTES_TTL` | TTL cache notowań w sekundach, 0–3600 (domyślnie 60) |
 | `QUOTES_CACHE` | ścieżka pliku cache (domyślnie `cache/quotes.json`) |
-| `ACADEMY_RECAP_WINDOW_MINUTES` | okno łączenia krótkiego opisu z materiałem (1–240 min, domyślnie 30) |
+| `ACADEMY_RECAP_WINDOW_MINUTES` | okno łączenia krótkiego opisu z materiałem (1–30 min, domyślnie 30) |
 | `WEARABLES_ENCRYPTION_KEY` | wymagany klucz AES dla tokenów urządzeń; brak fallbacku na `SESSION_SECRET` |
 | `OURA_CLIENT_ID`, `OURA_CLIENT_SECRET` | aplikacja Oura; scope `daily`, PKCE S256 |
 | `WEARABLES_ENCRYPTION_KEY_PREVIOUS` | poprzedni klucz AES dla rotacji tokenów urządzeń |
