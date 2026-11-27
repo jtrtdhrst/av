@@ -9,11 +9,18 @@ require_once __DIR__ . '/mcp-test-environment.php';
 mcpLoadIsolatedCiConfig($root);
 [$config, $db] = require $root . '/app/bootstrap.php';
 
-function academyCheck(bool $condition, string $label): void
+function academyCheck(bool $condition, string $label, mixed $diagnostic = null): void
 {
     echo ($condition ? 'PASS' : 'FAIL') . '  ' . $label . "\n";
     if (!$condition) {
         $GLOBALS['academy_failed'] = true;
+        if ($diagnostic !== null) {
+            $encodedDiagnostic = json_encode(
+                $diagnostic,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR
+            );
+            echo '      DIAG ' . ($encodedDiagnostic === false ? '[unavailable]' : $encodedDiagnostic) . "\n";
+        }
     }
 }
 
@@ -992,7 +999,8 @@ academyCheck(
                 $crossDayItems,
                 static fn (array $item): bool => $item['descriptionMessageId'] !== null
             )) === 0,
-        'jawna referencja do poprzedniego dnia nie uruchamia fallbacku do sąsiedniego nagrania'
+        'jawna referencja do poprzedniego dnia nie uruchamia fallbacku do sąsiedniego nagrania',
+        ['sources' => $crossDaySources, 'items' => $crossDayItems]
     );
 
     $blankProbe = [];
@@ -1161,7 +1169,8 @@ academyCheck(
             && (int) ($emptyState['backfill_complete'] ?? 0) === 1
             && empty($stateView['ready'])
             && ($stateView['status'] ?? '') === 'content_unverified',
-        'HTTP 200 z pustą historią nie przedstawia pozornego sukcesu ani ready'
+        'HTTP 200 z pustą historią nie przedstawia pozornego sukcesu ani ready',
+        ['emptyState' => $emptyState, 'state' => $stateView]
     );
     academyCheck(
         ($blankState['content_access_status'] ?? null) === 'suspected_missing'
@@ -1206,7 +1215,8 @@ academyCheck(
             && ($targetGroupingState['available'] ?? false) === true
             && ($targetGroupingState['importedCount'] ?? 0) === 100
             && count($targetVisiblePage['items']) === 100,
-        'aktualny indeks grupowania udostępnia gotowy kanał Trade Recaps'
+        'aktualny indeks grupowania udostępnia gotowy kanał Trade Recaps',
+        ['channel' => $targetGroupingState, 'visibleCount' => count($targetVisiblePage['items'])]
     );
 
     $db->execute(
@@ -1252,7 +1262,11 @@ academyCheck(
         (int) ($auditAfterHistory['grouping_version'] ?? 0) === 1
             && (int) ($auditAfterHistory['audit_cleanup_pending'] ?? 0) === 1
             && $materials->listForApi('Trade Recaps', '', 100)['items'] === [],
-        'pełny wielostronicowy audyt czeka na cleanup, a materiały pozostają ukryte'
+        'pełny wielostronicowy audyt czeka na cleanup, a materiały pozostają ukryte',
+        [
+            'auditState' => $auditAfterHistory,
+            'visibleCount' => count($materials->listForApi('Trade Recaps', '', 100)['items']),
+        ]
     );
 
     $materials->sync();
@@ -1274,7 +1288,12 @@ academyCheck(
             && ($readyAfterAudit['available'] ?? false) === true
             && ($readyAfterAudit['importedCount'] ?? 0) === 100
             && count($visibleAfterAudit['items']) === 100,
-        'audyt i cleanup automatycznie promują wersję grupowania i przywracają widoczność'
+        'audyt i cleanup automatycznie promują wersję grupowania i przywracają widoczność',
+        [
+            'auditState' => $auditAfterCleanup,
+            'channel' => $readyAfterAudit,
+            'visibleCount' => count($visibleAfterAudit['items']),
+        ]
     );
 
     $firstPage = $materials->listForApi('all', '', 25);
@@ -1293,7 +1312,14 @@ academyCheck(
             && count($allItems) === 112
             && $cursor === null
             && $cursorPages > 1,
-        'API odczyt używa stabilnego keyset pagination bez duplikatów'
+        'API odczyt używa stabilnego keyset pagination bez duplikatów',
+        [
+            'itemCount' => count($allItems),
+            'uniqueKeyCount' => count(array_unique($itemKeys)),
+            'cursorRemaining' => $cursor,
+            'pages' => $cursorPages,
+            'firstKeys' => array_slice($itemKeys, 0, 5),
+        ]
     );
     $needlePage = $materials->listForApi('Forex', 'Academyneedle', 10);
     academyCheck(
@@ -1358,7 +1384,11 @@ academyCheck(
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$academyChannel]
     )['c'] ?? 0);
-    academyCheck($countBeforeIdempotency === 2 && $countAfterIdempotency === 2, 'powtórny incremental sync jest idempotentny');
+    academyCheck(
+        $countBeforeIdempotency === 2 && $countAfterIdempotency === 2,
+        'powtórny incremental sync jest idempotentny',
+        ['before' => $countBeforeIdempotency, 'after' => $countAfterIdempotency]
+    );
 
     $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$pagedChannel]);
     $materials->sync();
@@ -1372,7 +1402,8 @@ academyCheck(
     )['c'] ?? 0);
     academyCheck(
         ($incrementalRow['message_id'] ?? null) === $pagedNewId && $pagedCountAfterIncremental === 101,
-        'incremental sync używa after snowflake i zapisuje nowe rekordy'
+        'incremental sync używa after snowflake i zapisuje nowe rekordy',
+        ['row' => $incrementalRow, 'itemCount' => $pagedCountAfterIncremental]
     );
     $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$pagedChannel]);
     $materials->sync();
@@ -1380,7 +1411,11 @@ academyCheck(
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$pagedChannel]
     )['c'] ?? 0);
-    academyCheck($pagedCountAfterRepeat === 101, 'powtórny incremental nie duplikuje nowego rekordu');
+    academyCheck(
+        $pagedCountAfterRepeat === 101,
+        'powtórny incremental nie duplikuje nowego rekordu',
+        ['itemCount' => $pagedCountAfterRepeat]
+    );
 
     $editedCaption = [...$caption, 'content' => 'Academyneedle — edytowany opis przeniesiony do drugiego źródła.'];
     $editedCaption['message_reference']['message_id'] = $sourceTwoId;
@@ -1412,7 +1447,8 @@ academyCheck(
             && ($editedById[$sourceTwoId]['description'] ?? null) === null
             && ($editedById[$sourceTwoId]['description_message_id'] ?? null) === $captionId
             && ($editedById[$sourceOneId]['description'] ?? null) === null,
-        'audit wykrywa edycję, deterministycznie reassocjuje referencję i nie duplikuje jednolinijkowego tekstu'
+        'audit wykrywa edycję, deterministycznie reassocjuje referencję i nie duplikuje jednolinijkowego tekstu',
+        ['items' => $editedById]
     );
 
     $auditDatasetA = [$sourceOne, $editedCaption];
@@ -1457,7 +1493,14 @@ academyCheck(
             && ($standaloneCaption['title'] ?? null) === 'Academyneedle — edytowany opis przeniesiony do drugiego źródła.'
             && ($standaloneCaption['description'] ?? null) === null
             && ($standaloneCaption['description_message_id'] ?? null) === null,
-        'audyt miękko usuwa brakujące źródło i nie przepina jawnej referencji do niezwiązanego materiału'
+        'audyt miękko usuwa brakujące źródło i nie przepina jawnej referencji do niezwiązanego materiału',
+        [
+            'deletedSource' => $deletedSource,
+            'deletedItem' => $deletedItem,
+            'caption' => $reassociatedCaption,
+            'restoredRoot' => $restoredRoot,
+            'standaloneCaption' => $standaloneCaption,
+        ]
     );
 
     $failMessageChannel = $permissionChannel;
@@ -1493,7 +1536,8 @@ academyCheck(
             && ($deniedChannel['messageAccessErrorCode'] ?? '') === 'http_403'
             && ($deniedChannel['available'] ?? true) === false
             && (int) ($deniedChannel['importedCount'] ?? -1) === 0,
-        'utrata Read Message History ukrywa dane i pokazuje jawny status zamiast pustego sukcesu'
+        'utrata Read Message History ukrywa dane i pokazuje jawny status zamiast pustego sukcesu',
+        ['channel' => $deniedChannel]
     );
 
     $failMessageStatus = null;
