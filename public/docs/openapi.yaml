@@ -474,7 +474,7 @@ paths:
                         guildId: { type: string }
                         channelId: { type: string }
                         sourceMessageId: { type: string }
-                        descriptionMessageId: { type: string }
+                        descriptionMessageId: { type: [string, 'null'] }
                         category: { type: string }
                         title: { type: [string, 'null'] }
                         description: { type: [string, 'null'] }
@@ -487,10 +487,41 @@ paths:
                     type: [string, 'null']
                   sync:
                     type: object
-                    required: [status, ready]
+                    required: [status, ready, lastSuccessAt, lastAttemptAt, lastErrorCode, pagesProcessed, channels]
                     properties:
                       status: { type: string }
                       ready: { type: boolean }
+                      lastSuccessAt: { type: [string, 'null'], format: date-time }
+                      lastAttemptAt: { type: [string, 'null'], format: date-time }
+                      lastErrorCode: { type: [string, 'null'] }
+                      pagesProcessed: { type: integer, minimum: 0 }
+                      channels:
+                        type: array
+                        minItems: 13
+                        maxItems: 13
+                        items:
+                          type: object
+                          required: [channelId, label, category, status, verified, available, messageAccessStatus, messageAccessErrorCode, messageAccessCheckedAt, contentAccessStatus, contentAccessErrorCode, contentAccessCheckedAt, importedCount, backfillComplete, groupingVersion, groupingReady, ready, lastSuccessAt, lastErrorCode]
+                          properties:
+                            channelId: { type: string }
+                            label: { type: string }
+                            category: { type: string }
+                            status: { type: string }
+                            verified: { type: boolean }
+                            available: { type: boolean }
+                            messageAccessStatus: { type: string }
+                            messageAccessErrorCode: { type: [string, 'null'] }
+                            messageAccessCheckedAt: { type: [string, 'null'], format: date-time }
+                            contentAccessStatus: { type: string }
+                            contentAccessErrorCode: { type: [string, 'null'] }
+                            contentAccessCheckedAt: { type: [string, 'null'], format: date-time }
+                            importedCount: { type: integer, minimum: 0 }
+                            backfillComplete: { type: boolean }
+                            groupingVersion: { type: integer, minimum: 0 }
+                            groupingReady: { type: boolean }
+                            ready: { type: boolean }
+                            lastSuccessAt: { type: [string, 'null'], format: date-time }
+                            lastErrorCode: { type: [string, 'null'] }
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':

@@ -257,7 +257,7 @@ final class Config
             quotesBase: rtrim((string) $env('QUOTES_BASE', 'https://query1.finance.yahoo.com'), '/'),
             quotesTtl: max(0, min(3600, $parseInt($env('QUOTES_TTL'), 60))),
             quotesCacheFile: (string) $env('QUOTES_CACHE', $root . '/cache/quotes.json'),
-            academyRecapWindowMinutes: max(1, min(240, $parseInt($env('ACADEMY_RECAP_WINDOW_MINUTES'), 30))),
+            academyRecapWindowMinutes: max(1, min(30, $parseInt($env('ACADEMY_RECAP_WINDOW_MINUTES'), 30))),
             mcp: $mcp,
             version: '4.2.0',
         );

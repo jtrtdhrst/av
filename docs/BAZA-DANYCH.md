@@ -21,9 +21,9 @@ Schemat: `db/schema.sql`. Migracja: `php app/db/migrate.php`.
 | `macro_events` | publikacje makro z feedów (UPSERT, soft delete, źródło FF/TradingView) |
 | `macro_sync_state` | ostatnia próba/sukces synchronizacji makro, licznik, błąd |
 | `academy_material_sync_state` | globalna blokada, status i checkpoint synchronizacji Akademii |
-| `academy_material_channel_state` | weryfikacja źródła, stanu dostępu, backfillu i audytu per kanał |
-| `academy_material_messages` | znormalizowane wiadomości, referencje, oryginalne ISO 8601 oraz soft delete |
-| `academy_material_items` | indeks stronicowanego API: kategoria, tytuł/opis, źródłowe IDs i soft delete |
+| `academy_material_channel_state` | weryfikacja źródła, stanu dostępu, backfillu, audytu i `grouping_version` per kanał |
+| `academy_material_messages` | znormalizowane wiadomości, referencje, `attachment_filename`, `is_recording_caption`, oryginalne ISO 8601 i soft delete |
+| `academy_material_items` | indeks stronicowanego API: kategoria, tytuł/opis, źródłowe IDs, nullable `description_message_id` i soft delete |
 | `wearable_connections` | jedno połączenie użytkownika z dostawcą; status, zaszyfrowane tokeny, `token_expires_at`, `refresh_token_expires_at`, token urządzenia Apple (hash), last sync |
 | `wearable_daily_metrics` | dzienne metryki zdrowotne: sen, HRV, tętno, Body Battery, wynik dostawcy, surowa odpowiedź |
 | `wearable_oauth_states` | jednorazowe stany OAuth2 dla Oura (10 min) wraz z `code_verifier` dla PKCE; Garmin/Whoop wyłączone |
@@ -62,7 +62,10 @@ Dokument zawiera m.in. `prop.challenges` (konfiguracje challenge'ów) i `prop.se
 
 - Allowlista 13 kanałów jest stała w `app/AcademyMaterials.php`; synchronizacja pobiera metadane kanału przez bezpośrednie GET, a historię dopiero po weryfikacji źródła.
 - `academy_material_channel_state` przechowuje osobno dostęp do historii i potwierdzenie treści, postęp backfillu oraz checkpoint audytu; pusty HTTP 200 nie oznacza gotowości.
+- `grouping_version` oznacza wersję deterministycznego indeksowania; nieaktualna wersja ukrywa materiały do pełnego, zweryfikowanego audytu i ponownego zbudowania dni.
 - Wiadomości i indeks materiałów przechowują UTC `DATETIME` oraz oryginalne ISO 8601. Surowy JSON Discord, treści załączników i URL-e CDN nie są utrwalane.
+- `attachment_filename` zachowuje oczyszczoną nazwę pliku, a `is_recording_caption` rozpoznaje krótkie podpisy nagrań; nie przechowuje się binariów ani URL-i mediów.
+- `academy_material_items.description_message_id` jest nullable, gdy materiał nie ma osobnej wiadomości opisu.
 - `academy_material_items` jest źródłem chronionego, keyset-paginated `GET /api/academy/materials`; nieobecne wiadomości są oznaczane soft delete po kompletnym, treściowo zweryfikowanym audycie.
 
 ## Dane zdrowotne
@@ -88,6 +91,7 @@ Dokument zawiera m.in. `prop.challenges` (konfiguracje challenge'ów) i `prop.se
 
 1. Odczytaj schemat przez MySQL MCP / `SHOW CREATE TABLE`.
 2. Dodaj nowy plik `db/migrations/RRRRMMDD_nazwa.sql` (idempotentny) i, dla nowych instalacji, uzupełnij `db/schema.sql`.
+   Migracja `20261126_academy_materials_grouping.sql` dodaje wersję grupowania i pola normalizacji oraz dopuszcza brak osobnej wiadomości opisu.
 3. Przed destrukcyjną zmianą: backup i zgoda.
 4. Zastosuj `php app/db/migrate.php`. Runner najpierw wykonuje `db/schema.sql` (z `ensureColumn`/`ensureIndex` dla nowych kolumn istniejących tabel), a potem wszystkie nieaplikowane pliki z `db/migrations/` i zapisuje wersje w `schema_migrations`.
 5. Ponowne uruchomienie jest bezpieczne — zastosowane wersje są pomijane.

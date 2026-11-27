@@ -64,7 +64,7 @@ W `miloszspyrka-code/av` → Settings → Secrets and variables → Actions:
 | `WEARABLES_ENCRYPTION_KEY` | wymagany klucz AES-256-GCM tokenów urządzeń; bez niego integracje OAuth są nieaktywne (brak fallbacku na `SESSION_SECRET`) |
 | `WEARABLES_ENCRYPTION_KEY_PREVIOUS` | poprzedni klucz AES do odczytu starych tokenów w czasie rotacji |
 | `QUOTES_BASE`, `QUOTES_TTL`, `QUOTES_CACHE` | notowania rynkowe: URL dostawcy, TTL cache w sekundach (0–3600), plik cache |
-| `ACADEMY_RECAP_WINDOW_MINUTES` | opcjonalne okno łączenia krótkiego opisu z materiałem (1–240 min, domyślnie 30) |
+| `ACADEMY_RECAP_WINDOW_MINUTES` | opcjonalne okno łączenia krótkiego opisu z materiałem (1–30 min, domyślnie 30) |
 
 Zmienne repozytorium:
 

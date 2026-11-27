@@ -17,6 +17,7 @@ final class AcademyMaterials
     private const RUN_BUDGET_SECONDS = 180;
     private const AUDIT_INTERVAL_SECONDS = 604800;
     private const AUDIT_CLEANUP_BATCH = 100;
+    private const GROUPING_VERSION = 2;
     private const TZ = 'Europe/Warsaw';
 
     /** @var list<array{channelId:string,label:string,category:string,parentCategoryId:?string}> */
@@ -60,7 +61,7 @@ final class AcademyMaterials
             }
             : \Closure::fromCallable($sleeper);
         $configuredWindow = $recapWindowMinutes ?? $config->academyRecapWindowMinutes;
-        $this->recapWindowMinutes = max(1, min(240, $configuredWindow));
+        $this->recapWindowMinutes = max(1, min(30, $configuredWindow));
     }
 
     /** @return list<array{channelId:string,label:string,category:string,parentCategoryId:?string}> */
@@ -199,6 +200,7 @@ final class AcademyMaterials
         }
 
         $mediaTypes = [];
+        $attachmentFilenames = [];
         $attachmentDescriptions = [];
         foreach (is_array($payload['attachments'] ?? null) ? $payload['attachments'] : [] as $attachment) {
             if (!is_array($attachment)) {
@@ -207,6 +209,10 @@ final class AcademyMaterials
             $mime = strtolower((string) ($attachment['content_type'] ?? ''));
             $filename = strtolower((string) ($attachment['filename'] ?? ''));
             $mediaTypes[] = self::mediaType($mime, $filename);
+            $safeFilename = self::cleanFilename((string) ($attachment['filename'] ?? ''));
+            if ($safeFilename !== null) {
+                $attachmentFilenames[] = $safeFilename;
+            }
             $description = self::cleanText((string) ($attachment['description'] ?? ''));
             if ($description !== '') {
                 $attachmentDescriptions[] = $description;
@@ -245,33 +251,40 @@ final class AcademyMaterials
         $embedDescription = self::truncate(implode("\n", [...$embedDescriptions, ...$attachmentDescriptions]), 12000);
         $explicitTitle = $embedTitle !== '';
 
-        if ($explicitTitle) {
-            $title = $embedTitle;
-            $descriptionParts = array_filter([$embedDescription, $content], static fn (string $part): bool => $part !== '');
+        if ($content !== '') {
+            [$title, $contentDescription] = self::splitTitleDescription($content);
+            $descriptionParts = array_filter(
+                [$contentDescription, $embedTitle, $embedDescription],
+                static fn (?string $part): bool => $part !== null && $part !== ''
+            );
             $description = self::truncate(implode("\n", $descriptionParts), 12000);
-        } elseif (!$hasMedia && $content !== '' && $embedDescription === '' && self::length($content) <= 500) {
-            // Short text-only prose is a standalone material unless it deterministically
-            // pairs with a same-day referenced/previous media source.
-            $title = null;
-            $description = self::truncate($content, 12000);
+        } elseif ($explicitTitle) {
+            $title = $embedTitle;
+            $description = $embedDescription;
         } else {
-            $fullText = self::truncate(implode("\n", array_filter([$content, $embedDescription])), 12000);
+            $fullText = self::truncate($embedDescription, 12000);
             [$title, $description] = self::splitTitleDescription($fullText);
-            if ($title === null && $embedDescription !== '') {
-                $title = self::truncate($embedDescription, 180);
-            }
         }
 
         $contentText = self::truncate(
             implode("\n", array_filter([$content, $embedDescription])),
             12000
         );
+        if (!$hasMedia && self::isNonMaterialOnlyText($contentText)) {
+            return null;
+        }
         if (!$hasMedia && $title === null && $description === null && $contentText === '') {
             return null;
         }
         if (!$hasMedia && $contentText === '' && $title === null && $description === null) {
             return null;
         }
+
+        $attachmentFilename = $attachmentFilenames[0] ?? null;
+        if ($title === null && $hasMedia) {
+            $title = $attachmentFilename ?? self::fallbackMaterialTitle($materialType, $createdAt);
+        }
+        $isRecordingCaption = self::isRecordingCaption($content, $embedTitle);
 
         return [
             'guild_id' => self::GUILD_ID,
@@ -288,8 +301,10 @@ final class AcademyMaterials
             'description' => $description === '' ? null : $description,
             'content_text' => $contentText === '' ? null : $contentText,
             'material_type' => $materialType,
+            'attachment_filename' => $attachmentFilename,
             'has_media' => $hasMedia ? 1 : 0,
-            'is_caption_candidate' => !$hasMedia && !$explicitTitle && $content !== '' && self::length($content) <= 500 ? 1 : 0,
+            'is_caption_candidate' => $referenceId !== null || $isRecordingCaption ? 1 : 0,
+            'is_recording_caption' => $isRecordingCaption ? 1 : 0,
         ];
     }
 
@@ -302,7 +317,7 @@ final class AcademyMaterials
      */
     public static function groupMessages(array $messages, int $recapWindowMinutes = 30): array
     {
-        $window = max(1, min(240, $recapWindowMinutes)) * 60;
+        $window = max(1, min(30, $recapWindowMinutes)) * 60;
         $active = [];
         foreach ($messages as $message) {
             if (!is_array($message) || !empty($message['is_deleted'])) {
@@ -324,87 +339,124 @@ final class AcademyMaterials
             return strcmp($a['_created'], $b['_created']) ?: self::compareSnowflakes($a['_id'], $b['_id']);
         });
 
-        $roots = [];
-        foreach ($ordered as $message) {
+        $edgeCandidates = [];
+        $descriptionRoots = [];
+        foreach ($ordered as $index => $message) {
             $id = $message['_id'];
-            $target = null;
-            $ref = self::snowflake($message['reference_message_id'] ?? $message['referenceMessageId'] ?? null);
-            if ($ref !== null && isset($active[$ref])) {
-                $referenced = $active[$ref];
-                if ($referenced['_channel'] === $message['_channel']
-                    && !empty($referenced['has_media'])
-                    && self::sameWarsawDay($referenced['_created'], $message['_created'])) {
-                    $target = self::snowflake($referenced['target_source_message_id'] ?? $referenced['targetSourceMessageId'] ?? null)
-                        ?? $ref;
-                }
-            }
-            if ($target === null && !empty($message['is_caption_candidate']) && empty($message['has_media'])) {
-                $captionTime = self::parseUtc($message['_created']);
-                $candidates = array_reverse($ordered);
-                foreach ($candidates as $candidate) {
-                    $candidateId = $candidate['_id'];
-                    if ($candidateId === $id || $candidate['_channel'] !== $message['_channel']
-                        || (string) ($candidate['author_id'] ?? $candidate['authorId'] ?? '') !== (string) ($message['author_id'] ?? $message['authorId'] ?? '')
-                        || empty($candidate['has_media'])
-                        || !empty($candidate['is_deleted'])
-                        || !self::sameWarsawDay($candidate['_created'], $message['_created'])) {
-                        continue;
-                    }
-                    $candidateTime = self::parseUtc($candidate['_created']);
-                    if ($captionTime === null || $candidateTime === null
-                        || $candidateTime >= $captionTime
-                        || ($captionTime->getTimestamp() - $candidateTime->getTimestamp()) > $window) {
-                        continue;
-                    }
-                    $target = self::snowflake($candidate['target_source_message_id'] ?? $candidate['targetSourceMessageId'] ?? null)
-                        ?? $candidateId;
-                    break;
-                }
-            }
-            if ($target === null) {
-                $roots[$id] = $message;
+            $hasMedia = !empty($message['has_media']);
+            $referenceId = self::snowflake(
+                $message['reference_message_id'] ?? $message['referenceMessageId'] ?? null
+            );
+            if (!self::messageIsRecordingCaption($message) && $referenceId === null) {
                 continue;
             }
-            $root = $active[$target] ?? null;
-            if ($root === null || $root['_channel'] !== $message['_channel']
-                || !self::sameWarsawDay($root['_created'], $message['_created'])) {
-                $roots[$id] = $message;
-                continue;
-            }
-            $rootId = self::snowflake($root['target_source_message_id'] ?? $root['targetSourceMessageId'] ?? null)
-                ?? $target;
-            if (!isset($roots[$rootId])) {
-                $roots[$rootId] = $active[$rootId] ?? $root;
-            }
-            if (empty($roots[$rootId]['_caption'])) {
-                $roots[$rootId]['_caption'] = $message;
+            $targetRootId = null;
+            $descriptionId = null;
+            $explicit = $referenceId !== null;
+
+            if ($explicit) {
+                $referenced = $active[$referenceId] ?? null;
+                if ($referenced === null || $referenced['_channel'] !== $message['_channel']
+                    || !self::sameWarsawDay($referenced['_created'], $message['_created'])) {
+                    continue;
+                }
+                if ($hasMedia && self::isDescriptionMessage($referenced, true)) {
+                    $targetRootId = $id;
+                    $descriptionId = $referenceId;
+                } elseif (!$hasMedia && self::isRecordingSource($referenced)) {
+                    $targetRootId = self::rootMessageId($referenced);
+                    $descriptionId = $id;
+                } else {
+                    // An explicit but unrelated reference is not permission to guess.
+                    continue;
+                }
             } else {
-                // Preserve extra prose as its own item rather than dropping it.
-                $roots[$id] = $message;
+                $previous = self::previousSameAuthorMessage($ordered, $index);
+                if ($previous === null || !self::sameWarsawDay($previous['_created'], $message['_created'])) {
+                    continue;
+                }
+                if ($hasMedia
+                    && self::isDescriptionMessage($previous)
+                    && self::descriptionMatchesCaption($previous, $message)) {
+                    if (self::isTradeRecapChannel($message['_channel'])) {
+                        $elapsed = self::elapsedSeconds($previous['_created'], $message['_created']);
+                        if ($elapsed === null || $elapsed > $window) {
+                            continue;
+                        }
+                    }
+                    $targetRootId = $id;
+                    $descriptionId = $previous['_id'];
+                } elseif (!$hasMedia && self::isRecordingSource($previous)) {
+                    $targetRootId = self::rootMessageId($previous);
+                    $descriptionId = $id;
+                    if (self::isTradeRecapChannel($message['_channel'])) {
+                        $elapsed = self::elapsedSeconds($previous['_created'], $message['_created']);
+                        if ($elapsed === null || $elapsed > $window) {
+                            continue;
+                        }
+                    }
+                }
             }
+
+            if ($targetRootId === null || $descriptionId === null
+                || !isset($active[$targetRootId])
+                || $active[$targetRootId]['_channel'] !== $message['_channel']) {
+                continue;
+            }
+            $edgeCandidates[$targetRootId][] = [
+                'descriptionId' => $descriptionId,
+                'explicit' => $explicit,
+            ];
+            $descriptionRoots[$descriptionId][$targetRootId] = true;
+        }
+
+        $descriptionsByRoot = [];
+        foreach ($edgeCandidates as $rootId => $candidates) {
+            $explicitCandidates = array_values(array_filter(
+                $candidates,
+                static fn (array $candidate): bool => $candidate['explicit']
+            ));
+            $eligible = count($explicitCandidates) === 1
+                ? $explicitCandidates
+                : (count($explicitCandidates) === 0 && count($candidates) === 1 ? $candidates : []);
+            if (count($eligible) !== 1) {
+                continue;
+            }
+            $descriptionId = $eligible[0]['descriptionId'];
+            if (count($descriptionRoots[$descriptionId] ?? []) !== 1) {
+                continue;
+            }
+            $descriptionsByRoot[$rootId] = $active[$descriptionId];
+        }
+        $descriptionMessageIds = [];
+        foreach ($descriptionsByRoot as $description) {
+            $descriptionMessageIds[$description['_id']] = true;
         }
 
         $items = [];
-        foreach ($roots as $id => $root) {
+        foreach ($ordered as $root) {
+            $id = $root['_id'];
+            if (isset($descriptionMessageIds[$id])) {
+                continue;
+            }
             $spec = self::channelMap()[$root['_channel']] ?? null;
             if ($spec === null) {
                 continue;
             }
-            $caption = $root['_caption'] ?? null;
-            $description = trim((string) ($root['description'] ?? ''));
-            $descriptionMessageId = $id;
-            if (is_array($caption)) {
-                $captionDescription = trim((string) ($caption['description'] ?? $caption['content_text'] ?? ''));
-                if ($captionDescription !== '') {
-                    $description = $description === ''
-                        ? $captionDescription
-                        : $description . "\n\n" . $captionDescription;
-                    $descriptionMessageId = (string) $caption['_id'];
-                }
-            }
-            $title = trim((string) ($root['title'] ?? ''));
+            $descriptionMessage = $descriptionsByRoot[$id] ?? null;
+            $titleSource = $descriptionMessage ?? $root;
+            $description = trim((string) ($titleSource['description'] ?? ''));
+            $descriptionMessageId = $descriptionMessage['_id'] ?? null;
+            $title = trim((string) ($titleSource['title'] ?? ''));
             if ($title === '') {
-                $title = self::deriveTitle((string) ($root['content_text'] ?? $root['description'] ?? ''));
+                $title = self::deriveTitle((string) ($titleSource['content_text'] ?? ''));
+            }
+            if ($title === '') {
+                $title = self::cleanFilename((string) ($root['attachment_filename'] ?? ''))
+                    ?? self::fallbackMaterialTitle(
+                        (string) ($root['material_type'] ?? $root['materialType'] ?? 'text'),
+                        $root['_created']
+                    );
             }
             $items[] = [
                 'guildId' => self::GUILD_ID,
@@ -427,6 +479,128 @@ final class AcademyMaterials
             ?: self::compareSnowflakes((string) $b['sourceMessageId'], (string) $a['sourceMessageId'])
         );
         return $items;
+    }
+
+    private static function messageIsRecordingCaption(array $message): bool
+    {
+        if (!empty($message['is_recording_caption'])) {
+            return true;
+        }
+        return self::isRecordingCaption(
+            (string) ($message['content_text'] ?? ''),
+            (string) ($message['title'] ?? '')
+        );
+    }
+
+    private static function isRecordingSource(array $message): bool
+    {
+        if (empty($message['has_media'])) {
+            return false;
+        }
+        $type = (string) ($message['material_type'] ?? $message['materialType'] ?? '');
+        return in_array($type, ['video', 'audio', 'mixed'], true);
+    }
+
+    private static function isDescriptionMessage(array $message, bool $explicitReference = false): bool
+    {
+        if (self::messageIsRecordingCaption($message)) {
+            return false;
+        }
+        $text = trim((string) ($message['content_text'] ?? $message['description'] ?? ''));
+        if ($text === '') {
+            return false;
+        }
+        if ($explicitReference) {
+            return true;
+        }
+        if (!empty($message['has_media'])
+            && !in_array((string) ($message['material_type'] ?? $message['materialType'] ?? ''), ['image', 'mixed'], true)) {
+            return false;
+        }
+        $lines = array_values(array_filter(
+            preg_split('/\n/u', $text) ?: [],
+            static fn (string $line): bool => trim($line) !== ''
+        ));
+        return self::length($text) >= 30 || count($lines) >= 2;
+    }
+
+    private static function descriptionMatchesCaption(array $description, array $caption): bool
+    {
+        $descriptionText = implode(' ', array_filter([
+            (string) ($description['title'] ?? ''),
+            (string) ($description['description'] ?? ''),
+            (string) ($description['content_text'] ?? ''),
+        ], static fn (string $part): bool => trim($part) !== ''));
+        $captionText = implode(' ', array_filter([
+            (string) ($caption['title'] ?? ''),
+            (string) ($caption['content_text'] ?? ''),
+        ], static fn (string $part): bool => trim($part) !== ''));
+        $genericTerms = [
+            'nagranie', 'nagrania', 'sesja', 'sesji', 'session',
+            'wideo', 'video', 'recording', 'recap', 'recaps', 'trade',
+        ];
+        $topicTokens = static function (string $text) use ($genericTerms): array {
+            preg_match_all('/[\p{L}\p{N}]+/u', $text, $matches);
+            $tokens = [];
+            foreach ($matches[0] ?? [] as $token) {
+                $hasLetters = preg_match('/\p{L}/u', $token) === 1;
+                $hasNumbers = preg_match('/\p{N}/u', $token) === 1;
+                $isUppercaseIdentifier = preg_match('/^\p{Lu}{3,}$/u', $token) === 1
+                    || in_array($token, ['SL', 'TP'], true);
+                if (!$hasLetters || (!$isUppercaseIdentifier && !$hasNumbers)) {
+                    continue;
+                }
+                $normalized = function_exists('mb_strtolower')
+                    ? mb_strtolower($token, 'UTF-8')
+                    : strtolower($token);
+                if (in_array($normalized, $genericTerms, true)) {
+                    continue;
+                }
+                $tokens[] = $normalized;
+            }
+            return array_values(array_unique($tokens));
+        };
+        return array_intersect($topicTokens($descriptionText), $topicTokens($captionText)) !== [];
+    }
+
+    private static function previousSameAuthorMessage(array $ordered, int $index): ?array
+    {
+        $message = $ordered[$index];
+        $authorId = (string) ($message['author_id'] ?? $message['authorId'] ?? '');
+        if ($authorId === '') {
+            return null;
+        }
+        for ($cursor = $index - 1; $cursor >= 0; $cursor--) {
+            $candidate = $ordered[$cursor];
+            if ($candidate['_channel'] !== $message['_channel']) {
+                continue;
+            }
+            return (string) ($candidate['author_id'] ?? $candidate['authorId'] ?? '') === $authorId
+                ? $candidate
+                : null;
+        }
+        return null;
+    }
+
+    private static function rootMessageId(array $message): string
+    {
+        return self::snowflake($message['target_source_message_id'] ?? $message['targetSourceMessageId'] ?? null)
+            ?? $message['_id'];
+    }
+
+    private static function elapsedSeconds(string $earlier, string $later): ?int
+    {
+        $first = self::parseUtc($earlier);
+        $second = self::parseUtc($later);
+        if ($first === null || $second === null || $second < $first) {
+            return null;
+        }
+        return $second->getTimestamp() - $first->getTimestamp();
+    }
+
+    private static function isTradeRecapChannel(string $channelId): bool
+    {
+        return (self::channelMap()[$channelId]['category'] ?? null) === 'Trade Recaps';
     }
 
     /**
@@ -611,19 +785,20 @@ final class AcademyMaterials
         $allowedIds = array_column(self::CHANNELS, 'channelId');
         $allowParams = implode(',', array_fill(0, count($allowedIds), '?'));
         $snapshotId = $cursorData['snapshotId'] ?? (int) (($this->db->queryOne(
-            'SELECT COALESCE(MAX(i.id), 0) AS max_id
-               FROM academy_material_items i
-               JOIN academy_material_channel_state c ON c.channel_id = i.channel_id AND c.verified = 1
-              WHERE i.is_deleted = 0 AND c.message_access_status = \'verified\'
-                AND c.verified = 1
-                AND c.content_access_status = \'verified\'
-                AND i.channel_id IN (' . $allowParams . ')',
+             'SELECT COALESCE(MAX(i.id), 0) AS max_id
+                FROM academy_material_items i
+                JOIN academy_material_channel_state c ON c.channel_id = i.channel_id
+                    AND c.verified = 1 AND c.grouping_version >= ' . self::GROUPING_VERSION . '
+               WHERE i.is_deleted = 0 AND c.message_access_status = \'verified\'
+                 AND c.content_access_status = \'verified\'
+                 AND i.channel_id IN (' . $allowParams . ')',
             $allowedIds
         )['max_id'] ?? 0));
 
         $where = [
             'i.is_deleted = 0',
             'c.verified = 1',
+            'c.grouping_version >= ' . self::GROUPING_VERSION,
             "c.message_access_status = 'verified'",
             "c.content_access_status = 'verified'",
             'i.id <= ?',
@@ -683,7 +858,9 @@ final class AcademyMaterials
                 'guildId' => self::GUILD_ID,
                 'channelId' => $channelId,
                 'sourceMessageId' => $messageId,
-                'descriptionMessageId' => (string) $row['description_message_id'],
+                'descriptionMessageId' => $row['description_message_id'] === null
+                    ? null
+                    : (string) $row['description_message_id'],
                 'category' => (string) $row['category_label'],
                 'title' => $row['title'] === null ? null : (string) $row['title'],
                 'description' => $row['description'] === null ? null : (string) $row['description'],
@@ -721,11 +898,12 @@ final class AcademyMaterials
             $byId[(string) $row['channel_id']] = $row;
         }
         $countsRows = $this->db->query(
-            'SELECT i.channel_id, COUNT(*) AS item_count
-               FROM academy_material_items i
-               JOIN academy_material_channel_state c ON c.channel_id = i.channel_id
-                    AND c.verified = 1 AND c.message_access_status = \'verified\'
-                    AND c.content_access_status = \'verified\'
+                'SELECT i.channel_id, COUNT(*) AS item_count
+                FROM academy_material_items i
+                JOIN academy_material_channel_state c ON c.channel_id = i.channel_id
+                     AND c.verified = 1 AND c.message_access_status = \'verified\'
+                     AND c.content_access_status = \'verified\'
+                     AND c.grouping_version >= ' . self::GROUPING_VERSION . '
               WHERE i.is_deleted = 0
               GROUP BY i.channel_id'
         );
@@ -743,14 +921,18 @@ final class AcademyMaterials
             $messageAccessVerified = $messageAccessStatus === 'verified';
             $contentAccessStatus = (string) ($row['content_access_status'] ?? 'unverified');
             $contentAccessVerified = $contentAccessStatus === 'verified';
-            $ready = $ready && $verified && $backfillComplete && $messageAccessVerified && $contentAccessVerified;
+            $groupingVersion = (int) ($row['grouping_version'] ?? 0);
+            $groupingReady = $groupingVersion >= self::GROUPING_VERSION;
+            $channelReady = $verified && $backfillComplete
+                && $messageAccessVerified && $contentAccessVerified && $groupingReady;
+            $ready = $ready && $channelReady;
             $channels[] = [
                 'channelId' => $channel['channelId'],
                 'label' => $channel['label'],
                 'category' => $channel['category'],
                 'status' => (string) ($row['sync_status'] ?? 'never'),
                 'verified' => $verified,
-                'available' => $verified && $messageAccessVerified && $contentAccessVerified,
+                'available' => $verified && $messageAccessVerified && $contentAccessVerified && $groupingReady,
                 'messageAccessStatus' => $messageAccessStatus,
                 'messageAccessErrorCode' => $row['message_access_error_code'] ?? null,
                 'messageAccessCheckedAt' => self::formatMaybeUtc($row['message_access_checked_at'] ?? null),
@@ -758,9 +940,13 @@ final class AcademyMaterials
                 'contentAccessErrorCode' => $row['content_access_error_code'] ?? null,
                 'contentAccessCheckedAt' => self::formatMaybeUtc($row['content_access_checked_at'] ?? null),
                 'importedCount' => $verified && $messageAccessVerified && $contentAccessVerified
+                    && $groupingReady
                     ? (int) ($counts[$channel['channelId']] ?? 0)
                     : 0,
                 'backfillComplete' => $backfillComplete,
+                'groupingVersion' => $groupingVersion,
+                'groupingReady' => $groupingReady,
+                'ready' => $channelReady,
                 'lastSuccessAt' => self::formatMaybeUtc($row['last_success_at'] ?? null),
                 'lastErrorCode' => $row['last_error_code'] ?? $row['verification_error_code'] ?? null,
             ];
@@ -896,7 +1082,8 @@ final class AcademyMaterials
             $knownContentMessages
         );
 
-        $this->db->withTransaction(function () use ($channel, $records, $rawIds, $phase, $state, $auditStartedAt, $contentAccessStatus): void {
+        $affectedDays = [];
+        $this->db->withTransaction(function () use ($channel, $records, $rawIds, $phase, $state, $auditStartedAt, $contentAccessStatus, &$affectedDays): void {
             $contentAccessError = match ($contentAccessStatus) {
                 'verified' => null,
                 'suspected_missing' => 'message_content_access_missing',
@@ -915,11 +1102,32 @@ final class AcademyMaterials
                 $id = (string) $record['payload']['id'];
                 if ($record['normalized'] === null) {
                     if ($contentAccessStatus === 'verified') {
-                        $this->markMessageUnavailable($channel['channelId'], $id);
+                        $deletedAt = $this->markMessageUnavailable($channel['channelId'], $id);
+                        $day = $deletedAt === null ? null : self::localDayKey($deletedAt);
+                        if ($day !== null) {
+                            $affectedDays[$day] = $day;
+                        }
                     }
                     continue;
                 }
+                $existing = $this->db->queryOne(
+                    'SELECT created_at_utc FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
+                    [$channel['channelId'], $id]
+                );
+                if (is_string($existing['created_at_utc'] ?? null)) {
+                    $oldDay = self::localDayKey((string) $existing['created_at_utc']);
+                    if ($oldDay !== null) {
+                        $affectedDays[$oldDay] = $oldDay;
+                    }
+                }
+                $newDay = self::localDayKey((string) $record['normalized']['created_at_utc']);
+                if ($newDay !== null) {
+                    $affectedDays[$newDay] = $newDay;
+                }
                 $this->persistNormalizedMessage($record['normalized'], $auditStartedAt);
+            }
+            foreach ($affectedDays as $dayUtc) {
+                $this->rebuildMaterialDay($channel['channelId'], $dayUtc);
             }
 
             $oldestId = self::snowflakeExtremum($rawIds, false);
@@ -1001,197 +1209,44 @@ final class AcademyMaterials
 
     private function persistNormalizedMessage(array $message, ?string $auditStartedAt): void
     {
-        $old = $this->db->queryOne(
-            'SELECT target_source_message_id, has_media FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
-            [$message['channel_id'], $message['message_id']]
-        );
-        $roots = [$message['message_id'] => true];
-        if (!empty($old['target_source_message_id'])) {
-            $roots[(string) $old['target_source_message_id']] = true;
-        }
         $this->db->execute(
             'INSERT INTO academy_material_messages
-                (guild_id, channel_id, message_id, author_id, author_name, created_at_utc,
-                 created_at_iso, edited_at_utc, edited_at_iso, reference_message_id,
-                 title, description, content_text,
-                 material_type, has_media, is_caption_candidate, target_source_message_id,
-                 is_deleted, deleted_at, last_audit_seen_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?)
+                 (guild_id, channel_id, message_id, author_id, author_name, created_at_utc,
+                  created_at_iso, edited_at_utc, edited_at_iso, reference_message_id,
+                  title, description, content_text,
+                  material_type, attachment_filename, has_media, is_caption_candidate,
+                  is_recording_caption, target_source_message_id, is_deleted, deleted_at, last_audit_seen_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?)
              ON DUPLICATE KEY UPDATE guild_id = VALUES(guild_id), author_id = VALUES(author_id),
-                author_name = VALUES(author_name), created_at_utc = VALUES(created_at_utc),
-                created_at_iso = VALUES(created_at_iso), edited_at_utc = VALUES(edited_at_utc),
-                edited_at_iso = VALUES(edited_at_iso), reference_message_id = VALUES(reference_message_id),
-                title = VALUES(title), description = VALUES(description), content_text = VALUES(content_text),
-                material_type = VALUES(material_type), has_media = VALUES(has_media),
-                is_caption_candidate = VALUES(is_caption_candidate), target_source_message_id = NULL,
-                is_deleted = 0, deleted_at = NULL,
-                last_audit_seen_at = COALESCE(VALUES(last_audit_seen_at), last_audit_seen_at)',
+                 author_name = VALUES(author_name), created_at_utc = VALUES(created_at_utc),
+                 created_at_iso = VALUES(created_at_iso), edited_at_utc = VALUES(edited_at_utc),
+                 edited_at_iso = VALUES(edited_at_iso), reference_message_id = VALUES(reference_message_id),
+                 title = VALUES(title), description = VALUES(description), content_text = VALUES(content_text),
+                 material_type = VALUES(material_type), attachment_filename = VALUES(attachment_filename),
+                 has_media = VALUES(has_media), is_recording_caption = VALUES(is_recording_caption),
+                 is_caption_candidate = VALUES(is_caption_candidate), target_source_message_id = NULL,
+                 is_deleted = 0, deleted_at = NULL,
+                 last_audit_seen_at = COALESCE(VALUES(last_audit_seen_at), last_audit_seen_at)',
             [
                 $message['guild_id'], $message['channel_id'], $message['message_id'], $message['author_id'],
                 $message['author_name'], $message['created_at_utc'], $message['created_at_iso'],
                 $message['edited_at_utc'], $message['edited_at_iso'], $message['reference_message_id'],
                 $message['title'], $message['description'],
-                $message['content_text'], $message['material_type'], $message['has_media'],
-                $message['is_caption_candidate'], $auditStartedAt,
+                $message['content_text'], $message['material_type'], $message['attachment_filename'],
+                $message['has_media'], $message['is_caption_candidate'], $message['is_recording_caption'],
+                $auditStartedAt,
             ]
         );
-        $roots += $this->reassociateMessage($message['channel_id'], $message['message_id']);
-
-        $rootRow = $this->db->queryOne(
-            'SELECT * FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
-            [$message['channel_id'], $message['message_id']]
-        );
-        if ($rootRow !== null) {
-            $params = [$message['channel_id']];
-            $conditions = [];
-            if ((int) $rootRow['has_media'] === 1) {
-                $range = self::localDayUtcRange((string) $rootRow['created_at_utc']);
-                $end = min(
-                    strtotime($range[1] . ' UTC'),
-                    strtotime((string) $rootRow['created_at_utc'] . ' UTC') + $this->recapWindowMinutes * 60
-                );
-                $conditions[] = '(author_id = ? AND is_caption_candidate = 1 AND created_at_utc >= ? AND created_at_utc <= ?)';
-                $params[] = $rootRow['author_id'];
-                $params[] = $rootRow['created_at_utc'];
-                $params[] = gmdate('Y-m-d H:i:s', $end);
-            }
-            $conditions[] = 'reference_message_id = ?';
-            $params[] = $message['message_id'];
-            $candidateRows = $this->db->query(
-                'SELECT message_id FROM academy_material_messages
-                  WHERE channel_id = ? AND is_deleted = 0 AND message_id <> ? AND (' . implode(' OR ', $conditions) . ')
-                  ORDER BY created_at_utc ASC, message_id ASC LIMIT 201',
-                [$message['channel_id'], $message['message_id'], ...array_slice($params, 1)]
-            );
-            foreach ($candidateRows as $candidate) {
-                $roots += $this->reassociateMessage($message['channel_id'], (string) $candidate['message_id']);
-            }
-        }
-        foreach (array_keys($roots) as $rootId) {
-            $this->refreshMaterialItem($message['channel_id'], (string) $rootId);
-        }
     }
 
-    /** @return array<string,bool> affected roots */
-    private function reassociateMessage(string $channelId, string $messageId): array
-    {
-        $row = $this->db->queryOne(
-            'SELECT * FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
-            [$channelId, $messageId]
-        );
-        $oldTarget = (string) ($row['target_source_message_id'] ?? '');
-        $roots = [$messageId => true];
-        if ($oldTarget !== '') {
-            $roots[$oldTarget] = true;
-        }
-        if ($row === null || (int) $row['is_deleted'] === 1) {
-            return $roots;
-        }
-        $target = $this->findCaptionTarget($row);
-        $newTarget = $target ?? '';
-        if ($newTarget !== $oldTarget) {
-            $this->db->execute(
-                'UPDATE academy_material_messages SET target_source_message_id = ? WHERE channel_id = ? AND message_id = ?',
-                [$target, $channelId, $messageId]
-            );
-            if ($newTarget !== '') {
-                $roots[$newTarget] = true;
-            }
-        }
-        return $roots;
-    }
-
-    private function findCaptionTarget(array $caption): ?string
-    {
-        if ((int) ($caption['has_media'] ?? 0) === 1) {
-            return null;
-        }
-        $channelId = (string) $caption['channel_id'];
-        $messageId = (string) $caption['message_id'];
-        $captionTime = (string) $caption['created_at_utc'];
-        $referenceId = (string) ($caption['reference_message_id'] ?? '');
-        if ($referenceId !== '') {
-            $referenced = $this->db->queryOne(
-                'SELECT * FROM academy_material_messages
-                  WHERE channel_id = ? AND message_id = ? AND is_deleted = 0',
-                [$channelId, $referenceId]
-            );
-            if ($referenced !== null && self::sameWarsawDay((string) $referenced['created_at_utc'], $captionTime)) {
-                $rootId = (string) ($referenced['target_source_message_id'] ?? '');
-                if ($rootId === '') {
-                    $rootId = (string) $referenced['message_id'];
-                }
-                if ($this->rootCanAcceptCaption($channelId, $rootId, $messageId, $captionTime)) {
-                    return $rootId;
-                }
-            }
-        }
-        if ((int) ($caption['is_caption_candidate'] ?? 0) !== 1) {
-            return null;
-        }
-        $authorId = (string) ($caption['author_id'] ?? '');
-        if ($authorId === '') {
-            return null;
-        }
-        $range = self::localDayUtcRange($captionTime);
-        $windowStart = max(
-            strtotime($range[0] . ' UTC'),
-            strtotime($captionTime . ' UTC') - $this->recapWindowMinutes * 60
-        );
-        $candidates = $this->db->query(
-            'SELECT message_id, created_at_utc FROM academy_material_messages
-              WHERE channel_id = ? AND author_id = ? AND is_deleted = 0 AND has_media = 1
-                AND target_source_message_id IS NULL
-                AND created_at_utc >= ? AND created_at_utc < ?
-                AND (created_at_utc < ? OR (created_at_utc = ? AND message_id < ?))
-              ORDER BY created_at_utc DESC, message_id DESC LIMIT 100',
-            [
-                $channelId, $authorId, gmdate('Y-m-d H:i:s', $windowStart), $range[1],
-                $captionTime, $captionTime, $messageId,
-            ]
-        );
-        foreach ($candidates as $candidate) {
-            $candidateId = (string) $candidate['message_id'];
-            if ($this->rootCanAcceptCaption($channelId, $candidateId, $messageId, $captionTime)) {
-                return $candidateId;
-            }
-        }
-        return null;
-    }
-
-    private function rootCanAcceptCaption(string $channelId, string $rootId, string $captionId, string $captionTime): bool
-    {
-        $root = $this->db->queryOne(
-            'SELECT message_id, created_at_utc, description, has_media, is_deleted, target_source_message_id
-               FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
-            [$channelId, $rootId]
-        );
-        if ($root === null || (int) $root['is_deleted'] === 1 || (int) $root['has_media'] !== 1
-            || !empty($root['target_source_message_id'])
-            || !self::sameWarsawDay((string) $root['created_at_utc'], $captionTime)) {
-            return false;
-        }
-        $existing = $this->db->queryOne(
-            'SELECT message_id FROM academy_material_messages
-              WHERE channel_id = ? AND target_source_message_id = ? AND is_deleted = 0 AND message_id <> ?
-              LIMIT 1',
-            [$channelId, $rootId, $captionId]
-        );
-        return $existing === null;
-    }
-
-    private function markMessageUnavailable(string $channelId, string $messageId): void
+    private function markMessageUnavailable(string $channelId, string $messageId): ?string
     {
         $existing = $this->db->queryOne(
-            'SELECT target_source_message_id, has_media FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
+            'SELECT created_at_utc FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
             [$channelId, $messageId]
         );
         if ($existing === null) {
-            return;
-        }
-        $roots = [$messageId => true];
-        if (!empty($existing['target_source_message_id'])) {
-            $roots[(string) $existing['target_source_message_id']] = true;
+            return null;
         }
         $this->db->execute(
             'UPDATE academy_material_messages
@@ -1199,108 +1254,83 @@ final class AcademyMaterials
               WHERE channel_id = ? AND message_id = ?',
             [$channelId, $messageId]
         );
-        $candidates = $this->db->query(
-            'SELECT message_id FROM academy_material_messages
-              WHERE channel_id = ? AND is_deleted = 0
-                AND (reference_message_id = ? OR target_source_message_id = ?)
-              ORDER BY created_at_utc ASC, message_id ASC LIMIT 201',
-            [$channelId, $messageId, $messageId]
-        );
-        foreach ($candidates as $candidate) {
-            $roots += $this->reassociateMessage($channelId, (string) $candidate['message_id']);
-        }
-        if ((int) $existing['has_media'] === 1) {
-            $deleted = $this->db->queryOne(
-                'SELECT created_at_utc, author_id FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
-                [$channelId, $messageId]
-            );
-            if ($deleted !== null) {
-                $range = self::localDayUtcRange((string) $deleted['created_at_utc']);
-                $candidates = $this->db->query(
-                    'SELECT message_id FROM academy_material_messages
-                      WHERE channel_id = ? AND is_deleted = 0 AND author_id = ? AND is_caption_candidate = 1
-                        AND created_at_utc >= ? AND created_at_utc <= ?
-                      ORDER BY created_at_utc ASC, message_id ASC LIMIT 201',
-                    [
-                        $channelId,
-                        $deleted['author_id'],
-                        $deleted['created_at_utc'],
-                        gmdate('Y-m-d H:i:s', min(
-                            strtotime($range[1] . ' UTC'),
-                            strtotime((string) $deleted['created_at_utc'] . ' UTC') + $this->recapWindowMinutes * 60
-                        )),
-                    ]
-                );
-                foreach ($candidates as $candidate) {
-                    $roots += $this->reassociateMessage($channelId, (string) $candidate['message_id']);
-                }
-            }
-        }
-        foreach (array_keys($roots) as $rootId) {
-            $this->refreshMaterialItem($channelId, (string) $rootId);
-        }
+        return (string) $existing['created_at_utc'];
     }
 
-    private function refreshMaterialItem(string $channelId, string $sourceMessageId): void
+    private function rebuildMaterialDay(string $channelId, string $dayUtc): void
     {
-        $root = $this->db->queryOne(
-            'SELECT * FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
-            [$channelId, $sourceMessageId]
-        );
-        if ($root === null || (int) $root['is_deleted'] === 1 || !empty($root['target_source_message_id'])) {
-            $this->db->execute(
-                'UPDATE academy_material_items SET is_deleted = 1, deleted_at = UTC_TIMESTAMP()
-                  WHERE channel_id = ? AND source_message_id = ? AND is_deleted = 0',
-                [$channelId, $sourceMessageId]
-            );
+        if (!isset(self::channelMap()[$channelId])) {
             return;
         }
-        $channel = self::channelMap()[$channelId] ?? null;
-        if ($channel === null) {
-            return;
-        }
-        $description = trim((string) ($root['description'] ?? ''));
-        $descriptionMessageId = $sourceMessageId;
-        $caption = $this->db->queryOne(
-            'SELECT message_id, description, content_text FROM academy_material_messages
-              WHERE channel_id = ? AND target_source_message_id = ? AND is_deleted = 0
-              ORDER BY created_at_utc ASC, message_id ASC LIMIT 1',
-            [$channelId, $sourceMessageId]
-        );
-        if ($caption !== null) {
-            $captionDescription = trim((string) ($caption['description'] ?? $caption['content_text'] ?? ''));
-            if ($captionDescription !== '') {
-                $description = $description === ''
-                    ? $captionDescription
-                    : $description . "\n\n" . $captionDescription;
-                $descriptionMessageId = (string) $caption['message_id'];
-            }
-        }
-        $title = trim((string) ($root['title'] ?? ''));
-        if ($title === '') {
-            $title = self::deriveTitle((string) ($root['content_text'] ?? $description));
-        }
+        [$startUtc, $endUtc] = self::localDayUtcRange($dayUtc);
+        $params = [$channelId, $startUtc, $endUtc];
         $this->db->execute(
-            'INSERT INTO academy_material_items
-                (guild_id, channel_id, source_message_id, description_message_id, category_label,
-                 title, description, author_id, author_name, published_at_utc, published_at_iso, material_type,
-                 is_deleted, deleted_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
-             ON DUPLICATE KEY UPDATE guild_id = VALUES(guild_id),
-                description_message_id = VALUES(description_message_id),
-                category_label = VALUES(category_label), title = VALUES(title),
-                description = VALUES(description), author_id = VALUES(author_id),
-                author_name = VALUES(author_name), published_at_utc = VALUES(published_at_utc),
-                published_at_iso = VALUES(published_at_iso),
-                material_type = VALUES(material_type), is_deleted = 0, deleted_at = NULL',
-            [
-                self::GUILD_ID, $channelId, $sourceMessageId, $descriptionMessageId, $channel['category'],
-                $title === '' ? null : self::truncate($title, 250),
-                $description === '' ? null : self::truncate($description, 12000),
-                $root['author_id'], $root['author_name'], $root['created_at_utc'], $root['created_at_iso'],
-                $root['material_type'],
-            ]
+            'UPDATE academy_material_messages
+                SET target_source_message_id = NULL
+              WHERE channel_id = ? AND is_deleted = 0
+                AND created_at_utc >= ? AND created_at_utc < ?',
+            $params
         );
+        $messages = $this->db->query(
+            'SELECT * FROM academy_material_messages
+              WHERE channel_id = ? AND is_deleted = 0
+                AND created_at_utc >= ? AND created_at_utc < ?
+              ORDER BY created_at_utc ASC, message_id ASC',
+            $params
+        );
+        $this->db->execute(
+            'UPDATE academy_material_items
+                SET is_deleted = 1, deleted_at = UTC_TIMESTAMP()
+              WHERE channel_id = ? AND is_deleted = 0
+                AND published_at_utc >= ? AND published_at_utc < ?',
+            $params
+        );
+        $messagesById = [];
+        foreach ($messages as &$message) {
+            $message['target_source_message_id'] = null;
+            $messagesById[(string) $message['message_id']] = $message;
+        }
+        unset($message);
+
+        foreach (self::groupMessages($messages, $this->recapWindowMinutes) as $item) {
+            $sourceMessageId = (string) $item['sourceMessageId'];
+            $root = $messagesById[$sourceMessageId] ?? null;
+            if ($root === null) {
+                continue;
+            }
+            $descriptionMessageId = self::snowflake($item['descriptionMessageId'] ?? null);
+            if ($descriptionMessageId !== null) {
+                $this->db->execute(
+                    'UPDATE academy_material_messages
+                        SET target_source_message_id = ?
+                      WHERE channel_id = ? AND message_id = ? AND is_deleted = 0',
+                    [$sourceMessageId, $channelId, $descriptionMessageId]
+                );
+            }
+            $title = trim((string) ($item['title'] ?? ''));
+            $description = trim((string) ($item['description'] ?? ''));
+            $this->db->execute(
+                'INSERT INTO academy_material_items
+                    (guild_id, channel_id, source_message_id, description_message_id, category_label,
+                     title, description, author_id, author_name, published_at_utc, published_at_iso,
+                     material_type, is_deleted, deleted_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+                 ON DUPLICATE KEY UPDATE guild_id = VALUES(guild_id),
+                    description_message_id = VALUES(description_message_id),
+                    category_label = VALUES(category_label), title = VALUES(title),
+                    description = VALUES(description), author_id = VALUES(author_id),
+                    author_name = VALUES(author_name), published_at_utc = VALUES(published_at_utc),
+                    published_at_iso = VALUES(published_at_iso),
+                    material_type = VALUES(material_type), is_deleted = 0, deleted_at = NULL',
+                [
+                    self::GUILD_ID, $channelId, $sourceMessageId, $descriptionMessageId,
+                    $item['category'], $title === '' ? null : self::truncate($title, 250),
+                    $description === '' ? null : self::truncate($description, 12000),
+                    $root['author_id'], $root['author_name'], $root['created_at_utc'],
+                    $root['created_at_iso'], $root['material_type'],
+                ]
+            );
+        }
     }
 
     private function cleanupAuditBatch(array $channel, array $state): void
@@ -1316,7 +1346,7 @@ final class AcademyMaterials
             return;
         }
         $rows = $this->db->query(
-            'SELECT message_id FROM academy_material_messages
+            'SELECT message_id, created_at_utc FROM academy_material_messages
               WHERE channel_id = ? AND is_deleted = 0
                 AND (last_audit_seen_at IS NULL OR last_audit_seen_at < ?)
               ORDER BY created_at_utc ASC, message_id ASC LIMIT ' . self::AUDIT_CLEANUP_BATCH,
@@ -1329,15 +1359,32 @@ final class AcademyMaterials
                         audit_started_at = NULL, audit_before_message_id = NULL,
                         last_audit_at = UTC_TIMESTAMP(), last_page_at = UTC_TIMESTAMP(),
                         last_success_at = UTC_TIMESTAMP(), last_error_code = NULL,
-                        sync_status = "success", audit_content_verified = 1
+                        sync_status = "success", audit_content_verified = 1,
+                        grouping_version = IF(
+                            verified = 1 AND backfill_complete = 1
+                            AND message_access_status = 'verified'
+                            AND content_access_status = 'verified',
+                            " . self::GROUPING_VERSION . ",
+                            grouping_version
+                        )
                   WHERE channel_id = ?',
                 [$channel['channelId']]
             );
             return;
         }
         $this->db->withTransaction(function () use ($channel, $rows): void {
+            $affectedDays = [];
             foreach ($rows as $row) {
-                $this->markMessageUnavailable($channel['channelId'], (string) $row['message_id']);
+                $deletedAt = $this->markMessageUnavailable($channel['channelId'], (string) $row['message_id']);
+                if ($deletedAt !== null) {
+                    $day = self::localDayKey($deletedAt);
+                    if ($day !== null) {
+                        $affectedDays[$day] = $day;
+                    }
+                }
+            }
+            foreach ($affectedDays as $dayUtc) {
+                $this->rebuildMaterialDay($channel['channelId'], $dayUtc);
             }
             $this->db->execute(
                 'UPDATE academy_material_channel_state
@@ -1355,7 +1402,12 @@ final class AcademyMaterials
             return true;
         }
         $last = (string) ($state['last_audit_at'] ?? '');
-        return $last === '' || (time() - (strtotime($last . ' UTC') ?: 0)) >= self::AUDIT_INTERVAL_SECONDS;
+        $intervalDue = $last === ''
+            || (time() - (strtotime($last . ' UTC') ?: 0)) >= self::AUDIT_INTERVAL_SECONDS;
+        if ((int) ($state['grouping_version'] ?? 0) < self::GROUPING_VERSION) {
+            return ($state['content_access_status'] ?? null) === 'verified' || $intervalDue;
+        }
+        return $intervalDue;
     }
 
     private function allSourcesReady(): bool
@@ -1363,7 +1415,8 @@ final class AcademyMaterials
         $row = $this->db->queryOne(
             "SELECT COUNT(*) AS total,
                     SUM(verified = 1 AND backfill_complete = 1
-                        AND message_access_status = 'verified' AND content_access_status = 'verified') AS ready_count
+                        AND message_access_status = 'verified' AND content_access_status = 'verified'
+                        AND grouping_version >= " . self::GROUPING_VERSION . ") AS ready_count
                FROM academy_material_channel_state
               WHERE channel_id IN (" . implode(',', array_fill(0, count(self::CHANNELS), '?')) . ')',
             array_column(self::CHANNELS, 'channelId')
@@ -1640,8 +1693,9 @@ final class AcademyMaterials
 
     private static function cleanText(string $text): string
     {
-        $text = preg_replace('~<?https?://[^\s<>]+>?~iu', '', $text) ?? '';
-        $text = preg_replace('~www\.[^\s<>]+~iu', '', $text) ?? '';
+        // Keep educational URLs searchable as plain text. Only strip Discord media
+        // delivery URLs; the Academy link always targets the canonical message.
+        $text = preg_replace('~<?https?://(?:[a-z0-9-]+\.)*discordapp\.(?:com|net)/[^\s<>]*>?~iu', '', $text) ?? '';
         $text = str_replace(["\r\n", "\r"], "\n", $text);
         $text = preg_replace('/[ \t]+\n/u', "\n", $text) ?? $text;
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
@@ -1656,15 +1710,22 @@ final class AcademyMaterials
             return [null, null];
         }
         $lines = preg_split('/\n/u', $text) ?: [];
-        $first = trim((string) ($lines[0] ?? ''));
+        $firstIndex = null;
+        foreach ($lines as $index => $line) {
+            if (trim($line) !== '') {
+                $firstIndex = $index;
+                break;
+            }
+        }
+        if ($firstIndex === null) {
+            return [null, null];
+        }
+        $first = trim((string) $lines[$firstIndex]);
         $candidate = preg_replace('/^(?:#{1,6}\s+|\*\*)(.*?)(?:\*\*)?$/u', '$1', $first) ?? $first;
         $candidate = trim($candidate, " \t*_#");
-        if ($candidate !== '' && self::length($candidate) <= 180 && (count($lines) > 1 || preg_match('/^[^.!?]{3,120}[.!?]\s/u', $candidate) !== 1)) {
-            $title = self::truncate($candidate, 180);
-            $description = count($lines) > 1 ? trim(implode("\n", array_slice($lines, 1))) : $text;
-            return [$title, self::truncate($description, 12000)];
-        }
-        return [self::truncate($candidate !== '' ? $candidate : $text, 180), self::truncate($text, 12000)];
+        $title = self::truncate($candidate !== '' ? $candidate : $first, 250);
+        $description = trim(implode("\n", array_slice($lines, $firstIndex + 1)));
+        return [$title, $description === '' ? null : self::truncate($description, 12000)];
     }
 
     private static function deriveTitle(string $text): string
@@ -1673,12 +1734,78 @@ final class AcademyMaterials
         if ($text === '') {
             return '';
         }
-        $firstLine = trim((preg_split('/\n/u', $text)[0] ?? $text));
+        $lines = preg_split('/\n/u', $text) ?: [];
+        $firstLine = '';
+        foreach ($lines as $line) {
+            if (trim($line) !== '') {
+                $firstLine = trim($line);
+                break;
+            }
+        }
         if ($firstLine !== '') {
-            $sentence = preg_split('/(?<=[.!?])\s+/u', $firstLine, 2)[0] ?? $firstLine;
-            return self::truncate(trim($sentence), 180);
+            return self::truncate(trim($firstLine), 250);
         }
         return '';
+    }
+
+    private static function cleanFilename(string $filename): ?string
+    {
+        $filename = str_replace('\\', '/', trim($filename));
+        $filename = basename($filename);
+        $filename = preg_replace('/[\x00-\x1F\x7F]/u', '', $filename) ?? '';
+        $filename = self::truncate(trim($filename), 255);
+        if ($filename === '' || preg_match('~^(?:https?://|www\.)~iu', $filename) === 1) {
+            return null;
+        }
+        return $filename;
+    }
+
+    private static function fallbackMaterialTitle(string $materialType, string $createdAtUtc): string
+    {
+        $label = match ($materialType) {
+            'video' => 'Nagranie wideo',
+            'audio' => 'Nagranie audio',
+            'image' => 'Materiał graficzny',
+            'mixed' => 'Materiał edukacyjny',
+            default => 'Materiał edukacyjny',
+        };
+        try {
+            $date = (new \DateTimeImmutable($createdAtUtc, new \DateTimeZone('UTC')))
+                ->setTimezone(new \DateTimeZone(self::TZ))
+                ->format('d.m.Y');
+        } catch (\Throwable) {
+            $date = 'bez daty';
+        }
+        return $label . ' · ' . $date;
+    }
+
+    private static function isRecordingCaption(string $content, string $embedTitle = ''): bool
+    {
+        $text = trim($content !== '' ? $content : $embedTitle);
+        if ($text === '' || self::length($text) > 160 || str_contains($text, "\n")) {
+            return false;
+        }
+        return preg_match(
+            '/^(?:nagranie|nagrania|wideo|video|recording|recap)(?:\s+(?:z|sesji|spotkania|live|porannej|akademii|nyc|[[:alnum:]ąćęłńóśźż_-]+))*[.!?]?\s*$/iu',
+            $text
+        ) === 1;
+    }
+
+    private static function isNonMaterialOnlyText(string $text): bool
+    {
+        $withoutMentions = preg_replace(
+            '/<@!?&?[0-9]+>|<#[0-9]+>|<a?:[a-zA-Z0-9_]+:[0-9]+>|@everyone|@here|[\s.,!?;:…—–_-]+/iu',
+            '',
+            trim($text)
+        ) ?? trim($text);
+        if ($withoutMentions === '') {
+            return true;
+        }
+        $plain = mb_strtolower(trim(preg_replace('/\s+/u', ' ', $text) ?? $text), 'UTF-8');
+        return preg_match(
+            '/^(?:test(?:owa)?(?: wiadomość)?|przerwa(?: techniczna)?|spotkanie odwołane|spotkanie odwolane|wydarzenie odwołane|wydarzenie odwolane|zmiana terminu|za chwilę zaczynamy|za chwile zaczynamy|startujemy za chwilę|startujemy za chwile|dołączcie do spotkania|dolaczcie do spotkania)[.!?\s]*$/iu',
+            $plain
+        ) === 1;
     }
 
     private static function snowflake(mixed $value): ?string
@@ -1766,6 +1893,15 @@ final class AcademyMaterials
             $localStart->setTimezone($utcZone)->format('Y-m-d H:i:s'),
             $localEnd->setTimezone($utcZone)->format('Y-m-d H:i:s'),
         ];
+    }
+
+    private static function localDayKey(string $utc): ?string
+    {
+        $date = self::parseUtc($utc);
+        if ($date === null) {
+            return null;
+        }
+        return $date->setTimezone(new \DateTimeZone(self::TZ))->format('Y-m-d');
     }
 
     private static function formatIsoUtc(string $date): string
