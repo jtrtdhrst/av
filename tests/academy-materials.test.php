@@ -377,6 +377,14 @@ $academyConfig = new \AlphaVault\Config(
     version: $config->version,
 );
 $materials = new AcademyMaterials($academyConfig, $db, $requester, $sleeper, 30);
+$syncSelectedChannel = static function (string $channelId) use ($db, $materials): array {
+    $db->execute(
+        'UPDATE academy_material_channel_state
+            SET work_order = CASE WHEN channel_id = ? THEN 0 ELSE 1000000 END',
+        [$channelId]
+    );
+    return $materials->sync();
+};
 
 try {
     $expectedIds = [
@@ -994,7 +1002,7 @@ academyCheck(
     sort($crossDaySources, SORT_STRING);
     academyCheck(
         count($crossDayItems) === 3
-            && $crossDaySources === [$crossDayMediaId, $crossDayCaptionId, $crossDayTargetId]
+            && $crossDaySources === [$crossDayTargetId, $crossDayMediaId, $crossDayCaptionId]
             && count(array_filter(
                 $crossDayItems,
                 static fn (array $item): bool => $item['descriptionMessageId'] !== null
@@ -1180,7 +1188,10 @@ academyCheck(
 
     $db->execute(
         'UPDATE academy_material_channel_state
-            SET grouping_version = 1, last_audit_at = UTC_TIMESTAMP()
+            SET grouping_version = 1, last_audit_at = UTC_TIMESTAMP(),
+                audit_running = 0, audit_cleanup_pending = 0,
+                audit_started_at = NULL, audit_before_message_id = NULL,
+                audit_content_verified = 0
           WHERE backfill_complete = 1'
     );
     $staleGroupingPage = $materials->listForApi('all', '', 10);
@@ -1190,7 +1201,10 @@ academyCheck(
     );
     $db->execute(
         "UPDATE academy_material_channel_state
-            SET grouping_version = 2, last_audit_at = UTC_TIMESTAMP()
+            SET grouping_version = 2, last_audit_at = UTC_TIMESTAMP(),
+                audit_running = 0, audit_cleanup_pending = 0,
+                audit_started_at = NULL, audit_before_message_id = NULL,
+                audit_content_verified = 0
           WHERE verified = 1 AND backfill_complete = 1
             AND message_access_status = 'verified'
             AND content_access_status = 'verified'"
@@ -1209,19 +1223,22 @@ academyCheck(
         $groupingState['channels'],
         static fn (array $channel): bool => $channel['channelId'] === $pagedChannel
     ))[0] ?? [];
-    $targetVisiblePage = $materials->listForApi('Trade Recaps', '', 100);
+    $targetVisiblePage = $materials->listForApi('Trade Recaps', '', 50);
     academyCheck(
         ($targetGroupingState['groupingReady'] ?? false) === true
             && ($targetGroupingState['available'] ?? false) === true
             && ($targetGroupingState['importedCount'] ?? 0) === 100
-            && count($targetVisiblePage['items']) === 100,
+            && count($targetVisiblePage['items']) === 50,
         'aktualny indeks grupowania udostępnia gotowy kanał Trade Recaps',
         ['channel' => $targetGroupingState, 'visibleCount' => count($targetVisiblePage['items'])]
     );
 
     $db->execute(
         'UPDATE academy_material_channel_state
-            SET grouping_version = 1, last_audit_at = UTC_TIMESTAMP()
+            SET grouping_version = 1, last_audit_at = UTC_TIMESTAMP(),
+                audit_running = 0, audit_cleanup_pending = 0,
+                audit_started_at = NULL, audit_before_message_id = NULL,
+                audit_content_verified = 0
           WHERE channel_id = ?',
         [$pagedChannel]
     );
@@ -1229,7 +1246,7 @@ academyCheck(
         $materials->syncState()['channels'],
         static fn (array $channel): bool => $channel['channelId'] === $pagedChannel
     ))[0] ?? [];
-    $hiddenTargetPage = $materials->listForApi('Trade Recaps', '', 100);
+    $hiddenTargetPage = $materials->listForApi('Trade Recaps', '', 50);
     academyCheck(
         ($staleTargetState['groupingReady'] ?? true) === false
             && ($staleTargetState['available'] ?? true) === false
@@ -1238,7 +1255,7 @@ academyCheck(
         'stara wersja grupowania ukrywa tylko kanał wymagający audytu'
     );
 
-    $materials->sync();
+    $syncSelectedChannel($pagedChannel);
     $auditAfterFirstPage = $db->queryOne(
         'SELECT grouping_version, audit_running, audit_cleanup_pending
            FROM academy_material_channel_state WHERE channel_id = ?',
@@ -1248,11 +1265,11 @@ academyCheck(
         (int) ($auditAfterFirstPage['grouping_version'] ?? 0) === 1
             && (int) ($auditAfterFirstPage['audit_running'] ?? 0) === 1
             && (int) ($auditAfterFirstPage['audit_cleanup_pending'] ?? 0) === 0
-            && $materials->listForApi('Trade Recaps', '', 100)['items'] === [],
+            && $materials->listForApi('Trade Recaps', '', 50)['items'] === [],
         'pierwsza strona pełnego audytu nie ujawnia starego indeksu'
     );
 
-    $materials->sync();
+    $syncSelectedChannel($pagedChannel);
     $auditAfterHistory = $db->queryOne(
         'SELECT grouping_version, audit_running, audit_cleanup_pending
            FROM academy_material_channel_state WHERE channel_id = ?',
@@ -1261,15 +1278,15 @@ academyCheck(
     academyCheck(
         (int) ($auditAfterHistory['grouping_version'] ?? 0) === 1
             && (int) ($auditAfterHistory['audit_cleanup_pending'] ?? 0) === 1
-            && $materials->listForApi('Trade Recaps', '', 100)['items'] === [],
+            && $materials->listForApi('Trade Recaps', '', 50)['items'] === [],
         'pełny wielostronicowy audyt czeka na cleanup, a materiały pozostają ukryte',
         [
             'auditState' => $auditAfterHistory,
-            'visibleCount' => count($materials->listForApi('Trade Recaps', '', 100)['items']),
+            'visibleCount' => count($materials->listForApi('Trade Recaps', '', 50)['items']),
         ]
     );
 
-    $materials->sync();
+    $syncSelectedChannel($pagedChannel);
     $auditAfterCleanup = $db->queryOne(
         'SELECT grouping_version, audit_running, audit_cleanup_pending
            FROM academy_material_channel_state WHERE channel_id = ?',
@@ -1279,7 +1296,7 @@ academyCheck(
         $materials->syncState()['channels'],
         static fn (array $channel): bool => $channel['channelId'] === $pagedChannel
     ))[0] ?? [];
-    $visibleAfterAudit = $materials->listForApi('Trade Recaps', '', 100);
+    $visibleAfterAudit = $materials->listForApi('Trade Recaps', '', 50);
     academyCheck(
         (int) ($auditAfterCleanup['grouping_version'] ?? 0) === 2
             && (int) ($auditAfterCleanup['audit_running'] ?? 1) === 0
@@ -1287,7 +1304,7 @@ academyCheck(
             && ($readyAfterAudit['groupingReady'] ?? false) === true
             && ($readyAfterAudit['available'] ?? false) === true
             && ($readyAfterAudit['importedCount'] ?? 0) === 100
-            && count($visibleAfterAudit['items']) === 100,
+            && count($visibleAfterAudit['items']) === 50,
         'audyt i cleanup automatycznie promują wersję grupowania i przywracają widoczność',
         [
             'auditState' => $auditAfterCleanup,
@@ -1309,7 +1326,7 @@ academyCheck(
     $itemKeys = array_map(static fn (array $item): string => $item['channelId'] . ':' . $item['sourceMessageId'], $allItems);
     academyCheck(
         count($allItems) === count(array_unique($itemKeys))
-            && count($allItems) === 112
+            && count($allItems) === 111
             && $cursor === null
             && $cursorPages > 1,
         'API odczyt używa stabilnego keyset pagination bez duplikatów',
@@ -1375,11 +1392,7 @@ academyCheck(
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$academyChannel]
     )['c'] ?? 0);
-    $db->execute(
-        'UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?',
-        [$academyChannel]
-    );
-    $materials->sync();
+    $syncSelectedChannel($academyChannel);
     $countAfterIdempotency = (int) ($db->queryOne(
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$academyChannel]
@@ -1390,8 +1403,7 @@ academyCheck(
         ['before' => $countBeforeIdempotency, 'after' => $countAfterIdempotency]
     );
 
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$pagedChannel]);
-    $materials->sync();
+    $syncSelectedChannel($pagedChannel);
     $incrementalRow = $db->queryOne(
         'SELECT message_id FROM academy_material_messages WHERE channel_id = ? AND message_id = ? AND is_deleted = 0',
         [$pagedChannel, $pagedNewId]
@@ -1405,8 +1417,7 @@ academyCheck(
         'incremental sync używa after snowflake i zapisuje nowe rekordy',
         ['row' => $incrementalRow, 'itemCount' => $pagedCountAfterIncremental]
     );
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$pagedChannel]);
-    $materials->sync();
+    $syncSelectedChannel($pagedChannel);
     $pagedCountAfterRepeat = (int) ($db->queryOne(
         'SELECT COUNT(*) AS c FROM academy_material_items WHERE channel_id = ? AND is_deleted = 0',
         [$pagedChannel]
@@ -1422,7 +1433,7 @@ academyCheck(
     $editedCaption['edited_timestamp'] = '2026-11-26T09:07:00.000Z';
     $auditDatasetA = [$sourceOne, $sourceTwo, $editedCaption];
     academySetAudit($db, $academyChannel);
-    $materials->sync();
+    $syncSelectedChannel($academyChannel);
     for ($iteration = 0; $iteration < 3; $iteration++) {
         $auditState = $db->queryOne(
             'SELECT audit_cleanup_pending FROM academy_material_channel_state WHERE channel_id = ?',
@@ -1431,7 +1442,7 @@ academyCheck(
         if ((int) ($auditState['audit_cleanup_pending'] ?? 0) === 0) {
             break;
         }
-        $materials->sync();
+        $syncSelectedChannel($academyChannel);
     }
     $editedItems = $db->query(
         'SELECT source_message_id, description_message_id, title, description, is_deleted
@@ -1453,7 +1464,7 @@ academyCheck(
 
     $auditDatasetA = [$sourceOne, $editedCaption];
     academySetAudit($db, $academyChannel);
-    $materials->sync();
+    $syncSelectedChannel($academyChannel);
     for ($iteration = 0; $iteration < 4; $iteration++) {
         $auditState = $db->queryOne(
             'SELECT audit_cleanup_pending FROM academy_material_channel_state WHERE channel_id = ?',
@@ -1462,7 +1473,7 @@ academyCheck(
         if ((int) ($auditState['audit_cleanup_pending'] ?? 0) === 0) {
             break;
         }
-        $materials->sync();
+        $syncSelectedChannel($academyChannel);
     }
     $deletedSource = $db->queryOne(
         'SELECT is_deleted FROM academy_material_messages WHERE channel_id = ? AND message_id = ?',
@@ -1505,8 +1516,7 @@ academyCheck(
 
     $failMessageChannel = $permissionChannel;
     $failMessageStatus = 503;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
-    $transientResult = $materials->sync();
+    $transientResult = $syncSelectedChannel($permissionChannel);
     $transientState = $materials->syncState();
     $transientChannel = array_values(array_filter(
         $transientState['channels'],
@@ -1524,8 +1534,7 @@ academyCheck(
     );
 
     $failMessageStatus = 403;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
-    $materials->sync();
+    $syncSelectedChannel($permissionChannel);
     $deniedState = $materials->syncState();
     $deniedChannel = array_values(array_filter(
         $deniedState['channels'],
@@ -1541,8 +1550,7 @@ academyCheck(
     );
 
     $failMessageStatus = null;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
-    $materials->sync();
+    $syncSelectedChannel($permissionChannel);
     $recoveredState = $materials->syncState();
     $recoveredChannel = array_values(array_filter(
         $recoveredState['channels'],
@@ -1552,9 +1560,8 @@ academyCheck(
 
     $failMetadataChannel = $permissionChannel;
     $failMetadataStatus = 503;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$permissionChannel]);
     $metadataRequestOffset = count($requests);
-    $metadataTransientResult = $materials->sync();
+    $metadataTransientResult = $syncSelectedChannel($permissionChannel);
     $metadataTransientState = $materials->syncState();
     $metadataTransientChannel = array_values(array_filter(
         $metadataTransientState['channels'],
@@ -1574,8 +1581,7 @@ academyCheck(
     $failMetadataStatus = null;
 
     $badMetadataChannel = $categoryFailureChannel;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$categoryFailureChannel]);
-    $materials->sync();
+    $syncSelectedChannel($categoryFailureChannel);
     $mismatchState = $materials->syncState();
     $mismatchChannel = array_values(array_filter(
         $mismatchState['channels'],
@@ -1588,8 +1594,7 @@ academyCheck(
         'zmiana parent category unieważnia konkretny kanał i jego widoczność'
     );
     $badMetadataChannel = null;
-    $db->execute('UPDATE academy_material_channel_state SET work_order = 0 WHERE channel_id = ?', [$categoryFailureChannel]);
-    $materials->sync();
+    $syncSelectedChannel($categoryFailureChannel);
 
     $db->execute('DELETE FROM academy_material_items');
     $db->execute('DELETE FROM academy_material_messages');

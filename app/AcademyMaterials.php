@@ -1364,7 +1364,7 @@ final class AcademyMaterials
                             verified = 1 AND backfill_complete = 1
                             AND message_access_status = \'verified\'
                             AND content_access_status = \'verified\',
-                            " . self::GROUPING_VERSION . ",
+                            ' . self::GROUPING_VERSION . ',
                             grouping_version
                         )
                   WHERE channel_id = ?',
